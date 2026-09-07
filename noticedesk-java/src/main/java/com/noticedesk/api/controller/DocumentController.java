@@ -31,6 +31,7 @@ public class DocumentController {
     private final AppProperties properties;
     private final StorageFactory storageFactory;
     private final OcrFactory ocrFactory;
+    private final com.noticedesk.api.workflow.ParseAndRouteWorkflow parseAndRouteWorkflow;
 
     @PostMapping("/documents/upload")
     @ResponseStatus(HttpStatus.CREATED)
@@ -60,7 +61,7 @@ public class DocumentController {
                 """
                 INSERT INTO documents_inbox
                     (tenant_id, original_filename, s3_key, file_size_bytes, file_hash, mime_type, ingest_channel)
-                VALUES (:tid, :filename, :key, :size, :hash, :mime, 'web_upload')
+                VALUES (:tid::uuid, :filename, :key, :size, :hash, :mime, 'web_upload')
                 RETURNING inbox_id
                 """,
                 Map.of(
@@ -88,6 +89,13 @@ public class DocumentController {
                     WHERE inbox_id = :id
                     """,
                     Map.of("text", ocrText, "provider", ocrProvider, "id", inboxId));
+
+            // Trigger parsing and routing workflow
+            try {
+                parseAndRouteWorkflow.run(inboxId, UUID.fromString(tenantId));
+            } catch (Exception e) {
+                log.error("Failed to run parse and route for inbox_id={}: {}", inboxId, e.getMessage(), e);
+            }
 
         } catch (Exception e) {
             log.warn("OCR failed for inbox_id={}: {}", inboxId, e.getMessage());
@@ -117,9 +125,10 @@ public class DocumentController {
 
         List<Map<String, Object>> items = jdbc.queryForList(
                 """
-                SELECT inbox_id, original_filename AS filename, mime_type, ingest_channel,
-                       ocr_status AS status, ocr_provider_used AS ocr_provider, page_count,
-                       uploaded_at AS created_at
+                SELECT inbox_id, original_filename, file_size_bytes, mime_type, ingest_channel,
+                       ocr_status, ocr_provider_used, ocr_error, page_count,
+                       parse_status, routing_status, routing_anomaly_details, parsed_to_notice_id,
+                       uploaded_at
                 FROM documents_inbox
                 ORDER BY uploaded_at DESC
                 LIMIT :limit OFFSET :offset
@@ -128,6 +137,7 @@ public class DocumentController {
 
         return Map.of(
                 "items", items,
+                "total", items.size(),
                 "page", page,
                 "page_size", page_size);
     }
@@ -142,8 +152,8 @@ public class DocumentController {
 
         var rows = jdbc.queryForList(
                 """
-                SELECT inbox_id, original_filename AS filename, ocr_text,
-                       ocr_provider_used AS ocr_provider, page_count
+                SELECT inbox_id, ocr_status, ocr_text,
+                       ocr_provider_used, page_count, ocr_error
                 FROM documents_inbox WHERE inbox_id = :id
                 """,
                 Map.of("id", id));

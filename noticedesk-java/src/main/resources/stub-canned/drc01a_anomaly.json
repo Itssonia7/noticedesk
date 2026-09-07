@@ -1,0 +1,23 @@
+{
+  "document_type": "DRC-01A",
+  "law": "GST",
+  "client_name_on_document": "Sunrise Papers Pvt Ltd",
+  "pans_extracted": [{"value": "AAQCS3456P", "location": "header"}],
+  "gstins_extracted": [
+    {"value": "27AAQCS3456P1ZF", "location": "header", "state_code": "27"}
+  ],
+  "notice_number": "ZA270526123456",
+  "din_or_rfn": "DIN-202604-000123",
+  "issue_date": "2026-04-15",
+  "receipt_date": "2026-04-20",
+  "due_date": "2026-05-15",
+  "hearing_date": null,
+  "financial_year": "2023-24",
+  "assessment_year": null,
+  "authority": "Assistant Commissioner, CGST Mumbai West",
+  "demand_amount": 245000,
+  "issues": ["Mismatch between GSTR-3B and GSTR-1 for Q2 FY 2023-24"],
+  "documents_required": ["GSTR-3B reconciliation", "Invoice-level supporting"],
+  "parse_confidence": 0.92,
+  "fields_needing_review": []
+}

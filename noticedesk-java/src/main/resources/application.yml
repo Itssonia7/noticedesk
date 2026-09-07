@@ -76,7 +76,7 @@ noticedesk:
     model-drafting: ${LLM_MODEL_DRAFTING:}
     model-triage: ${LLM_MODEL_TRIAGE:claude-sonnet-4-6}
     model-parsing: ${LLM_MODEL_PARSING:claude-sonnet-4-6}
-    stub-default-canned: ${STUB_DEFAULT_CANNED:}
+    stub-default-canned: ${STUB_DEFAULT_CANNED:acme_mh_asmt10}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:}
       model: ${ANTHROPIC_MODEL:claude-opus-4-7}
@@ -86,6 +86,10 @@ noticedesk:
       model: ${OPENAI_MODEL:gpt-4o}
       timeout-seconds: ${OPENAI_TIMEOUT_SECONDS:180.0}
       base-url: ${OPENAI_BASE_URL:}
+    gemini:
+      api-key: ${GEMINI_API_KEY:}
+      model: ${GEMINI_MODEL:gemini-3.6-flash}
+      timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:180.0}
   ocr:
     provider-primary: ${OCR_PROVIDER_PRIMARY:stub}
     provider-fallback: ${OCR_PROVIDER_FALLBACK:}

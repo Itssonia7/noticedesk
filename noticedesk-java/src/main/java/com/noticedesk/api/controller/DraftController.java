@@ -235,7 +235,7 @@ public class DraftController {
         UUID newDraftId = jdbc.queryForObject(
                 """
                 INSERT INTO drafts (matter_id, tenant_id, version, status, sections, edits_log, internal_note, generated_by)
-                VALUES (:mid, :tid, :version, :status, :sections::jsonb, :edits::jsonb, :note, :gen_by)
+                VALUES (:mid, :tid::uuid, :version, :status, :sections::jsonb, :edits::jsonb, :note, :gen_by::uuid)
                 RETURNING draft_id
                 """,
                 Map.of(

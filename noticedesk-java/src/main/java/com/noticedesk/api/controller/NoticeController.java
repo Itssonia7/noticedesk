@@ -244,9 +244,9 @@ public class NoticeController {
                      authority, din_or_rfn, notice_number, issue, assigned_to, ingest_channel,
                      lifecycle_status)
                 VALUES
-                    (:tid, :mid, :cid, :rid, :law, :dtype,
+                    (:tid::uuid, :mid, :cid, :rid, :law, :dtype,
                      :due, :issue_date, :hearing, :fy, :ay,
-                     :authority, :din, :num, :issue_text, :assigned, :channel,
+                     :authority, :din, :num, :issue_text, :assigned::uuid, :channel,
                      'issued')
                 RETURNING notice_id
                 """,
@@ -471,7 +471,7 @@ public class NoticeController {
         return jdbc.queryForObject(
                 """
                 INSERT INTO matters (tenant_id, client_id, registration_id)
-                VALUES (:tid, :cid, :rid)
+                VALUES (:tid::uuid, :cid, :rid)
                 RETURNING matter_id
                 """,
                 Map.of("tid", tenantId, "cid", clientId, "rid", registrationId),

@@ -40,6 +40,7 @@ public class AppProperties {
         private String providerSecondary;
         private Anthropic anthropic = new Anthropic();
         private OpenAi openai = new OpenAi();
+        private Gemini gemini = new Gemini();
         // Per-agent model overrides
         private String modelDrafting = "";
         private String modelTriage = "claude-sonnet-4-6";
@@ -59,6 +60,13 @@ public class AppProperties {
             private String model = "gpt-4o";
             private double timeoutSeconds = 180.0;
             private String baseUrl = "";
+        }
+
+        @Data
+        public static class Gemini {
+            private String apiKey;
+            private String model = "gemini-3.6-flash";
+            private double timeoutSeconds = 180.0;
         }
     }
 
@@ -139,8 +147,12 @@ public class AppProperties {
     }
 
     public String modelForAgent(String agent, String provider) {
-        if (!"anthropic".equals(provider)) {
-            return "openai".equals(provider) ? llm.openai.model : "";
+        if ("openai".equals(provider)) {
+            return llm.openai.model;
+        } else if ("gemini".equals(provider)) {
+            return llm.gemini.model;
+        } else if (!"anthropic".equals(provider)) {
+            return "";
         }
         String override = switch (agent) {
             case "drafting" -> llm.modelDrafting;

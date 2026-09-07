@@ -49,3 +49,7 @@ logs/
 *.sqlite
 *.db
 pgdata/
+.pgdata/
+test_venv/
+*.pdf
+

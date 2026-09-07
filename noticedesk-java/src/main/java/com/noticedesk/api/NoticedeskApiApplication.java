@@ -7,7 +7,10 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 import com.noticedesk.api.config.AppProperties;
 
+import org.springframework.scheduling.annotation.EnableScheduling;
+
 @SpringBootApplication
+@EnableScheduling
 @EnableConfigurationProperties(AppProperties.class)
 @EnableTransactionManagement
 public class NoticedeskApiApplication {

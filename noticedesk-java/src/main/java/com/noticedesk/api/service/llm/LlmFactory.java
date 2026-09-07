@@ -93,9 +93,14 @@ public class LlmFactory {
                 yield new OpenAiLlmProvider(cfg.getApiKey(), resolvedModel,
                         cfg.getTimeoutSeconds(), cfg.getBaseUrl());
             }
+            case "gemini" -> {
+                AppProperties.Llm.Gemini cfg = properties.getLlm().getGemini();
+                String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
+                yield new GeminiLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds());
+            }
             case "stub" -> new StubLlmProvider(properties.getLlm().getStubDefaultCanned());
             default -> throw new LlmException(
-                    "Unknown LLM provider: '" + name + "' (valid: anthropic, openai, stub)");
+                    "Unknown LLM provider: '" + name + "' (valid: anthropic, openai, gemini, stub)");
         };
     }
 }
