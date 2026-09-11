@@ -2,7 +2,10 @@ package com.noticedesk.api.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.noticedesk.api.model.rag.ConfidenceAssessment;
+import com.noticedesk.api.model.rag.RagContextBundle;
 import com.noticedesk.api.service.llm.*;
+import com.noticedesk.api.service.rag.RagStoreService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -33,8 +36,9 @@ public class DraftingAgent {
     private static final int    DRAFTING_MAX_OUTPUT_TOKENS  = 16_000;
     private static final double DRAFTING_TEMPERATURE        = 0.1;
 
-    private final LlmFactory   llmFactory;
-    private final ObjectMapper objectMapper;
+    private final LlmFactory      llmFactory;
+    private final ObjectMapper    objectMapper;
+    private final RagStoreService ragStoreService;
 
     // ---- Public data types -----------------------------------------------
 
@@ -87,7 +91,9 @@ public class DraftingAgent {
             List<Map<String, Object>> documents,
             List<Map<String, Object>> crossRegistrationContext,
             List<SupportingDoc>       supportingDocuments,
-            List<PendingRequirement>  pendingRequirements) {}
+            List<PendingRequirement>  pendingRequirements,
+            RagContextBundle          ragContext,
+            ConfidenceAssessment      confidenceAssessment) {}
 
     // ---- Public API ------------------------------------------------------
 
@@ -246,6 +252,12 @@ public class DraftingAgent {
         Map<String, Object> rawExtractedJson = rawJsonObj instanceof Map<?, ?> m
                 ? (Map<String, Object>) m : Map.of();
 
+        String queryText = noticeMap.get("issue") != null ? noticeMap.get("issue").toString() :
+                (row.get("document_type") != null ? row.get("document_type").toString() : "GST Notice Allegation");
+
+        RagContextBundle ragBundle = ragStoreService != null ? ragStoreService.getRagContext(matterId, queryText, 5, 5) : null;
+        ConfidenceAssessment confidenceDec = ragStoreService != null ? ragStoreService.evaluateCascadeConfidence(ragBundle) : null;
+
         return new DraftingInput(
                 matterId, tone,
                 partnerInstructions != null ? partnerInstructions : "",
@@ -266,7 +278,9 @@ public class DraftingAgent {
                 new ArrayList<>(docRows),
                 new ArrayList<>(crossBlock),
                 supportingDocs,
-                pendingReqs);
+                pendingReqs,
+                ragBundle,
+                confidenceDec);
     }
 
     /**
@@ -402,7 +416,7 @@ public class DraftingAgent {
                   "the parsed fields + structured JSON above for the para-wise reply)";
 
         String supportingEvidenceBlock = renderSupportingEvidence(
-                di.supportingDocuments(), di.pendingRequirements());
+                di.supportingDocuments(), di.pendingRequirements(), di.ragContext(), di.confidenceAssessment());
 
         String demandStr = di.notice().get("demand_amount") instanceof Number n
                 ? "₹" + String.format("%.2f", n.doubleValue()) : "—";
@@ -445,15 +459,24 @@ public class DraftingAgent {
     }
 
     private String renderSupportingEvidence(
-            List<SupportingDoc> docs, List<PendingRequirement> pending) {
+            List<SupportingDoc> docs, List<PendingRequirement> pending,
+            RagContextBundle ragContext, ConfidenceAssessment confidenceAssessment) {
 
-        if (docs.isEmpty() && pending.isEmpty()) {
+        StringBuilder sb = new StringBuilder();
+
+        if (confidenceAssessment != null && confidenceAssessment.isHighConfidence() && confidenceAssessment.guidedTemplate() != null) {
+            sb.append(confidenceAssessment.guidedTemplate()).append("\n\n");
+        }
+
+        if (ragContext != null && (!ragContext.legalChunks().isEmpty() || !ragContext.evidenceChunks().isEmpty())) {
+            sb.append(ragContext.formatForPrompt()).append("\n\n");
+        }
+
+        if (docs.isEmpty() && pending.isEmpty() && sb.length() == 0) {
             return "(no triage checklist for this notice — either triage hasn't been run yet " +
                    "or the matter has no document requirements. " +
                    "Fall back to the DOCUMENTS ATTACHED block below.)";
         }
-
-        StringBuilder sb = new StringBuilder();
 
         if (!docs.isEmpty()) {
             sb.append("ATTACHED (use these as primary evidence):");

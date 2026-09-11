@@ -6,6 +6,7 @@ import com.noticedesk.api.agent.NoticeRoutingAgent;
 import com.noticedesk.api.security.AuthClaims;
 import com.noticedesk.api.security.TenantContextHolder;
 import com.noticedesk.api.service.AuditService;
+import com.noticedesk.api.service.rag.RagStoreService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -35,6 +36,7 @@ public class ParseAndRouteWorkflow {
     private final NamedParameterJdbcTemplate jdbc;
     private final DocumentParsingAgent documentParsingAgent;
     private final NoticeRoutingAgent noticeRoutingAgent;
+    private final RagStoreService ragStoreService;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
 
@@ -156,5 +158,22 @@ public class ParseAndRouteWorkflow {
         );
         NoticeRoutingAgent.RoutingResult result = noticeRoutingAgent.route(routingInput, jdbc);
         log.info("parse_route.routing_done inbox_id={} status={}", inboxId, result.status());
+
+        if (result != null && result.matterId() != null && "routed".equals(result.status())) {
+            try {
+                Map<String, Object> inboxRow = fetchInboxRow(tenantId, inboxId);
+                if (inboxRow != null) {
+                    String ocrText = (String) inboxRow.get("ocr_text");
+                    String filename = (String) inboxRow.get("original_filename");
+                    String docType = parsed.payload() != null && parsed.payload().get("document_type") != null
+                            ? parsed.payload().get("document_type").toString()
+                            : "NOTICE";
+                    ragStoreService.indexEvidenceDocument(UUID.fromString(tenantId), result.matterId(), inboxId, filename, ocrText, docType);
+                    log.info("Indexed evidence document for matter_id={} inbox_id={}", result.matterId(), inboxId);
+                }
+            } catch (Exception e) {
+                log.warn("Auto-indexing evidence document failed in ParseAndRouteWorkflow for inbox_id={}: {}", inboxId, e.getMessage());
+            }
+        }
     }
 }

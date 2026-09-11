@@ -7,6 +7,7 @@ import com.noticedesk.api.agent.DocumentParsingAgent.ParsedDocument;
 import com.noticedesk.api.agent.NoticeRoutingAgent;
 import com.noticedesk.api.agent.NoticeRoutingAgent.RoutingInput;
 import com.noticedesk.api.service.AuditService;
+import com.noticedesk.api.service.rag.RagStoreService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -28,6 +29,7 @@ public class InboxProcessingWorker {
     private final TransactionTemplate transactionTemplate;
     private final DocumentParsingAgent documentParsingAgent;
     private final NoticeRoutingAgent noticeRoutingAgent;
+    private final RagStoreService ragStoreService;
     private final AuditService auditService;
     private final ObjectMapper objectMapper;
 
@@ -118,7 +120,21 @@ public class InboxProcessingWorker {
                             // Proceed to routing
                             RoutingInput routingInput = new RoutingInput(tenantId, inboxId, parsed.payload());
                             log.info("Starting notice routing for inbox_id={}", inboxId);
-                            noticeRoutingAgent.route(routingInput, jdbc);
+                            NoticeRoutingAgent.RoutingResult routingResult = noticeRoutingAgent.route(routingInput, jdbc);
+
+                            if (routingResult != null && routingResult.matterId() != null && "routed".equals(routingResult.status())) {
+                                try {
+                                    String ocrText = (String) doc.get("ocr_text");
+                                    String filename = (String) doc.get("original_filename");
+                                    String docType = parsed.payload() != null && parsed.payload().get("document_type") != null
+                                            ? parsed.payload().get("document_type").toString()
+                                            : "NOTICE";
+                                    ragStoreService.indexEvidenceDocument(tenantId, routingResult.matterId(), inboxId, filename, ocrText, docType);
+                                    log.info("Indexed evidence document for matter_id={} inbox_id={}", routingResult.matterId(), inboxId);
+                                } catch (Exception e) {
+                                    log.warn("Auto-indexing evidence document failed for inbox_id={}: {}", inboxId, e.getMessage());
+                                }
+                            }
                             return true;
 
                         } catch (Exception e) {
