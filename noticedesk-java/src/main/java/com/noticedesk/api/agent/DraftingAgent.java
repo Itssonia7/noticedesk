@@ -287,10 +287,23 @@ public class DraftingAgent {
      * Generate the draft via primary LLM with secondary fallback.
      */
     public GeneratedDraft generateDraft(DraftingInput input) {
+        return generateDraft(input, null);
+    }
+
+    /**
+     * Generate draft with corpus reference draft legal context.
+     */
+    public GeneratedDraft generateDraft(DraftingInput input, String corpusReferenceDraft) {
         String[] prompts = loadPromptTemplate();
         String system       = prompts[0];
         String userTemplate = prompts[1];
         String user         = renderUserPrompt(userTemplate, input);
+
+        if (corpusReferenceDraft != null && !corpusReferenceDraft.isBlank()) {
+            user += "\n\n--- GST CORPUS GOLD-STANDARD REFERENCE DRAFT ---\n" +
+                    "Adopt the statutory grounds, section references, case precedents, and legal argument layout from this reference draft:\n\n" +
+                    corpusReferenceDraft + "\n----------------------------------------------------\n";
+        }
 
         LlmProvider primary = llmFactory.getLlmForAgent("drafting");
         try {

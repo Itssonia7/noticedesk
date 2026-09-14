@@ -10,6 +10,8 @@ import com.noticedesk.api.agent.DraftingAgent.DraftingInput;
 import com.noticedesk.api.agent.DraftingAgent.GeneratedDraft;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.AuditService;
+import com.noticedesk.api.service.GstCorpusMatcherService;
+import com.noticedesk.api.service.GstTemplateFillerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -36,6 +38,8 @@ public class DraftingWorkflow {
     private final AuditService                auditService;
     private final AppProperties               properties;
     private final ObjectMapper                objectMapper;
+    private final GstCorpusMatcherService     corpusMatcherService;
+    private final GstTemplateFillerService     templateFillerService;
 
     // ---- Public data types -----------------------------------------------
 
@@ -74,8 +78,25 @@ public class DraftingWorkflow {
                 job.partnerInstructions(),
                 job.includeCrossRegistration());
 
-        // 3. Generate the draft
-        GeneratedDraft generated = draftingAgent.generateDraft(input);
+        // 3. Automated GST Corpus Matching (Fast-Track vs Hybrid Strategy)
+        Optional<GstCorpusMatcherService.CorpusMatchResult> matchOpt =
+                corpusMatcherService.matchNotice(input.notice(), input.noticeOcrExcerpt());
+
+        GeneratedDraft generated;
+        if (matchOpt.isPresent()) {
+            GstCorpusMatcherService.CorpusMatchResult match = matchOpt.get();
+            log.info("Corpus match found: serial={} kind={} strategy={} score={}",
+                    match.serial(), match.noticeKind(), match.strategy(), match.matchScore());
+
+            if (match.strategy() == GstCorpusMatcherService.Strategy.FAST_TRACK) {
+                generated = templateFillerService.fillTemplate(input, match.draftPath(), match.noticeKind());
+            } else {
+                String referenceText = templateFillerService.extractAndPopulateTemplate(match.draftPath(), input);
+                generated = draftingAgent.generateDraft(input, referenceText);
+            }
+        } else {
+            generated = draftingAgent.generateDraft(input);
+        }
 
         // 4. Verify citations — concatenate all section body_html for extraction
         String allHtml = generated.sections().stream()

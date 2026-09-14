@@ -144,6 +144,7 @@ public class AppProperties {
         private int supportingDocExcerptChars = 5000;
         private int supportingEvidenceMaxChars = 40000;
         private String demoFirmNameOverride;
+        private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
     }
 
     public String modelForAgent(String agent, String provider) {

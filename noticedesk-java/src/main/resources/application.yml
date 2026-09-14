@@ -136,3 +136,5 @@ noticedesk:
     supporting-doc-excerpt-chars: ${DRAFTING_SUPPORTING_DOC_EXCERPT_CHARS:5000}
     supporting-evidence-max-chars: ${DRAFTING_SUPPORTING_EVIDENCE_MAX_CHARS:40000}
     demo-firm-name-override: ${DEMO_FIRM_NAME_OVERRIDE:}
+    gst-corpus-dir: ${GST_CORPUS_DIR:../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired}
+
