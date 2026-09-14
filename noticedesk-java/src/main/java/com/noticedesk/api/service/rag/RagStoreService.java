@@ -289,13 +289,27 @@ public class RagStoreService {
 
         double roundedScore = Math.round(maxScore * 10000.0) / 10000.0;
 
-        if (maxScore >= 0.70) {
-            return new ConfidenceAssessment(roundedScore, true, "HIGH_MATCH", GOLD_STANDARD_GSTR2A_TEMPLATE);
-        } else if (maxScore >= 0.40) {
-            return new ConfidenceAssessment(roundedScore, false, "MEDIUM_MATCH", null);
+        if (maxScore >= 0.90) {
+            return new ConfidenceAssessment(roundedScore, true, "EXACT_MATCH", GOLD_STANDARD_GSTR2A_TEMPLATE);
+        } else if (maxScore >= 0.70) {
+            return new ConfidenceAssessment(roundedScore, true, "HYBRID_MATCH", GOLD_STANDARD_GSTR2A_TEMPLATE);
         } else {
             return new ConfidenceAssessment(roundedScore, false, "NOVEL_CASE", null);
         }
+    }
+
+    /**
+     * Post-Drafting Auto-Caching for Scenario 2: Novel cases (< 70% score).
+     * Caches the newly generated draft into RAG legal_chunks for future cases.
+     */
+    public LegalChunk cacheNovelDraft(String noticeIssue, String draftTitle, String draftContent) {
+        log.info("Auto-caching novel draft output into RAG legal_chunks: {}", draftTitle);
+        return indexLegalChunk(
+                "NOVEL_CACHED",
+                "Cached Reply (" + (noticeIssue != null ? noticeIssue : "General Issue") + ")",
+                draftTitle,
+                draftContent
+        );
     }
 
     public static void clearInMemoryStores() {

@@ -29,7 +29,7 @@ import java.util.function.Function;
 @Slf4j
 public class DraftingAgent {
 
-    private static final String PROMPT_VERSION              = "drafting_v3";
+    private static final String PROMPT_VERSION              = "drafting_v4";
     private static final int    NOTICE_OCR_EXCERPT_CHARS    = 20_000;
     private static final int    SUPPORTING_DOC_EXCERPT_CHARS = 5_000;
     private static final int    SUPPORTING_EVIDENCE_MAX_CHARS = 40_000;
@@ -441,16 +441,39 @@ public class DraftingAgent {
             rawJsonStr = "{}";
         }
 
+        String legalLibraryBlock = (di.ragContext() != null && !di.ragContext().legalChunks().isEmpty())
+                ? di.ragContext().legalChunks().stream()
+                .map(c -> String.format("<chunk id=\"%s\" source=\"%s\" citation=\"%s\">\n%s\n</chunk>",
+                        c.chunkId(), c.actOrCircular() != null ? c.actOrCircular() : "legal_library",
+                        c.sectionOrPara() != null ? c.sectionOrPara() : "Statute / Precedent", c.content()))
+                .reduce((a, b) -> a + "\n" + b).orElse("(no legal library chunks attached)")
+                : "(no legal library chunks attached)";
+
+        String allegationsBlock = di.notice().get("issue") != null
+                ? "<allegation num=\"1\">" + di.notice().get("issue") + "</allegation>"
+                : "<allegation num=\"1\">General Allegation under Tax Notice</allegation>";
+
+        String sectionInvoked = di.notice().get("section") != null ? di.notice().get("section").toString()
+                : (di.law() != null ? di.law() : "Section 73/74 CGST Act, 2017");
+
+        String tradeName = di.clientLegalName();
+        String jurisdictionOffice = di.registrationStateName() != null ? di.registrationStateName() + " Tax Circle/Ward" : "Jurisdictional Office";
+
         return template
                 .replace("{client.legal_name}",            di.clientLegalName())
+                .replace("{client.trade_name}",            tradeName)
                 .replace("{client.pan}",                   di.clientPan())
                 .replace("{client.entity_type}",           nvl(di.clientEntityType()))
                 .replace("{registration_type}",            di.registrationType())
                 .replace("{registration.identifier_value}", di.registrationIdentifier())
+                .replace("{registration.state_name}",      nvl(di.registrationStateName()))
+                .replace("{registration.jurisdiction_office}", jurisdictionOffice)
                 .replace("{state_qualifier}",              stateQualifier)
                 .replace("{law}",                          di.law())
                 .replace("{fy_or_ay}",                     fyOrAy)
+                .replace("{notice.tax_period}",            fyOrAy)
                 .replace("{notice.document_type}",         nvl(str(di.notice().get("document_type"))))
+                .replace("{notice.section}",               sectionInvoked)
                 .replace("{notice.din_or_rfn}",            nvl(str(di.notice().get("din_or_rfn"))))
                 .replace("{notice.notice_number}",         nvl(str(di.notice().get("notice_number"))))
                 .replace("{notice.issue_date}",            nvl(str(di.notice().get("issue_date"))))
@@ -458,17 +481,20 @@ public class DraftingAgent {
                 .replace("{notice.authority}",             nvl(str(di.notice().get("authority"))))
                 .replace("{notice.issue}",                 nvl(str(di.notice().get("issue"))))
                 .replace("{notice.demand_amount}",         demandStr)
+                .replace("{notice.allegations_block}",     allegationsBlock)
                 .replace("{notice_ocr_excerpt}",           ocrBlock)
                 .replace("{supporting_evidence_block}",    supportingEvidenceBlock)
+                .replace("{legal_library_block}",          legalLibraryBlock)
                 .replace("{raw_extracted_json}",           rawJsonStr)
                 .replace("{prior_matters_block}",          priorBlock)
                 .replace("{sibling_notices_block}",        siblingBlock)
                 .replace("{documents_block}",              docsBlock)
                 .replace("{cross_registration_block}",     crossBlock)
                 .replace("{tone}",                         di.tone())
+                .replace("{length}",                       "full")
                 .replace("{partner_instructions}",
                         (di.partnerInstructions() != null && !di.partnerInstructions().isBlank())
-                                ? di.partnerInstructions() : "(none)");
+                                ? di.partnerInstructions().strip() : "(none)");
     }
 
     private String renderSupportingEvidence(

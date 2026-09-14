@@ -34,7 +34,8 @@ public class GstCorpusMatcherService {
 
     public enum Strategy {
         FAST_TRACK,
-        HYBRID
+        HYBRID,
+        NOVEL_LLM
     }
 
     @Getter
@@ -123,23 +124,26 @@ public class GstCorpusMatcherService {
         String rawOcr = (noticeOcrExcerpt != null ? noticeOcrExcerpt : "").toLowerCase();
 
         CorpusItem bestMatch = null;
-        double bestScore = 0.0;
+        double bestRawScore = 0.0;
 
         for (CorpusItem item : corpusItems) {
             double score = computeMatchScore(item, docType, noticeNum, authority, rawOcr);
-            if (score > bestScore) {
-                bestScore = score;
+            if (score > bestRawScore) {
+                bestRawScore = score;
                 bestMatch = item;
             }
         }
 
-        // Default to first item if score threshold is low
-        if (bestMatch == null) {
-            bestMatch = corpusItems.get(0);
-            bestScore = 0.1;
+        // Normalize raw score to 0.0 - 1.0 range (max score possible ~ 10.0)
+        double normalizedScore = Math.min(1.0, Math.round((bestRawScore / 7.0) * 10000.0) / 10000.0);
+
+        if (bestMatch == null || normalizedScore < 0.30) {
+            return Optional.of(new CorpusMatchResult(
+                    "NONE", "unknown", "", "", Strategy.NOVEL_LLM, normalizedScore, null
+            ));
         }
 
-        Strategy strategy = determineStrategy(bestMatch, docType, rawOcr);
+        Strategy strategy = determineStrategy(bestMatch, docType, rawOcr, normalizedScore);
         Path draftPath = resolvedCorpusDir.resolve("drafts").resolve(bestMatch.getDraftFile());
 
         return Optional.of(new CorpusMatchResult(
@@ -148,7 +152,7 @@ public class GstCorpusMatcherService {
                 bestMatch.getDraftFile(),
                 bestMatch.getNoticeFile(),
                 strategy,
-                bestScore,
+                normalizedScore,
                 draftPath
         ));
     }
@@ -158,36 +162,29 @@ public class GstCorpusMatcherService {
         String noticeKind = item.getNoticeKind().toLowerCase();
         String draftFile = item.getDraftFile().toLowerCase();
 
-        // 1. Notice Kind / Document Type match
+        // 1. Exact Notice Kind / Document Type match
         if (!docType.isEmpty() && (docType.contains(noticeKind) || noticeKind.contains(docType))) {
-            score += 4.0;
+            score += 4.5;
         }
 
         // 2. Form & Section Matches (e.g. DRC01, DRC03, SCN 73, SCN 74, S129, S16(4), REG17, ASMT10)
         String[] keywords = {"drc01", "drc03", "drc07", "asmt10", "asmt13", "reg17", "apl01", "73", "74", "129", "83", "86a", "16(4)", "16(5)", "128a"};
         for (String kw : keywords) {
             if ((docType.contains(kw) || noticeNum.contains(kw) || ocr.contains(kw)) && draftFile.contains(kw)) {
-                score += 1.5;
+                score += 2.0;
             }
         }
 
         return score;
     }
 
-    private Strategy determineStrategy(CorpusItem item, String docType, String ocr) {
-        String noticeKind = item.getNoticeKind().toLowerCase();
-        String draftType = item.getDraftType().toLowerCase();
-
-        // Standard procedural/administrative intimations can be Fast-Tracked
-        if ("system_intimation".equals(noticeKind) ||
-            "letter".equals(draftType) ||
-            ocr.contains("adjournment") ||
-            ocr.contains("without din") ||
-            ocr.contains("request for reasoned order")) {
-            return Strategy.FAST_TRACK;
+    private Strategy determineStrategy(CorpusItem item, String docType, String ocr, double score) {
+        if (score >= 0.90) {
+            return Strategy.FAST_TRACK; // Scenario 1: Exact match -> Fast-Track Template Fill
+        } else if (score >= 0.70) {
+            return Strategy.HYBRID;     // Scenario 3: Hybrid multi-issue -> RAG Context + Claude Synthesizer
+        } else {
+            return Strategy.NOVEL_LLM;  // Scenario 2: Novel notice (<70%) -> Fresh LLM + Auto-Cache
         }
-
-        // Substantive tax demands use Hybrid (LLM + Corpus reference draft context)
-        return Strategy.HYBRID;
     }
 }

@@ -27,6 +27,8 @@ import java.util.*;
  * persists the draft + citation rows, and emits the audit event — all in a
  * single database transaction.
  */
+import com.noticedesk.api.service.rag.RagStoreService;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -40,6 +42,7 @@ public class DraftingWorkflow {
     private final ObjectMapper                objectMapper;
     private final GstCorpusMatcherService     corpusMatcherService;
     private final GstTemplateFillerService     templateFillerService;
+    private final RagStoreService             ragStoreService;
 
     // ---- Public data types -----------------------------------------------
 
@@ -78,24 +81,35 @@ public class DraftingWorkflow {
                 job.partnerInstructions(),
                 job.includeCrossRegistration());
 
-        // 3. Automated GST Corpus Matching (Fast-Track vs Hybrid Strategy)
+        // 3. Automated GST Corpus Matching & 3-Scenario Dispatching
         Optional<GstCorpusMatcherService.CorpusMatchResult> matchOpt =
                 corpusMatcherService.matchNotice(input.notice(), input.noticeOcrExcerpt());
 
         GeneratedDraft generated;
         if (matchOpt.isPresent()) {
             GstCorpusMatcherService.CorpusMatchResult match = matchOpt.get();
-            log.info("Corpus match found: serial={} kind={} strategy={} score={}",
+            log.info("Corpus match evaluation: serial={} kind={} strategy={} score={}",
                     match.serial(), match.noticeKind(), match.strategy(), match.matchScore());
 
             if (match.strategy() == GstCorpusMatcherService.Strategy.FAST_TRACK) {
+                // Scenario 1: Exact Match (Score >= 90%) -> Fast-Track Template Filler
+                log.info("Scenario 1 triggered: Fast-Track Template Fill for exact match serial={}", match.serial());
                 generated = templateFillerService.fillTemplate(input, match.draftPath(), match.noticeKind());
-            } else {
+            } else if (match.strategy() == GstCorpusMatcherService.Strategy.HYBRID) {
+                // Scenario 3: Hybrid Multi-Issue Match (70% <= Score < 90%) -> RAG Context + Claude Synthesizer
+                log.info("Scenario 3 triggered: Hybrid RAG Multi-Issue Drafting for serial={}", match.serial());
                 String referenceText = templateFillerService.extractAndPopulateTemplate(match.draftPath(), input);
                 generated = draftingAgent.generateDraft(input, referenceText);
+            } else {
+                // Scenario 2: Novel Notice (Score < 70%) -> Fresh Claude Generation + Post-Draft Auto-Cache
+                log.info("Scenario 2 triggered: Novel Notice Generation (< 70% score). Drafting from scratch via Claude.");
+                generated = draftingAgent.generateDraft(input);
+                cacheNovelDraft(input, generated);
             }
         } else {
+            log.info("No corpus match. Drafting from scratch via Claude.");
             generated = draftingAgent.generateDraft(input);
+            cacheNovelDraft(input, generated);
         }
 
         // 4. Verify citations — concatenate all section body_html for extraction
@@ -246,6 +260,19 @@ public class DraftingWorkflow {
         p.put("ipn",      generated.internalPartnerNote());
         p.put("uid",      job.userId().toString());
         return p;
+    }
+
+    private void cacheNovelDraft(DraftingInput input, GeneratedDraft generated) {
+        try {
+            String issue = input.notice().get("issue") != null ? input.notice().get("issue").toString() : "Novel Notice Allegation";
+            String title = "Reply for " + input.clientLegalName() + " - " + issue;
+            String fullContent = generated.sections().stream()
+                    .map(s -> s.title() + ": " + s.bodyHtml())
+                    .reduce("", (a, b) -> a + "\n" + b);
+            ragStoreService.cacheNovelDraft(issue, title, fullContent);
+        } catch (Exception e) {
+            log.warn("Failed to auto-cache novel draft into RAG: {}", e.getMessage());
+        }
     }
 
     /**
