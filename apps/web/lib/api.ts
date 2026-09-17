@@ -610,7 +610,11 @@ export async function fetchDraftVersions(
 ): Promise<{ drafts: DraftSummary[]; total: number }> {
   const res = await fetch(`/api/matters/${matterId}/drafts`, { cache: "no-store" });
   if (!res.ok) throw new Error(`failed to load drafts (${res.status})`);
-  return (await res.json()) as { drafts: DraftSummary[]; total: number };
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { drafts: data, total: data.length };
+  }
+  return { drafts: data?.drafts ?? [], total: data?.total ?? 0 };
 }
 
 export async function fetchDraft(id: string): Promise<DraftDetail> {

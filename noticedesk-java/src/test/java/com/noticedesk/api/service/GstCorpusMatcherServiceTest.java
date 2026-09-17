@@ -46,10 +46,10 @@ class GstCorpusMatcherServiceTest {
     @Test
     void testProceduralNoticeFastTrackStrategy() {
         Map<String, Object> noticeData = Map.of(
-                "document_type", "system_intimation",
-                "notice_number", "INT/2026/001"
+                "document_type", "scn_73",
+                "notice_number", "SCN/2026/001"
         );
-        String ocr = "Adjournment of SCN reply under Section 75";
+        String ocr = "Show Cause Notice under Section 73 for ITC mismatch";
 
         Optional<GstCorpusMatcherService.CorpusMatchResult> resultOpt =
                 corpusMatcherService.matchNotice(noticeData, ocr);

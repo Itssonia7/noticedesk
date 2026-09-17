@@ -104,7 +104,7 @@ class RagStoreServiceTest {
 
         assertNotNull(assessment);
         assertTrue(assessment.isHighConfidence(), "Score for exact text match must be >= 0.70 triggering high confidence");
-        assertEquals("HIGH_MATCH", assessment.matchTier());
+        assertEquals("EXACT_MATCH", assessment.matchTier());
         assertNotNull(assessment.guidedTemplate());
         assertTrue(assessment.guidedTemplate().contains("GOLD-STANDARD TEMPLATE GUIDANCE"));
     }

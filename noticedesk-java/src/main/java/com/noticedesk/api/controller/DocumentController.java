@@ -3,9 +3,11 @@ package com.noticedesk.api.controller;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.exception.AppValidationException;
 import com.noticedesk.api.exception.NotFoundException;
+import com.noticedesk.api.security.AuthClaims;
+import com.noticedesk.api.security.TenantContextHolder;
 import com.noticedesk.api.service.ocr.OcrFactory;
 import com.noticedesk.api.service.storage.StorageFactory;
-import com.noticedesk.api.security.TenantContextHolder;
+import com.noticedesk.api.workflow.ParseAndRouteWorkflow;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -20,6 +22,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 @Slf4j
 @RestController
@@ -31,16 +34,15 @@ public class DocumentController {
     private final AppProperties properties;
     private final StorageFactory storageFactory;
     private final OcrFactory ocrFactory;
-    private final com.noticedesk.api.workflow.ParseAndRouteWorkflow parseAndRouteWorkflow;
+    private final ParseAndRouteWorkflow parseAndRouteWorkflow;
 
     @PostMapping("/documents/upload")
     @ResponseStatus(HttpStatus.CREATED)
-    @Transactional
-    public Map<String, Object> uploadDocument(@RequestParam("file") MultipartFile file) throws Exception {
-        String tenantId = TenantContextHolder.getTenantId();
+    public Map<String, Object> uploadDocument(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(name = "ingest_channel", defaultValue = "web_upload") String ingestChannel) throws Exception {
 
-        jdbc.queryForObject("SELECT set_config('app.current_tenant', :tid, true)",
-                Map.of("tid", tenantId), String.class);
+        String tenantId = TenantContextHolder.getTenantId();
 
         long maxBytes = properties.getStorage().getMaxUploadBytes();
         if (file.getSize() > maxBytes) {
@@ -57,40 +59,63 @@ public class DocumentController {
 
         String filename = file.getOriginalFilename() != null ? file.getOriginalFilename() : "upload";
 
-        UUID inboxId = jdbc.queryForObject(
+        UUID inboxId = insertInboxRecord(tenantId, filename, key, file.getSize(), fileHash, contentType, ingestChannel);
+
+        log.info("Document uploaded: inbox_id={} filename={} tenant={}", inboxId, filename, tenantId);
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                TenantContextHolder.set(new AuthClaims(null, tenantId, null));
+                processOcrAndWorkflow(inboxId, tenantId, bytes, filename, contentType);
+            } catch (Exception e) {
+                log.error("Background OCR/Workflow execution failed for inbox_id={}: {}", inboxId, e.getMessage(), e);
+            } finally {
+                TenantContextHolder.clear();
+            }
+        });
+
+        return Map.of(
+                "inbox_id", inboxId,
+                "filename", filename,
+                "ocr_status", "pending",
+                "file_hash", fileHash,
+                "file_size_bytes", file.getSize(),
+                "status", "uploaded");
+    }
+
+    @Transactional
+    public UUID insertInboxRecord(String tenantId, String filename, String key, long size, String hash, String contentType, String ingestChannel) {
+        jdbc.queryForObject("SELECT set_config('app.current_tenant', :tid, true)",
+                Map.of("tid", tenantId), String.class);
+
+        return jdbc.queryForObject(
                 """
                 INSERT INTO documents_inbox
-                    (tenant_id, original_filename, s3_key, file_size_bytes, file_hash, mime_type, ingest_channel)
-                VALUES (:tid::uuid, :filename, :key, :size, :hash, :mime, 'web_upload')
+                    (tenant_id, original_filename, s3_key, file_size_bytes, file_hash, mime_type, ingest_channel, ocr_status, parse_status, routing_status)
+                VALUES (:tid::uuid, :filename, :key, :size, :hash, :mime, :channel, 'pending', 'pending', 'pending')
                 RETURNING inbox_id
                 """,
                 Map.of(
                         "tid", tenantId,
                         "filename", filename,
                         "key", key,
-                        "size", file.getSize(),
-                        "hash", fileHash,
-                        "mime", contentType),
+                        "size", size,
+                        "hash", hash,
+                        "mime", contentType,
+                        "channel", ingestChannel != null ? ingestChannel : "web_upload"),
                 UUID.class);
+    }
 
-        log.info("Document uploaded: inbox_id={} filename={} tenant={}", inboxId, filename, tenantId);
-
-        // Trigger OCR inline
+    public void processOcrAndWorkflow(UUID inboxId, String tenantId, byte[] bytes, String filename, String contentType) {
         try {
+            updateOcrStatus(tenantId, inboxId, "in_progress", null);
+
             var ocrResult = ocrFactory.getPrimaryProvider().process(bytes, filename, contentType);
             String ocrText = ocrResult.text();
             String ocrProvider = ocrResult.providerName();
 
-            jdbc.update(
-                    """
-                    UPDATE documents_inbox
-                    SET ocr_text = :text, ocr_provider_used = :provider, ocr_status = 'completed',
-                        ocr_completed_at = NOW()
-                    WHERE inbox_id = :id
-                    """,
-                    Map.of("text", ocrText, "provider", ocrProvider, "id", inboxId));
+            saveOcrCompleted(tenantId, inboxId, ocrText, ocrProvider);
 
-            // Trigger parsing and routing workflow
             try {
                 parseAndRouteWorkflow.run(inboxId, UUID.fromString(tenantId));
             } catch (Exception e) {
@@ -99,15 +124,38 @@ public class DocumentController {
 
         } catch (Exception e) {
             log.warn("OCR failed for inbox_id={}: {}", inboxId, e.getMessage());
-            jdbc.update(
-                    "UPDATE documents_inbox SET ocr_status = 'failed' WHERE inbox_id = :id",
-                    Map.of("id", inboxId));
+            saveOcrFailed(tenantId, inboxId, e.getMessage());
         }
+    }
 
-        return Map.of(
-                "inbox_id", inboxId,
-                "filename", filename,
-                "status", "ocr_complete");
+    @Transactional
+    public void updateOcrStatus(String tenantId, UUID inboxId, String status, String error) {
+        jdbc.queryForObject("SELECT set_config('app.current_tenant', :tid, true)",
+                Map.of("tid", tenantId), String.class);
+        jdbc.update("UPDATE documents_inbox SET ocr_status = :status, ocr_error = :err WHERE inbox_id = :id",
+                Map.of("status", status, "err", error != null ? error : "", "id", inboxId));
+    }
+
+    @Transactional
+    public void saveOcrCompleted(String tenantId, UUID inboxId, String ocrText, String ocrProvider) {
+        jdbc.queryForObject("SELECT set_config('app.current_tenant', :tid, true)",
+                Map.of("tid", tenantId), String.class);
+        jdbc.update(
+                """
+                UPDATE documents_inbox
+                SET ocr_text = :text, ocr_provider_used = :provider, ocr_status = 'completed',
+                    ocr_completed_at = NOW()
+                WHERE inbox_id = :id
+                """,
+                Map.of("text", ocrText, "provider", ocrProvider, "id", inboxId));
+    }
+
+    @Transactional
+    public void saveOcrFailed(String tenantId, UUID inboxId, String error) {
+        jdbc.queryForObject("SELECT set_config('app.current_tenant', :tid, true)",
+                Map.of("tid", tenantId), String.class);
+        jdbc.update("UPDATE documents_inbox SET ocr_status = 'failed', ocr_error = :err WHERE inbox_id = :id",
+                Map.of("err", error != null ? error : "OCR failed", "id", inboxId));
     }
 
     @GetMapping({"/inbox", "/documents/inbox"})
@@ -125,19 +173,36 @@ public class DocumentController {
 
         List<Map<String, Object>> items = jdbc.queryForList(
                 """
-                SELECT inbox_id, original_filename, file_size_bytes, mime_type, ingest_channel,
-                       ocr_status, ocr_provider_used, ocr_error, page_count,
-                       parse_status, routing_status, routing_anomaly_details, parsed_to_notice_id,
-                       uploaded_at
-                FROM documents_inbox
-                ORDER BY uploaded_at DESC
+                SELECT di.inbox_id, di.original_filename, di.file_size_bytes, di.page_count,
+                       di.mime_type, di.ocr_status, di.ocr_provider_used, di.ocr_error,
+                       di.ingest_channel, di.parse_status, di.routing_status,
+                       di.routing_anomaly_details, di.parsed_to_notice_id,
+                       c.legal_name AS matched_client_name,
+                       CASE
+                         WHEN r.registration_type = 'GST' THEN COALESCE(r.state_name, r.state_code) || ' GST'
+                         WHEN r.registration_type = 'IT' THEN 'Income Tax'
+                         ELSE NULL
+                       END AS matched_registration_label,
+                       n.document_type,
+                       n.parse_confidence,
+                       di.uploaded_at
+                FROM documents_inbox di
+                LEFT JOIN notices n ON n.notice_id = di.parsed_to_notice_id
+                LEFT JOIN clients c ON c.client_id = n.client_id
+                LEFT JOIN client_registrations r ON r.registration_id = n.registration_id
+                ORDER BY di.uploaded_at DESC
                 LIMIT :limit OFFSET :offset
                 """,
                 Map.of("limit", page_size, "offset", offset));
 
+        Integer total = jdbc.queryForObject(
+                "SELECT COUNT(*)::int FROM documents_inbox",
+                Map.of(),
+                Integer.class);
+
         return Map.of(
                 "items", items,
-                "total", items.size(),
+                "total", total != null ? total : items.size(),
                 "page", page,
                 "page_size", page_size);
     }

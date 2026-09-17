@@ -368,9 +368,10 @@ function ManualRouteModal({
     }
     fetchClient(clientId)
       .then((res) => {
-        setRegistrations(res.registrations);
-        if (res.registrations.length > 0) {
-          setRegistrationId(res.registrations[0].registration_id);
+        const regs = res.registrations || [];
+        setRegistrations(regs);
+        if (regs.length > 0 && regs[0]) {
+          setRegistrationId(regs[0].registration_id);
         } else {
           setRegistrationId("");
         }

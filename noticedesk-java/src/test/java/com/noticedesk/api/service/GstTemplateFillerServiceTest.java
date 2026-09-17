@@ -55,9 +55,10 @@ class GstTemplateFillerServiceTest {
         assertEquals(15, draft.sections().size(), "Must generate 15 sections");
         assertEquals("fast_track_corpus_v1", draft.promptVersion());
 
+        String section1Html = draft.sections().get(0).bodyHtml();
         String section3Html = draft.sections().get(2).bodyHtml();
         assertTrue(section3Html.contains("Acme Traders Private Limited"), "Must contain legal name");
-        assertTrue(section3Html.contains("27AAACA1234A1Z5"), "Must contain GSTIN");
-        assertTrue(section3Html.contains("AAACA1234A"), "Must contain PAN");
+        assertTrue(section1Html.contains("27AAACA1234A1Z5"), "Must contain GSTIN");
+        assertTrue(section1Html.contains("AAACA1234A"), "Must contain PAN");
     }
 }
