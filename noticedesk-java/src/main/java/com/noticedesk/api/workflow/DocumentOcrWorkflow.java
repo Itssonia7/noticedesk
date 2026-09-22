@@ -1,8 +1,6 @@
 package com.noticedesk.api.workflow;
 
 import com.noticedesk.api.service.ocr.OcrFactory;
-import com.noticedesk.api.service.ocr.OcrQualityGateService;
-import com.noticedesk.api.service.ocr.OcrQualityGateService.OcrQualityResult;
 import com.noticedesk.api.service.storage.StorageFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,37 +16,31 @@ import java.util.UUID;
  * Document OCR workflow.
  *
  * Single source of truth for the OCR flow — downloads the file from storage,
- * runs text extraction, passes through the OcrQualityGate, and writes the results
- * back to documents_inbox.
+ * runs text extraction, and writes the results back to documents_inbox.
  *
  * Steps:
  *  1. Bind RLS for the tenant in context.
  *  2. Fetch inbox item (storage_key, mime_type, filename) from documents_inbox.
  *  3. Download raw bytes from StorageService.
  *  4. Run OCR via the primary OcrProvider.
- *  5. Assess extraction quality via OcrQualityGateService (3-layer quality gate).
- *  6. UPDATE documents_inbox with extracted text, quality metrics, fallback flags, and status.
- *  7. Return OcrWorkflowResult.
+ *  5. UPDATE documents_inbox with extracted text, provider, page count, and status.
+ *  6. Return OcrWorkflowResult.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class DocumentOcrWorkflow {
 
-    private final StorageFactory        storageFactory;
-    private final OcrFactory            ocrFactory;
-    private final OcrQualityGateService qualityGateService;
+    private final StorageFactory storageFactory;
+    private final OcrFactory     ocrFactory;
 
     // ---- Public data types -----------------------------------------------
 
     public record OcrWorkflowResult(
-            UUID    inboxId,
-            String  text,
-            int     pageCount,
-            String  provider,
-            double  qualityScore,
-            String  qualityStatus,
-            boolean visionFallbackUsed) {}
+            UUID   inboxId,
+            String text,
+            int    pageCount,
+            String provider) {}
 
     // ---- Public API ------------------------------------------------------
 
@@ -101,18 +93,7 @@ public class DocumentOcrWorkflow {
             throw new RuntimeException("OCR extraction failed for " + inboxId + ": " + e.getMessage(), e);
         }
 
-        // 4. Pass through OcrQualityGateService (3-Layer Quality Gate)
-        OcrQualityResult qualityResult = qualityGateService.assessQuality(ocrText, pageCount, ocrProvider);
-        boolean visionFallbackUsed = qualityResult.isVisionFallbackRecommended();
-
-        if (visionFallbackUsed) {
-            log.warn("ocr.low_quality_detected inbox_id={} score={} failures={}. Vision fallback flagged.",
-                    inboxId, qualityResult.qualityScore(), qualityResult.failureReasons());
-        } else {
-            log.info("ocr.high_quality_confirmed inbox_id={} score={}", inboxId, qualityResult.qualityScore());
-        }
-
-        // 5. Update inbox with OCR text, quality metrics, and status
+        // 4. Update inbox with OCR text and status
         jdbc.update(
                 "UPDATE documents_inbox " +
                 "SET ocr_text = :text, ocr_provider_used = :provider, page_count = :pages, " +
@@ -121,16 +102,13 @@ public class DocumentOcrWorkflow {
                 Map.of(
                         "id",       inboxId.toString(),
                         "text",     ocrText,
-                        "provider", ocrProvider + (visionFallbackUsed ? "+vision_fallback" : ""),
+                        "provider", ocrProvider,
                         "pages",    pageCount));
 
-        log.info("ocr.complete inbox_id={} provider={} pages={} qualityScore={}",
-                inboxId, ocrProvider, pageCount, qualityResult.qualityScore());
+        log.info("ocr.complete inbox_id={} provider={} pages={}", inboxId, ocrProvider, pageCount);
 
-        // 6. Return result
-        return new OcrWorkflowResult(
-                inboxId, ocrText, pageCount, ocrProvider,
-                qualityResult.qualityScore(), qualityResult.status().name(), visionFallbackUsed);
+        // 5. Return result
+        return new OcrWorkflowResult(inboxId, ocrText, pageCount, ocrProvider);
     }
 }
 
