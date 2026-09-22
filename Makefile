@@ -3,7 +3,7 @@
 DATABASE_URL ?= postgres://noticedesk:noticedesk@localhost:5432/noticedesk_test
 # Dev DB (the API connects here). For local Mac dev created via
 # `createdb -O noticedesk noticedesk_dev`.
-DEV_DATABASE_URL ?= postgres://noticedesk@localhost:5432/noticedesk_dev
+DEV_DATABASE_URL ?= postgres://noticedesk:noticedesk@localhost:5432/noticedesk_dev
 
 db-test:
 	DATABASE_URL=$(DATABASE_URL) bash packages/db/tests/run_all.sh
@@ -32,6 +32,114 @@ fmt:
 
 lint:
 	cd apps/api && ruff check .
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	
 	cd apps/web && npm run lint
 
 typecheck:

@@ -1,0 +1,23 @@
+{
+  "document_type": "DRC-01",
+  "law": "GST",
+  "client_name_on_document": "Patil Trading Company",
+  "pans_extracted": [{"value": "APBPP1234D", "location": "header"}],
+  "gstins_extracted": [
+    {"value": "27APBPP1234D1Z2", "location": "header", "state_code": "27"}
+  ],
+  "notice_number": "DRC01-MH-2026-00412",
+  "din_or_rfn": "DRC0122MH0009334",
+  "issue_date": "2026-02-15",
+  "receipt_date": "2026-02-18",
+  "due_date": "2026-05-09",
+  "hearing_date": null,
+  "financial_year": "2022-23",
+  "assessment_year": null,
+  "authority": "State Tax Officer, Range 7, Navi Mumbai",
+  "demand_amount": 1024800,
+  "issues": ["ITC denial due to vendor cancellation & GSTR-2A vs 3B variance"],
+  "documents_required": ["Vendor invoices", "Proof of payment", "GSTR-3B filings"],
+  "parse_confidence": 0.94,
+  "fields_needing_review": []
+}

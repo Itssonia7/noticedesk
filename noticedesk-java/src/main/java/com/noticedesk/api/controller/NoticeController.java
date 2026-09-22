@@ -126,7 +126,16 @@ public class NoticeController {
                 LIMIT :limit OFFSET :offset
                 """;
 
-        List<Map<String, Object>> items = jdbc.queryForList(listSql, params);
+        List<Map<String, Object>> rawItems = jdbc.queryForList(listSql, params);
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (Map<String, Object> r : rawItems) {
+            Map<String, Object> m = new HashMap<>(r);
+            if (m.get("raw_extracted_json") instanceof Map<?, ?> rawMap) {
+                m.put("issue", rawMap.get("issue"));
+                m.put("assigned_to", rawMap.get("assigned_to"));
+            }
+            items.add(m);
+        }
 
         return Map.of(
                 "notices", items,
@@ -244,9 +253,9 @@ public class NoticeController {
                      authority, din_or_rfn, notice_number, issue, assigned_to, ingest_channel,
                      lifecycle_status)
                 VALUES
-                    (:tid, :mid, :cid, :rid, :law, :dtype,
+                    (:tid::uuid, :mid, :cid, :rid, :law, :dtype,
                      :due, :issue_date, :hearing, :fy, :ay,
-                     :authority, :din, :num, :issue_text, :assigned, :channel,
+                     :authority, :din, :num, :issue_text, :assigned::uuid, :channel,
                      'issued')
                 RETURNING notice_id
                 """,
@@ -293,15 +302,18 @@ public class NoticeController {
 
         var rows = jdbc.queryForList(
                 """
-                SELECT n.notice_id, n.matter_id, n.law, n.document_type, n.due_date, n.issue_date,
-                       n.hearing_date, n.financial_year, n.assessment_year, n.authority,
-                       n.din_or_rfn, n.notice_number, n.issue, n.assigned_to, n.ingest_channel,
-                       n.lifecycle_status, n.raw_extracted_json, n.created_at, n.updated_at,
+                SELECT n.notice_id, n.matter_id, n.law, n.document_type, n.notice_number, n.din_or_rfn,
+                       n.issue_date, n.due_date, n.receipt_date, n.hearing_date,
+                       n.authority, n.financial_year, n.assessment_year,
+                       n.issues, n.documents_required, n.demand_amount,
+                       n.lifecycle_status, n.ingest_channel,
+                       n.pan_gstin_reconciliation_status, n.parse_confidence, n.verification_status,
+                       n.raw_extracted_json, n.manual_corrections_json, n.created_at, n.updated_at,
                        c.client_id, c.legal_name AS client_legal_name, c.pan AS client_pan,
-                       c.entity_type AS client_entity_type,
+                       c.entity_type AS client_entity_type, c.industry AS client_industry,
                        r.registration_id, r.registration_type, r.identifier_value AS registration_identifier,
                        r.state_code AS registration_state_code, r.state_name AS registration_state_name,
-                       r.jurisdiction_office
+                       r.jurisdiction_office AS registration_jurisdiction
                 FROM notices n
                 JOIN clients c ON c.client_id = n.client_id
                 JOIN client_registrations r ON r.registration_id = n.registration_id
@@ -313,7 +325,39 @@ public class NoticeController {
             throw new NotFoundException("Notice not found: " + id);
         }
 
-        return new HashMap<>(rows.get(0));
+        Map<String, Object> row = new HashMap<>(rows.get(0));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> raw = row.get("raw_extracted_json") instanceof Map
+                ? (Map<String, Object>) row.get("raw_extracted_json")
+                : Map.of();
+
+        Map<String, Object> noticeMap = new HashMap<>(row);
+        noticeMap.put("issue", raw.get("issue"));
+        noticeMap.put("assigned_to", raw.get("assigned_to"));
+
+        Map<String, Object> clientMap = Map.of(
+                "client_id", row.get("client_id").toString(),
+                "legal_name", row.get("client_legal_name"),
+                "pan", row.get("client_pan"),
+                "entity_type", row.get("client_entity_type") != null ? row.get("client_entity_type") : "",
+                "industry", row.get("client_industry") != null ? row.get("client_industry") : ""
+        );
+
+        Map<String, Object> regMap = Map.of(
+                "registration_id", row.get("registration_id").toString(),
+                "registration_type", row.get("registration_type"),
+                "identifier_value", row.get("registration_identifier"),
+                "state_code", row.get("registration_state_code") != null ? row.get("registration_state_code") : "",
+                "state_name", row.get("registration_state_name") != null ? row.get("registration_state_name") : "",
+                "jurisdiction_office", row.get("registration_jurisdiction") != null ? row.get("registration_jurisdiction") : ""
+        );
+
+        return Map.of(
+                "notice", noticeMap,
+                "client", clientMap,
+                "registration", regMap
+        );
     }
 
     // ---- PATCH /v1/notices/{id} ----
@@ -471,7 +515,7 @@ public class NoticeController {
         return jdbc.queryForObject(
                 """
                 INSERT INTO matters (tenant_id, client_id, registration_id)
-                VALUES (:tid, :cid, :rid)
+                VALUES (:tid::uuid, :cid, :rid)
                 RETURNING matter_id
                 """,
                 Map.of("tid", tenantId, "cid", clientId, "rid", registrationId),

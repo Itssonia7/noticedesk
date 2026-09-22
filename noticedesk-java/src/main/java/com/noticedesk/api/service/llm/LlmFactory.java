@@ -44,6 +44,17 @@ public class LlmFactory {
     }
 
     /**
+     * Returns a dedicated Claude Opus provider for Case 4 novel notice deep drafting.
+     */
+    public LlmProvider getOpusProvider() {
+        String apiKey = properties.getLlm().getAnthropic().getApiKey();
+        if (apiKey != null && !apiKey.isBlank()) {
+            return getOrCreate("anthropic", "claude-3-opus-20240229");
+        }
+        return getLlmForAgent("drafting");
+    }
+
+    /**
      * Returns the secondary LLM provider, or empty if none is configured or it
      * equals the primary.
      */
@@ -93,9 +104,14 @@ public class LlmFactory {
                 yield new OpenAiLlmProvider(cfg.getApiKey(), resolvedModel,
                         cfg.getTimeoutSeconds(), cfg.getBaseUrl());
             }
+            case "gemini" -> {
+                AppProperties.Llm.Gemini cfg = properties.getLlm().getGemini();
+                String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
+                yield new GeminiLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds());
+            }
             case "stub" -> new StubLlmProvider(properties.getLlm().getStubDefaultCanned());
             default -> throw new LlmException(
-                    "Unknown LLM provider: '" + name + "' (valid: anthropic, openai, stub)");
+                    "Unknown LLM provider: '" + name + "' (valid: anthropic, openai, gemini, stub)");
         };
     }
 }

@@ -2,7 +2,10 @@ package com.noticedesk.api.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.noticedesk.api.model.rag.ConfidenceAssessment;
+import com.noticedesk.api.model.rag.RagContextBundle;
 import com.noticedesk.api.service.llm.*;
+import com.noticedesk.api.service.rag.RagStoreService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -26,15 +29,16 @@ import java.util.function.Function;
 @Slf4j
 public class DraftingAgent {
 
-    private static final String PROMPT_VERSION              = "drafting_v3";
+    private static final String PROMPT_VERSION              = "drafting_v4";
     private static final int    NOTICE_OCR_EXCERPT_CHARS    = 20_000;
     private static final int    SUPPORTING_DOC_EXCERPT_CHARS = 5_000;
     private static final int    SUPPORTING_EVIDENCE_MAX_CHARS = 40_000;
     private static final int    DRAFTING_MAX_OUTPUT_TOKENS  = 16_000;
     private static final double DRAFTING_TEMPERATURE        = 0.1;
 
-    private final LlmFactory   llmFactory;
-    private final ObjectMapper objectMapper;
+    private final LlmFactory      llmFactory;
+    private final ObjectMapper    objectMapper;
+    private final RagStoreService ragStoreService;
 
     // ---- Public data types -----------------------------------------------
 
@@ -87,7 +91,9 @@ public class DraftingAgent {
             List<Map<String, Object>> documents,
             List<Map<String, Object>> crossRegistrationContext,
             List<SupportingDoc>       supportingDocuments,
-            List<PendingRequirement>  pendingRequirements) {}
+            List<PendingRequirement>  pendingRequirements,
+            RagContextBundle          ragContext,
+            ConfidenceAssessment      confidenceAssessment) {}
 
     // ---- Public API ------------------------------------------------------
 
@@ -246,6 +252,12 @@ public class DraftingAgent {
         Map<String, Object> rawExtractedJson = rawJsonObj instanceof Map<?, ?> m
                 ? (Map<String, Object>) m : Map.of();
 
+        String queryText = noticeMap.get("issue") != null ? noticeMap.get("issue").toString() :
+                (row.get("document_type") != null ? row.get("document_type").toString() : "GST Notice Allegation");
+
+        RagContextBundle ragBundle = ragStoreService != null ? ragStoreService.getRagContext(matterId, queryText, 5, 5) : null;
+        ConfidenceAssessment confidenceDec = ragStoreService != null ? ragStoreService.evaluateCascadeConfidence(ragBundle) : null;
+
         return new DraftingInput(
                 matterId, tone,
                 partnerInstructions != null ? partnerInstructions : "",
@@ -266,17 +278,52 @@ public class DraftingAgent {
                 new ArrayList<>(docRows),
                 new ArrayList<>(crossBlock),
                 supportingDocs,
-                pendingReqs);
+                pendingReqs,
+                ragBundle,
+                confidenceDec);
     }
 
     /**
      * Generate the draft via primary LLM with secondary fallback.
      */
     public GeneratedDraft generateDraft(DraftingInput input) {
+        return generateDraft(input, null);
+    }
+
+    /**
+     * Case 4: Generate draft using Anthropic Claude Opus for novel/unknown notices.
+     */
+    public GeneratedDraft generateOpusDraft(DraftingInput input) {
+        log.info("Case 4 triggered: Routing novel notice to Claude Opus for deep legal drafting.");
+        String[] prompts = loadPromptTemplate();
+        String system       = prompts[0];
+        String userTemplate = prompts[1];
+        String user         = renderUserPrompt(userTemplate, input) +
+                "\n\n[NOVEL NOTICE SPECIFICATION]: Generate a comprehensive, deep legal reply covering all statutory defenses and constitutional/administrative law grounds from first principles.";
+
+        LlmProvider opusProvider = llmFactory.getOpusProvider();
+        try {
+            return callProvider(opusProvider, system, user);
+        } catch (Exception e) {
+            log.warn("Opus provider call failed: {}, falling back to default primary provider", e.getMessage());
+            return generateDraft(input, null);
+        }
+    }
+
+    /**
+     * Generate draft with corpus reference draft legal context.
+     */
+    public GeneratedDraft generateDraft(DraftingInput input, String corpusReferenceDraft) {
         String[] prompts = loadPromptTemplate();
         String system       = prompts[0];
         String userTemplate = prompts[1];
         String user         = renderUserPrompt(userTemplate, input);
+
+        if (corpusReferenceDraft != null && !corpusReferenceDraft.isBlank()) {
+            user += "\n\n--- GST CORPUS GOLD-STANDARD REFERENCE DRAFT ---\n" +
+                    "Adopt the statutory grounds, section references, case precedents, and legal argument layout from this reference draft:\n\n" +
+                    corpusReferenceDraft + "\n----------------------------------------------------\n";
+        }
 
         LlmProvider primary = llmFactory.getLlmForAgent("drafting");
         try {
@@ -402,7 +449,7 @@ public class DraftingAgent {
                   "the parsed fields + structured JSON above for the para-wise reply)";
 
         String supportingEvidenceBlock = renderSupportingEvidence(
-                di.supportingDocuments(), di.pendingRequirements());
+                di.supportingDocuments(), di.pendingRequirements(), di.ragContext(), di.confidenceAssessment());
 
         String demandStr = di.notice().get("demand_amount") instanceof Number n
                 ? "₹" + String.format("%.2f", n.doubleValue()) : "—";
@@ -414,16 +461,39 @@ public class DraftingAgent {
             rawJsonStr = "{}";
         }
 
+        String legalLibraryBlock = (di.ragContext() != null && !di.ragContext().legalChunks().isEmpty())
+                ? di.ragContext().legalChunks().stream()
+                .map(c -> String.format("<chunk id=\"%s\" source=\"%s\" citation=\"%s\">\n%s\n</chunk>",
+                        c.chunkId(), c.actOrCircular() != null ? c.actOrCircular() : "legal_library",
+                        c.sectionOrPara() != null ? c.sectionOrPara() : "Statute / Precedent", c.content()))
+                .reduce((a, b) -> a + "\n" + b).orElse("(no legal library chunks attached)")
+                : "(no legal library chunks attached)";
+
+        String allegationsBlock = di.notice().get("issue") != null
+                ? "<allegation num=\"1\">" + di.notice().get("issue") + "</allegation>"
+                : "<allegation num=\"1\">General Allegation under Tax Notice</allegation>";
+
+        String sectionInvoked = di.notice().get("section") != null ? di.notice().get("section").toString()
+                : (di.law() != null ? di.law() : "Section 73/74 CGST Act, 2017");
+
+        String tradeName = di.clientLegalName();
+        String jurisdictionOffice = di.registrationStateName() != null ? di.registrationStateName() + " Tax Circle/Ward" : "Jurisdictional Office";
+
         return template
                 .replace("{client.legal_name}",            di.clientLegalName())
+                .replace("{client.trade_name}",            tradeName)
                 .replace("{client.pan}",                   di.clientPan())
                 .replace("{client.entity_type}",           nvl(di.clientEntityType()))
                 .replace("{registration_type}",            di.registrationType())
                 .replace("{registration.identifier_value}", di.registrationIdentifier())
+                .replace("{registration.state_name}",      nvl(di.registrationStateName()))
+                .replace("{registration.jurisdiction_office}", jurisdictionOffice)
                 .replace("{state_qualifier}",              stateQualifier)
                 .replace("{law}",                          di.law())
                 .replace("{fy_or_ay}",                     fyOrAy)
+                .replace("{notice.tax_period}",            fyOrAy)
                 .replace("{notice.document_type}",         nvl(str(di.notice().get("document_type"))))
+                .replace("{notice.section}",               sectionInvoked)
                 .replace("{notice.din_or_rfn}",            nvl(str(di.notice().get("din_or_rfn"))))
                 .replace("{notice.notice_number}",         nvl(str(di.notice().get("notice_number"))))
                 .replace("{notice.issue_date}",            nvl(str(di.notice().get("issue_date"))))
@@ -431,29 +501,41 @@ public class DraftingAgent {
                 .replace("{notice.authority}",             nvl(str(di.notice().get("authority"))))
                 .replace("{notice.issue}",                 nvl(str(di.notice().get("issue"))))
                 .replace("{notice.demand_amount}",         demandStr)
+                .replace("{notice.allegations_block}",     allegationsBlock)
                 .replace("{notice_ocr_excerpt}",           ocrBlock)
                 .replace("{supporting_evidence_block}",    supportingEvidenceBlock)
+                .replace("{legal_library_block}",          legalLibraryBlock)
                 .replace("{raw_extracted_json}",           rawJsonStr)
                 .replace("{prior_matters_block}",          priorBlock)
                 .replace("{sibling_notices_block}",        siblingBlock)
                 .replace("{documents_block}",              docsBlock)
                 .replace("{cross_registration_block}",     crossBlock)
                 .replace("{tone}",                         di.tone())
+                .replace("{length}",                       "full")
                 .replace("{partner_instructions}",
                         (di.partnerInstructions() != null && !di.partnerInstructions().isBlank())
-                                ? di.partnerInstructions() : "(none)");
+                                ? di.partnerInstructions().strip() : "(none)");
     }
 
     private String renderSupportingEvidence(
-            List<SupportingDoc> docs, List<PendingRequirement> pending) {
+            List<SupportingDoc> docs, List<PendingRequirement> pending,
+            RagContextBundle ragContext, ConfidenceAssessment confidenceAssessment) {
 
-        if (docs.isEmpty() && pending.isEmpty()) {
+        StringBuilder sb = new StringBuilder();
+
+        if (confidenceAssessment != null && confidenceAssessment.isHighConfidence() && confidenceAssessment.guidedTemplate() != null) {
+            sb.append(confidenceAssessment.guidedTemplate()).append("\n\n");
+        }
+
+        if (ragContext != null && (!ragContext.legalChunks().isEmpty() || !ragContext.evidenceChunks().isEmpty())) {
+            sb.append(ragContext.formatForPrompt()).append("\n\n");
+        }
+
+        if (docs.isEmpty() && pending.isEmpty() && sb.length() == 0) {
             return "(no triage checklist for this notice — either triage hasn't been run yet " +
                    "or the matter has no document requirements. " +
                    "Fall back to the DOCUMENTS ATTACHED block below.)";
         }
-
-        StringBuilder sb = new StringBuilder();
 
         if (!docs.isEmpty()) {
             sb.append("ATTACHED (use these as primary evidence):");

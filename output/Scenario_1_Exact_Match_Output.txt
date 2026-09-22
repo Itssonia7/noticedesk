@@ -1,0 +1,51 @@
+=================================================================
+SCENARIO 1: EXACT MATCH (FAST-TRACK)
+=================================================================
+Prompt Version: fast_track_corpus_v1
+Provider: fast-track
+
+SECTION 1: Addressee and Reference Block
+<p><b>BEFORE THE PROPER OFFICER / ASSISTANT COMMISSIONER</b><br>Goods and Services Tax Department, Proper Officer, Ward 10, Maharashtra<br><b>GSTIN:</b> 27AAACA1234A1Z5 | <b>PAN:</b> AAACA1234A<br><b>Trade / Legal Name:</b> Acme Traders Pvt Ltd<br><b>Notice Ref No.:</b> SCN/2026/001 | <b>DIN/RFN:</b> DIN-2026-99 | <b>Dated:</b> 14 September 2026</p>
+
+SECTION 2: Subject
+<p>Reply on behalf of M/s Acme Traders Pvt Ltd to Show Cause Notice / Intimation bearing Ref No. SCN/2026/001 dated 14 September 2026 issued under Section 73/74 of the CGST/SGST Act, 2017 seeking complete dropping of proposed proceedings and demand.</p>
+
+SECTION 3: Synopsis
+<p>The Taxpayer M/s Acme Traders Pvt Ltd has been served with the impugned notice proposing tax demand of as specified in SCN for FY 2023-24. The notice is fundamentally defective as it relies on summary format allegations without supplying supporting evidence, invokes extended period without establishing willful suppression, and denies statutory ITC in violation of settled law. All tax obligations have been faithfully discharged within statutory due dates. In view of binding Supreme Court and High Court precedents, the proceedings are liable to be dropped in full.</p>
+
+SECTION 4: Statement of Facts
+<p>1. The Taxpayer M/s Acme Traders Pvt Ltd is a duly registered entity under GST Law engaged in lawful business operations in Maharashtra.<br>2. For Financial Year 2023-24, the Taxpayer regularly filed monthly returns in Form GSTR-1 and Form GSTR-3B and paid all self-assessed tax liabilities.<br>3. On 14 September 2026, the Proper Officer issued communication Ref No. SCN/2026/001 (DIN: DIN-2026-99) alleging statutory contraventions.<br>4. The Taxpayer submits this formal reply to demonstrate that no short payment, tax evasion, or suppression has occurred.</p>
+
+SECTION 5: Preliminary Objections — Jurisdiction
+<p>1. <b>Lack of Competent Jurisdiction:</b> The impugned notice has been issued without statutory authority under Section 73/74 of the CGST Act, 2017.<br>2. <b>Monetary Limit Defect:</b> The officer issuing the notice exceeds the prescribed monetary threshold limits designated by CBIC Circulars for Officer grade hierarchy.</p>
+
+SECTION 6: Preliminary Objections — Limitation and Procedure
+<p>1. <b>Barred by Limitation:</b> The proposed demand for FY 2023-24 is barred by limitation under Section 73(10) / 74(10) of the CGST Act.<br>2. <b>Absence of Form GST DRC-01A:</b> Intimation in Form GST DRC-01A was not issued prior to the SCN, violating mandatory pre-SCN consultation requirements under Rule 142(1A).<br>3. <b>Want of Valid DIN:</b> Absence of verifiable Document Identification Number (DIN) invalidates the notice per CBIC Circular No. 122/41/2019-GST.</p>
+
+SECTION 7: Para-wise Reply
+<div class="template-body">To,</p><p>The Proper Officer,</p><p>Goods and Services Tax Department, Bikaner, Rajasthan</p><p>GSTIN: 27AAACA1234A1Z5</p><p>Trade Name: Acme Traders Pvt Ltd</p><p>Reference (SCN, Form DRC-01) No.: SCN/2026/001  dated 14 September 2026</p><p>Subject: Reply to the Show Cause Notice under Section 73/74 in Form DRC-01, which is a bare format notice without the provision invoked, the allegation, the rule or supporting documents.</p><p> </p><p>Core levers: (1) a Summary of SCN in Form DRC-01 under Rule 142(1) cannot substitute a proper show cause notice that states the contravention, the provision and the basis; (2) a format notice without striking irrelevant portions and without specific allegations denies a meaningful opportunity to defend; (3) the summary/order must be authenticated and signed by the proper officer under Rule 26(3).</p><p>Authority: NKAS Services (Jharkhand HC, 06.10.2021, paras 14, 17) and the Gauhati HC line in Construction Catalysers (26.09.2024) followed in later Gauhati cases. Anticipate an alternative-remedy objection outside Gauhati/Jharkhand.</p><p>Synopsis</p><p>The notice is a bare format, reproducing the language of Sections 73/74 without stating which provision is invoked, what the contravention is, the rule relied upon, or any supporting material. Such a notice is not a proper show cause notice and cannot found an adjudication. A summary of show cause notice in Form DRC-01 cannot substitute the proper notice the law requires.</p><p>Submissions</p><p>A summary in DRC-01 is not a proper show cause notice. As held by the Jharkhand High Court in M/s NKAS Services Pvt. Ltd. v. State of Jharkhand (06.10.2021), a summary of show cause notice issued in Form DRC-01 under Rule 142(1) cannot substitute the requirement of a proper show cause notice; a notice issued in a format without even striking out the irrelevant portions, and without stating the contraventions, is invalid (paras 14 and 17). [VERIFY]</p><p>The notice fails to disclose the case to be met. A show cause notice must state the specific allegation, the provision invoked and the basis, so that the noticee can meet the case. The impugned notice discloses none of these and thereby denies the noticee a meaningful opportunity to defend, vitiating the proceedings.</p><p>Want of authentication. The proper officer must issue and authenticate the notice/summary and any order by signature (including digital signature) as required by Rule 26(3). An unauthenticated format notice has no legal efficacy. Reliance is placed on the Gauhati High Court in Construction Catalysers Pvt. Ltd. v. State of Assam (WP(C) 3912/2024, 26.09.2024, operative directions at paragraph 29). [VERIFY]</p><p>Prayer</p><p>It is respectfully prayed that the Show Cause Notice be dropped as not being a proper notice under Section 73/74; and that no adjudication be founded upon it.</p><p>Yours faithfully,</p><p>For Acme Traders Pvt Ltd</p><p>27AAACA1234A1Z5___________</p><p>Authorised Signatory / Director</p><p>Place: Maharashtra</p><p>Date: SCN/2026/001</div>
+
+SECTION 8: Ground 1
+<p><b>Absence of Willful Suppression or Intent to Evade Tax:</b> Extended period under Section 74 cannot be invoked on routine return mismatches. As settled by the Hon'ble Supreme Court in <i>Pushpam Pharmaceuticals Co. v. CCE</i> (1995 Supp (3) SCC 462) and <i>Cosmic Dye Chemical v. CCE</i> (1995 (75) ELT 721), 'suppression' requires deliberate withholding of facts with intent to evade tax, which is completely absent here.</p>
+
+SECTION 9: Ground 2
+<p><b>ITC Cannot Be Denied to Purchasing Dealer for Supplier Default:</b> It is established by the Hon'ble Calcutta High Court in <i>Suncraft Energy Pvt Ltd v. ACST</i> (2023) and Madras High Court in <i>D.Y. Beathel Enterprises v. STO</i> (2021) that Input Tax Credit cannot be denied to the buyer without first initiating recovery proceedings against the selling supplier who collected tax.</p>
+
+SECTION 10: Ground 3
+<p><b>Bare Summary Notice Violates Principles of Natural Justice:</b> Issuing a format DRC-01 notice without stating specific contraventions or annexing supporting documents denies a fair opportunity of defense, rendering the notice void ab initio as held in <i>M/s NKAS Services Pvt. Ltd. v. State of Jharkhand</i> (2021).</p>
+
+SECTION 11: Without Prejudice — Alternative Submissions
+<p>Without prejudice to primary grounds, even if any tax liability is sustained, no penalty can be levied under Section 73(9) / 74(9) as the Taxpayer acted under bona fide interpretation of statutory rules (<i>Continental Foundation v. CCE</i>). Further, interest under Section 50 is payable strictly on net cash liability paid via Electronic Cash Ledger.</p>
+
+SECTION 12: Quantum, Interest and Computation
+<p>1. The demand quantum of as specified in SCN has been computed without providing invoice-level reconciliation details.<br>2. Interest under Section 50 must be restricted to net cash liability as per proviso to Section 50(1).<br>3. Penalty under Section 73/74 is unstatutory and liable to be waived in full.</p>
+
+SECTION 13: Prayer
+<p>In light of the above submissions, the Taxpayer respectfully prays that:<br>1. The impugned Show Cause Notice Ref No. SCN/2026/001 be dropped in its entirety and proceedings closed.<br>2. No penalty or interest be levied against the Taxpayer.<br>3. An opportunity of <b>Personal Hearing</b> under Section 75(4) of the CGST Act be granted before passing any adverse order.</p>
+
+SECTION 14: Annexures
+<p>1. Copy of GST Registration Certificate (Form GST REG-06)<br>2. Copies of GSTR-1 and GSTR-3B returns filed for FY 2023-24<br>3. GSTR-2A / 2B Reconciliation Statement & Tax Invoices<br>4. Proof of Tax Payments / Form GST DRC-03 (if applicable)</p>
+
+SECTION 15: Declaration and Signature Block
+<p>I, Authorized Signatory for M/s Acme Traders Pvt Ltd, do hereby verify and declare that the contents of Sections 1 to 14 above are true and correct to the best of my knowledge, information, and legal advice.<br><br><b>For M/s Acme Traders Pvt Ltd</b><br><br>____________________________________<br>Authorized Signatory / Director<br>Place: Maharashtra<br>Date: 14 September 2026</p>
+

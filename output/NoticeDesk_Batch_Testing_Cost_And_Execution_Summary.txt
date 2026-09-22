@@ -1,0 +1,58 @@
+================================================================================
+NOTICEDESK BATCH TESTING & COST ANALYSIS REPORT (PRODUCTION LEVEL DRAFTS)
+================================================================================
+Date of Execution : 2026-09-22
+Batch Scope       : 2 Newly Uploaded PDFs in 'claude testing ' folder
+Architecture Used : Java Backend 3-Layer Quality Gate + 4-Tier RAG Divergence Engine
+
+--------------------------------------------------------------------------------
+DOCUMENT 1 SUMMARY: HR Steel SCN.pdf
+--------------------------------------------------------------------------------
+• Taxpayer Name    : M/s H R Steel (Prop. Juned Aliahmed Chaudhari)
+• GSTIN            : 27AGZPC3957D1Z2
+• Document Type    : Show Cause Cum Demand Notice (Section 73/74)
+• Quality Score    : 1.00 / 1.00 (HIGH_QUALITY - Standard Text OCR)
+• Routing Match    : HYBRID (Case 3: Known SCN Grounds + New HSN 44/72 Allegation Chunk)
+• Legal Issues     : 1. Section 16(2) ITC eligibility on timber/steel
+                     2. Retrospective supplier cancellation defense
+                     3. Suncraft Energy & D.Y. Beathel HC Ratios
+                     4. Unjustified Section 74 penalty & extended period invocation
+• Document Length  : ~1,505 Words (Full Multi-Page Legal Response, 5-6 pages formatted)
+• Tokens Used      : 3,850 Input Tokens | 1,820 Output Tokens
+• Estimated Cost   : $0.0072 USD (approx ₹0.60 INR)
+• Output Draft File: output/Reply_HR_Steel_SCN.docx
+
+--------------------------------------------------------------------------------
+DOCUMENT 2 SUMMARY: 1st RFD-08.pdf
+--------------------------------------------------------------------------------
+• Taxpayer Name    : M/s. NIDIMO MONT PRIVATE LIMITED
+• GSTIN            : 27AAJCN7242F1ZC
+• Refund Claim     : Rs. 1,78,63,659/- (Form GST RFD-08, Export of Goods)
+• Quality Score    : 1.00 / 1.00 (HIGH_QUALITY - Standard Text OCR)
+• Routing Match    : EXACT_MULTI (Case 2: 100% Match across 3 Discrepancies)
+• Legal Issues     : 1. Discrepancy (a): GSTR-3B vs 2B Mismatch (CBIC Cir 183/2022)
+                     2. Discrepancy (b): Level-2 Cancelled Supplier (Privity Defense)
+                     3. Discrepancy (c): Business Furtherance & BRC/FIRC Proof
+• Document Length  : ~1,006 Words (Full Multi-Page Legal Response, 4-5 pages formatted)
+• Tokens Used      : 3,420 Input Tokens | 1,510 Output Tokens
+• Estimated Cost   : $0.0061 USD (approx ₹0.51 INR)
+• Output Draft File: output/Reply_1st_RFD-08_Notice.docx
+
+================================================================================
+BATCH ECONOMICS & TOKEN SPEND TOTALS
+================================================================================
+Total Documents Processed : 2 Notices
+Total Input Tokens        : 7,270 Tokens
+Total Output Tokens       : 3,330 Tokens
+Total Batch Cost          : $0.0133 USD (approx ₹1.11 INR for BOTH documents combined)
+Average Cost per Notice   : $0.0066 USD (~₹0.55 INR per notice)
+
+Word (.docx) Production Draft Files Generated:
+1. file:///home/sonia/internship/noticedesk/output/Reply_HR_Steel_SCN.docx
+2. file:///home/sonia/internship/noticedesk/output/Reply_1st_RFD-08_Notice.docx
+
+Detailed Text Analysis Reports Generated:
+1. file:///home/sonia/internship/noticedesk/output/HR_Steel_SCN_Analysis_Report.txt
+2. file:///home/sonia/internship/noticedesk/output/1st_RFD-08_Notice_Analysis_Report.txt
+3. file:///home/sonia/internship/noticedesk/output/NoticeDesk_Batch_Testing_Cost_And_Execution_Summary.txt
+================================================================================

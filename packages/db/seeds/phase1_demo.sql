@@ -6,11 +6,11 @@
 -- set inside the file so RLS doesn't block the inserts.
 
 BEGIN;
+SELECT set_config('app.current_tenant', '11111111-1111-1111-1111-111111111111', true);
 
 -- ---- Tenant + user --------------------------------------------------------
 INSERT INTO tenants (tenant_id, legal_name, slug) VALUES ('11111111-1111-1111-1111-111111111111', 'Mehta & Associates', 'mehta-associates') ON CONFLICT (tenant_id) DO UPDATE SET legal_name = EXCLUDED.legal_name;
 INSERT INTO users (user_id, tenant_id, name, role, email) VALUES ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111', 'Rohan Mehta', 'partner', 'rohan@mehta-associates.in') ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role;
-SELECT set_config('app.current_tenant', '11111111-1111-1111-1111-111111111111', true);
 
 -- ---- Drop Cinnamon if it survives from an older seed run -------------------
 -- Cascade-deletes notices, matters, and registrations for that client. Safe

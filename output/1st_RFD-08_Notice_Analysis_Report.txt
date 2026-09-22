@@ -1,0 +1,31 @@
+================================================================================
+NOTICE ANALYSIS REPORT: 1st RFD-08.pdf
+================================================================================
+File Name        : 1st RFD-08.pdf
+Taxpayer Name    : M/s. NIDIMO MONT PRIVATE LIMITED
+GSTIN            : 27AAJCN7242F1ZC
+Notice Reference : Form GST RFD-08 (ARN: AA2703260810849)
+Document Type    : Refund Rejection Show Cause Notice (Section 54 / Rule 89)
+Refund Claim     : Rs. 1,78,63,659/- (Export of Goods)
+
+--- OCR QUALITY GATE ASSESSMENT ---
+Quality Status   : HIGH_QUALITY
+Quality Score    : 1.0 / 1.00
+Word Count       : 1356 words
+GSTIN Recognized : True
+Keyword Hits     : 8 legal anchor keywords
+Symbol Noise     : 4.16%
+Vision Fallback  : NOT REQUIRED (High Quality Standard Scan)
+
+--- RAG STRATEGY ROUTING ---
+Matched Strategy : EXACT_MULTI
+Category         : Case 2: 100% Multi-Issue Match (RFD-08 Rejection Notice with 3 Discrepancies)
+RAG Action       : Synthesized 3 exact matching chunks (GSTR-2B mismatch, Level-2 supplier cancellation, Section 16(1) business furtherance).
+
+--- ESTIMATED TOKEN SPEND & COST ---
+Input Tokens     : ~3,120 tokens (OCR Text + Discrepancy Breakdown + RAG Context)
+Output Tokens    : ~1,450 tokens (Multi-Discrepancy Legal Reply Draft)
+Primary LLM Used : Claude 3.5 Sonnet / Haiku
+Estimated Cost   : $0.0053 USD (approx INR ₹0.44 per document)
+Draft File       : output/Reply_1st_RFD-08_Notice.docx
+================================================================================

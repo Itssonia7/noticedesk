@@ -114,13 +114,25 @@ public class ClientController {
 
         List<Map<String, Object>> registrations = jdbc.queryForList(
                 """
-                SELECT registration_id, registration_type, identifier_value, state_code,
-                       state_name, jurisdiction_office, registration_status, created_at
-                FROM client_registrations
-                WHERE client_id = :cid
-                ORDER BY registration_type, state_code
+                SELECT r.registration_id, r.registration_type, r.identifier_value, r.state_code,
+                       r.state_name, r.jurisdiction_office, r.registration_status, r.created_at,
+                       COALESCE(n.active_notice_count, 0) AS active_notice_count,
+                       n.earliest_open_due_date,
+                       'manual' AS sync_method,
+                       NULL AS last_synced_at
+                FROM client_registrations r
+                LEFT JOIN (
+                    SELECT registration_id,
+                           COUNT(*)::int AS active_notice_count,
+                           MIN(due_date) FILTER (WHERE due_date IS NOT NULL) AS earliest_open_due_date
+                    FROM notices
+                    WHERE lifecycle_status = ANY(:open_states)
+                    GROUP BY registration_id
+                ) n ON n.registration_id = r.registration_id
+                WHERE r.client_id = :cid
+                ORDER BY r.registration_type, r.state_code
                 """,
-                Map.of("cid", id));
+                Map.of("cid", id, "open_states", OPEN_STATES));
 
         client.put("registrations", registrations);
 
