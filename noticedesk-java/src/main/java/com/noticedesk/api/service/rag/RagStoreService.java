@@ -299,6 +299,20 @@ public class RagStoreService {
     }
 
     /**
+     * Post-Drafting Auto-Caching for Case 3: Partial Match (Known + New Issue).
+     * Caches the newly discovered legal issue chunk into RAG legal_chunks for future cases.
+     */
+    public LegalChunk saveNewChunk(String noticeIssue, String chunkContent) {
+        log.info("Auto-caching newly discovered issue chunk into RAG legal_chunks: {}", noticeIssue);
+        return indexLegalChunk(
+                "PARTIAL_NEW_CHUNK",
+                "Extracted Chunk (" + (noticeIssue != null ? noticeIssue : "New Legal Ground") + ")",
+                "Legal Ground Precedent - " + noticeIssue,
+                chunkContent
+        );
+    }
+
+    /**
      * Post-Drafting Auto-Caching for Scenario 2: Novel cases (< 70% score).
      * Caches the newly generated draft into RAG legal_chunks for future cases.
      */

@@ -33,9 +33,10 @@ public class GstCorpusMatcherService {
     private final ObjectMapper objectMapper;
 
     public enum Strategy {
-        FAST_TRACK,
-        HYBRID,
-        NOVEL_LLM
+        FAST_TRACK,   // Case 1: 100% Exact Single Issue Match -> Direct Readymade Template Fill ($0 token cost)
+        EXACT_MULTI,  // Case 2: 100% Exact Multi-Issue Match -> Synthesize Multi-Chunks via Haiku/Gemini
+        HYBRID,       // Case 3: Partial Match (Known + New Issue) -> Synthesize + Auto-Cache New Issue to RAG
+        NOVEL_LLM     // Case 4: 100% Novel Notice -> Deep Drafting via Claude Opus + Auto-Cache Solution to RAG
     }
 
     @Getter
@@ -179,12 +180,16 @@ public class GstCorpusMatcherService {
     }
 
     private Strategy determineStrategy(CorpusItem item, String docType, String ocr, double score) {
-        if (score >= 0.90) {
-            return Strategy.FAST_TRACK; // Scenario 1: Exact match -> Fast-Track Template Fill
-        } else if (score >= 0.70) {
-            return Strategy.HYBRID;     // Scenario 3: Hybrid multi-issue -> RAG Context + Claude Synthesizer
+        boolean isMultiIssue = ocr.contains("mismatch") && ocr.contains("itr") && (ocr.contains("gstr") || ocr.contains("penalty"));
+        
+        if (score >= 0.90 && !isMultiIssue) {
+            return Strategy.FAST_TRACK;  // Case 1: 100% Exact Single Issue Match -> Direct Readymade Template Fill ($0 token cost)
+        } else if (score >= 0.85) {
+            return Strategy.EXACT_MULTI; // Case 2: 100% Exact Multi-Issue Match -> Synthesize Multi-Chunks via Haiku/Gemini
+        } else if (score >= 0.65) {
+            return Strategy.HYBRID;      // Case 3: Partial Match (Known + New Issue) -> Synthesize + Auto-Cache New Issue to RAG
         } else {
-            return Strategy.NOVEL_LLM;  // Scenario 2: Novel notice (<70%) -> Fresh LLM + Auto-Cache
+            return Strategy.NOVEL_LLM;   // Case 4: 100% Novel Notice -> Deep Drafting via Claude Opus + Auto-Cache Solution to RAG
         }
     }
 }

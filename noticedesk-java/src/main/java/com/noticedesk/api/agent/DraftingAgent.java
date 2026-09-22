@@ -291,6 +291,26 @@ public class DraftingAgent {
     }
 
     /**
+     * Case 4: Generate draft using Anthropic Claude Opus for novel/unknown notices.
+     */
+    public GeneratedDraft generateOpusDraft(DraftingInput input) {
+        log.info("Case 4 triggered: Routing novel notice to Claude Opus for deep legal drafting.");
+        String[] prompts = loadPromptTemplate();
+        String system       = prompts[0];
+        String userTemplate = prompts[1];
+        String user         = renderUserPrompt(userTemplate, input) +
+                "\n\n[NOVEL NOTICE SPECIFICATION]: Generate a comprehensive, deep legal reply covering all statutory defenses and constitutional/administrative law grounds from first principles.";
+
+        LlmProvider opusProvider = llmFactory.getOpusProvider();
+        try {
+            return callProvider(opusProvider, system, user);
+        } catch (Exception e) {
+            log.warn("Opus provider call failed: {}, falling back to default primary provider", e.getMessage());
+            return generateDraft(input, null);
+        }
+    }
+
+    /**
      * Generate draft with corpus reference draft legal context.
      */
     public GeneratedDraft generateDraft(DraftingInput input, String corpusReferenceDraft) {

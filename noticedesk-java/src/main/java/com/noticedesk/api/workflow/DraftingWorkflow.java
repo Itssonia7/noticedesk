@@ -81,7 +81,7 @@ public class DraftingWorkflow {
                 job.partnerInstructions(),
                 job.includeCrossRegistration());
 
-        // 3. Automated GST Corpus Matching & 3-Scenario Dispatching
+        // 3. Automated GST Corpus Matching & 4-Tier Divergence Dispatching
         Optional<GstCorpusMatcherService.CorpusMatchResult> matchOpt =
                 corpusMatcherService.matchNotice(input.notice(), input.noticeOcrExcerpt());
 
@@ -92,23 +92,29 @@ public class DraftingWorkflow {
                     match.serial(), match.noticeKind(), match.strategy(), match.matchScore());
 
             if (match.strategy() == GstCorpusMatcherService.Strategy.FAST_TRACK) {
-                // Scenario 1: Exact Match (Score >= 90%) -> Fast-Track Template Filler
-                log.info("Scenario 1 triggered: Fast-Track Template Fill for exact match serial={}", match.serial());
+                // Case 1: 100% Single Exact Match -> Fast-Track Template Filler ($0 drafting token cost)
+                log.info("Case 1 triggered: Fast-Track Readymade Template Fill for serial={} (Zero Token Cost)", match.serial());
                 generated = templateFillerService.fillTemplate(input, match.draftPath(), match.noticeKind());
-            } else if (match.strategy() == GstCorpusMatcherService.Strategy.HYBRID) {
-                // Scenario 3: Hybrid Multi-Issue Match (70% <= Score < 90%) -> RAG Context + Claude Synthesizer
-                log.info("Scenario 3 triggered: Hybrid RAG Multi-Issue Drafting for serial={}", match.serial());
+            } else if (match.strategy() == GstCorpusMatcherService.Strategy.EXACT_MULTI) {
+                // Case 2: 100% Exact Multi-Issue Match -> Multi-Chunk Synthesis via Haiku/Gemini
+                log.info("Case 2 triggered: 100% Multi-Issue Synthesis for serial={}", match.serial());
                 String referenceText = templateFillerService.extractAndPopulateTemplate(match.draftPath(), input);
                 generated = draftingAgent.generateDraft(input, referenceText);
+            } else if (match.strategy() == GstCorpusMatcherService.Strategy.HYBRID) {
+                // Case 3: Partial Match (Known + New Issue) -> Synthesize + Auto-Cache New Issue Chunk to RAG
+                log.info("Case 3 triggered: Partial Match (Known + New Issue). Drafting and caching new issue to RAG for serial={}", match.serial());
+                String referenceText = templateFillerService.extractAndPopulateTemplate(match.draftPath(), input);
+                generated = draftingAgent.generateDraft(input, referenceText);
+                savePartialMatchNewChunk(input, generated);
             } else {
-                // Scenario 2: Novel Notice (Score < 70%) -> Fresh Claude Generation + Post-Draft Auto-Cache
-                log.info("Scenario 2 triggered: Novel Notice Generation (< 70% score). Drafting from scratch via Claude.");
-                generated = draftingAgent.generateDraft(input);
+                // Case 4: 100% Novel Notice -> Deep Drafting via Claude Opus + Auto-Cache Solution to RAG
+                log.info("Case 4 triggered: 100% Novel Notice. Drafting via Claude Opus & auto-caching solution into RAG.");
+                generated = draftingAgent.generateOpusDraft(input);
                 cacheNovelDraft(input, generated);
             }
         } else {
-            log.info("No corpus match. Drafting from scratch via Claude.");
-            generated = draftingAgent.generateDraft(input);
+            log.info("No corpus match (Case 4 Fallback). Drafting via Claude Opus & caching.");
+            generated = draftingAgent.generateOpusDraft(input);
             cacheNovelDraft(input, generated);
         }
 
@@ -272,6 +278,18 @@ public class DraftingWorkflow {
             ragStoreService.cacheNovelDraft(issue, title, fullContent);
         } catch (Exception e) {
             log.warn("Failed to auto-cache novel draft into RAG: {}", e.getMessage());
+        }
+    }
+
+    private void savePartialMatchNewChunk(DraftingInput input, GeneratedDraft generated) {
+        try {
+            String issue = input.notice().get("issue") != null ? input.notice().get("issue").toString() : "Partial Match New Ground";
+            String newChunkContent = generated.sections().stream()
+                    .map(s -> s.title() + ": " + s.bodyHtml())
+                    .reduce("", (a, b) -> a + "\n" + b);
+            ragStoreService.saveNewChunk(issue, newChunkContent);
+        } catch (Exception e) {
+            log.warn("Failed to save partial match new chunk into RAG: {}", e.getMessage());
         }
     }
 

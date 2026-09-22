@@ -44,6 +44,17 @@ public class LlmFactory {
     }
 
     /**
+     * Returns a dedicated Claude Opus provider for Case 4 novel notice deep drafting.
+     */
+    public LlmProvider getOpusProvider() {
+        String apiKey = properties.getLlm().getAnthropic().getApiKey();
+        if (apiKey != null && !apiKey.isBlank()) {
+            return getOrCreate("anthropic", "claude-3-opus-20240229");
+        }
+        return getLlmForAgent("drafting");
+    }
+
+    /**
      * Returns the secondary LLM provider, or empty if none is configured or it
      * equals the primary.
      */
