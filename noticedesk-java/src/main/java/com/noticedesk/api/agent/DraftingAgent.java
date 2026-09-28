@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import com.noticedesk.api.service.llm.ApiUsageLogService;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.Function;
@@ -30,15 +31,16 @@ import java.util.function.Function;
 public class DraftingAgent {
 
     private static final String PROMPT_VERSION              = "drafting_v4";
-    private static final int    NOTICE_OCR_EXCERPT_CHARS    = 20_000;
+    private static final int    NOTICE_OCR_EXCERPT_CHARS    = 10_000;
     private static final int    SUPPORTING_DOC_EXCERPT_CHARS = 5_000;
-    private static final int    SUPPORTING_EVIDENCE_MAX_CHARS = 40_000;
-    private static final int    DRAFTING_MAX_OUTPUT_TOKENS  = 16_000;
+    private static final int    SUPPORTING_EVIDENCE_MAX_CHARS = 10_000;
+    private static final int    DRAFTING_MAX_OUTPUT_TOKENS  = 12_000;
     private static final double DRAFTING_TEMPERATURE        = 0.1;
 
     private final LlmFactory      llmFactory;
     private final ObjectMapper    objectMapper;
     private final RagStoreService ragStoreService;
+    private final ApiUsageLogService apiUsageLogService;
 
     // ---- Public data types -----------------------------------------------
 
@@ -255,7 +257,7 @@ public class DraftingAgent {
         String queryText = noticeMap.get("issue") != null ? noticeMap.get("issue").toString() :
                 (row.get("document_type") != null ? row.get("document_type").toString() : "GST Notice Allegation");
 
-        RagContextBundle ragBundle = ragStoreService != null ? ragStoreService.getRagContext(matterId, queryText, 5, 5) : null;
+        RagContextBundle ragBundle = ragStoreService != null ? ragStoreService.getRagContext(matterId, queryText, 1, 1) : null;
         ConfidenceAssessment confidenceDec = ragStoreService != null ? ragStoreService.evaluateCascadeConfidence(ragBundle) : null;
 
         return new DraftingInput(
@@ -295,17 +297,33 @@ public class DraftingAgent {
      */
     public GeneratedDraft generateOpusDraft(DraftingInput input) {
         log.info("Case 4 triggered: Routing novel notice to Claude Opus for deep legal drafting.");
+        String system = """
+                You are a Senior GST Advocate in India with 15+ years of litigation experience.
+                Your job is to draft a comprehensive, formal, and legally robust written reply to the GST Notice.
+
+                CRITICAL OUTPUT CONTRACT:
+                Return ONLY a valid JSON object matching this schema. Do not output anything outside the JSON object.
+                {
+                  "sections": [
+                    { "num": 1, "title": "Section Title", "body_html": "<p>Legal argument text...</p>" }
+                  ],
+                  "internal_partner_note": "Brief review note for partner",
+                  "client_summary": "Layman summary for client"
+                }
+
+                Draft 5-7 core legal sections (Header/Addressee, Statement of Facts, Statutory Rebuttal Grounds A-C under Sec 73/74/54, CBIC Circular compliance, and Prayer for Relief). Keep body_html concise (1-2 paragraphs per section) so the JSON is completely formed.
+                """;
+
         String[] prompts = loadPromptTemplate();
-        String system       = prompts[0];
         String userTemplate = prompts[1];
-        String user         = renderUserPrompt(userTemplate, input) +
-                "\n\n[NOVEL NOTICE SPECIFICATION]: Generate a comprehensive, deep legal reply covering all statutory defenses and constitutional/administrative law grounds from first principles.";
+        String user = renderUserPrompt(userTemplate, input) +
+                "\n\n[NOVEL NOTICE SPECIFICATION]: Generate a formal 5-7 section legal reply. Output ONLY valid JSON.";
 
         LlmProvider opusProvider = llmFactory.getOpusProvider();
         try {
             return callProvider(opusProvider, system, user);
         } catch (Exception e) {
-            log.warn("Opus provider call failed: {}, falling back to default primary provider", e.getMessage());
+            log.warn("Opus provider call failed: {}, attempting fallback parsing or retry", e.getMessage());
             return generateDraft(input, null);
         }
     }
@@ -317,7 +335,9 @@ public class DraftingAgent {
         String[] prompts = loadPromptTemplate();
         String system       = prompts[0];
         String userTemplate = prompts[1];
-        String user         = renderUserPrompt(userTemplate, input);
+        String user         = renderUserPrompt(userTemplate, input) +
+                "\n\nCRITICAL OUTPUT REQUIREMENT:\n" +
+                "Draft 5-7 core legal sections (Header/Addressee, Statement of Facts, Statutory Rebuttal Grounds, CBIC Circular compliance, and Prayer for Relief). Keep body_html concise (1-2 clear paragraphs per section) so that the JSON output is completely formed and valid.";
 
         if (corpusReferenceDraft != null && !corpusReferenceDraft.isBlank()) {
             user += "\n\n--- GST CORPUS GOLD-STANDARD REFERENCE DRAFT ---\n" +
@@ -353,7 +373,10 @@ public class DraftingAgent {
         try {
             payload = objectMapper.readValue(raw, new TypeReference<>() {});
         } catch (Exception e) {
-            throw new JsonSchemaValidationException("drafter returned non-JSON: " + e.getMessage());
+            payload = tryRepairOrExtractSections(raw);
+            if (payload == null) {
+                throw new JsonSchemaValidationException("drafter returned non-JSON: " + e.getMessage());
+            }
         }
 
         validatePayload(payload);
@@ -361,14 +384,22 @@ public class DraftingAgent {
         List<Map<String, Object>> rawSections =
                 (List<Map<String, Object>>) payload.get("sections");
         List<DraftSection> sections = rawSections.stream()
-                .map(s -> new DraftSection(
-                        ((Number) s.get("num")).intValue(),
-                        (String) s.get("title"),
-                        (String) s.get("body_html")))
+                .map(s -> {
+                    Object numObj = s.get("num");
+                    int num = (numObj instanceof Number n) ? n.intValue() : Integer.parseInt(numObj.toString());
+                    return new DraftSection(
+                            num,
+                            (String) s.get("title"),
+                            (String) s.get("body_html"));
+                })
                 .toList();
 
         log.info("draft generated provider={} model={} sections={} tokens_out={}",
                 provider.getName(), response.model(), sections.size(), response.outputTokens());
+
+        if (apiUsageLogService != null) {
+            apiUsageLogService.logUsage(response.providerName(), response.model(), response.inputTokens(), response.outputTokens());
+        }
 
         return new GeneratedDraft(
                 sections,
@@ -379,6 +410,113 @@ public class DraftingAgent {
                 response.providerName(),
                 response.inputTokens(),
                 response.outputTokens());
+    }
+
+    private Map<String, Object> tryRepairOrExtractSections(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+
+        String trimmed = raw.trim();
+        List<String> attempts = List.of(
+                trimmed,
+                trimmed + "\"",
+                trimmed + "\"}]}",
+                trimmed + "\"}\n]}",
+                trimmed + "\"}\n]}\n}"
+        );
+
+        for (String attempt : attempts) {
+            try {
+                Map<String, Object> p = objectMapper.readValue(attempt, new TypeReference<>() {});
+                if (p.get("sections") instanceof List<?> l && !l.isEmpty()) {
+                    log.info("Successfully repaired truncated JSON output from LLM!");
+                    return p;
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // Backward scan for closing brace '}' to slice completed sections
+        int idx = trimmed.lastIndexOf('}');
+        while (idx > 20) {
+            String sliced = trimmed.substring(0, idx + 1).trim();
+            if (sliced.endsWith(",")) {
+                sliced = sliced.substring(0, sliced.length() - 1).trim();
+            }
+            List<String> fixes = List.of(
+                    sliced + "\n]}",
+                    sliced + "\n]}\n}",
+                    sliced + "\n}"
+            );
+            for (String fix : fixes) {
+                try {
+                    Map<String, Object> p = objectMapper.readValue(fix, new TypeReference<>() {});
+                    if (p.get("sections") instanceof List<?> l && !l.isEmpty()) {
+                        log.info("Successfully sliced at closing brace (idx={}) & repaired truncated JSON sections from LLM!", idx);
+                        return p;
+                    }
+                } catch (Exception ignored) {}
+            }
+            idx = trimmed.lastIndexOf('}', idx - 1);
+        }
+
+        List<Map<String, Object>> sections = new ArrayList<>();
+
+        // Match individual completed JSON section objects: {"num": 1, "title": "...", "body_html": "..."}
+        java.util.regex.Pattern secObjPattern = java.util.regex.Pattern.compile(
+                "\\{\\s*\"num\"\\s*:[^\\}]*?\"title\"\\s*:\\s*\"[^\"]+\"\\s*,\\s*\"body_html\"\\s*:\\s*\".*?\"\\s*\\}",
+                java.util.regex.Pattern.DOTALL
+        );
+        java.util.regex.Matcher matcher = secObjPattern.matcher(raw);
+        while (matcher.find()) {
+            try {
+                Map<String, Object> sec = objectMapper.readValue(matcher.group(0), new TypeReference<>() {});
+                if (sec.containsKey("num") && sec.containsKey("title") && sec.containsKey("body_html")) {
+                    sections.add(sec);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        if (sections.isEmpty()) {
+            String[] lines = raw.split("\n");
+            int currentNum = 0;
+            String currentTitle = null;
+            StringBuilder currentBody = new StringBuilder();
+
+            for (String line : lines) {
+                String l = line.strip();
+                if (l.matches("(?i)^(SECTION|GROUND|PART|\\d+[\\.\\)])\\s+.*") || l.startsWith("##") || l.startsWith("#")) {
+                    if (currentTitle != null && currentBody.length() > 0) {
+                        Map<String, Object> sec = new LinkedHashMap<>();
+                        sec.put("num", ++currentNum);
+                        sec.put("title", currentTitle);
+                        sec.put("body_html", currentBody.toString().strip());
+                        sections.add(sec);
+                        currentBody.setLength(0);
+                    }
+                    currentTitle = l.replaceAll("^#+\\s*", "").replaceAll("(?i)^(SECTION|GROUND)\\s*\\d*[:\\-]*\\s*", "").strip();
+                    if (currentTitle.isEmpty()) currentTitle = "Legal Ground " + (currentNum + 1);
+                } else if (currentTitle != null && !l.isEmpty()) {
+                    currentBody.append("<p>").append(l).append("</p>\n");
+                }
+            }
+            if (currentTitle != null && currentBody.length() > 0) {
+                Map<String, Object> sec = new LinkedHashMap<>();
+                sec.put("num", ++currentNum);
+                sec.put("title", currentTitle);
+                sec.put("body_html", currentBody.toString().strip());
+                sections.add(sec);
+            }
+        }
+
+        if (!sections.isEmpty()) {
+            log.info("Extracted {} sections from LLM response payload!", sections.size());
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("sections", sections);
+            payload.put("internal_partner_note", "Parsed from LLM response payload.");
+            payload.put("client_summary", "Summary of legal grounds.");
+            return payload;
+        }
+
+        return null;
     }
 
     // ---- Private: prompt loading -----------------------------------------
@@ -588,10 +726,15 @@ public class DraftingAgent {
             if (!(s instanceof Map<?, ?> m)) {
                 throw new JsonSchemaValidationException("each section must be an object");
             }
-            if (!(m.get("num") instanceof Number)) {
+            Object numObj = m.get("num");
+            int num;
+            if (numObj instanceof Number n) {
+                num = n.intValue();
+            } else if (numObj instanceof String str && str.matches("\\d+")) {
+                num = Integer.parseInt(str);
+            } else {
                 throw new JsonSchemaValidationException("each section.num must be an int");
             }
-            int num = ((Number) m.get("num")).intValue();
             if (!seen.add(num)) {
                 throw new JsonSchemaValidationException("duplicate section.num " + num);
             }

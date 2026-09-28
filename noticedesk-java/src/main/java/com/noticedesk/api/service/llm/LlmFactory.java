@@ -44,12 +44,20 @@ public class LlmFactory {
     }
 
     /**
+     * Returns the Gemini provider with its model resolved for {@code agentName}.
+     */
+    public LlmProvider getGeminiProviderForAgent(String agentName) {
+        String model = properties.modelForAgent(agentName, "gemini");
+        return getOrCreate("gemini", model);
+    }
+
+    /**
      * Returns a dedicated Claude Opus provider for Case 4 novel notice deep drafting.
      */
     public LlmProvider getOpusProvider() {
         String apiKey = properties.getLlm().getAnthropic().getApiKey();
         if (apiKey != null && !apiKey.isBlank()) {
-            return getOrCreate("anthropic", "claude-3-opus-20240229");
+            return getOrCreate("anthropic", "claude-opus-4-7");
         }
         return getLlmForAgent("drafting");
     }

@@ -41,10 +41,10 @@ public class AppProperties {
         private Anthropic anthropic = new Anthropic();
         private OpenAi openai = new OpenAi();
         private Gemini gemini = new Gemini();
-        // Per-agent model overrides
-        private String modelDrafting = "";
-        private String modelTriage = "claude-sonnet-4-6";
-        private String modelParsing = "claude-sonnet-4-6";
+        // Per-agent model overrides — default to Opus for all legal testing until requested otherwise
+        private String modelDrafting = "claude-opus-4-7";
+        private String modelTriage = "claude-opus-4-7";
+        private String modelParsing = "claude-opus-4-7";
         private String stubDefaultCanned;
 
         @Data

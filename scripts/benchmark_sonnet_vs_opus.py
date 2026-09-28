@@ -13,14 +13,9 @@ import subprocess
 
 REAL_NOTICES = [
     {
-        "filename": "./claude testing /AA271124111508J_SCN20122024.pdf",
-        "title": "Form GST REG-03 Registration Clarification Notice (Perfect Buildcon)",
+        "filename": "/home/sonia/internship/noticedesk/novel_crypto_gst_notice.pdf",
+        "title": "Novel Crypto GST Notice",
         "type": "digital"
-    },
-    {
-        "filename": "./claude testing /GST NOTICE 24052024.pdf",
-        "title": "CGST Audit Selection Notice FY 2020-23 (M/s J R K Infrastructure)",
-        "type": "scanned"
     }
 ]
 
@@ -138,7 +133,12 @@ def export_legal_pleading(raw_text, docx_path, pdf_path):
     build_pdf(blocks, pdf_path)
 
 def main():
-    api_key = open("apps/api/.env").read().strip().split("=")[1].strip()
+    api_key = ""
+    with open("apps/api/.env") as f:
+        for line in f:
+            if line.startswith("ANTHROPIC_API_KEY="):
+                api_key = line.strip().split("=")[1]
+    
     workspace_id = "wrkspc_014N4cnyTQiXVFyARaUjgt45"
     
     print(f"=== Running Full Untruncated Benchmark (max_tokens: 4096 + Continuation) ===")
@@ -151,7 +151,6 @@ def main():
         prompt = MASTER_PROMPT.format(notice_text=extracted_text[:3500])
         
         models = [
-            ("Claude Sonnet", "claude-sonnet-5"),
             ("Claude Opus", "claude-opus-4-7")
         ]
         

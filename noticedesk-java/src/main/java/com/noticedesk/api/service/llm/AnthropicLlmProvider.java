@@ -41,13 +41,23 @@ public class AnthropicLlmProvider implements LlmProvider {
                 .build();
         HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(httpClient);
 
-        this.restClient = RestClient.builder()
+        String workspaceId = System.getenv("ANTHROPIC_WORKSPACE_ID");
+        if (workspaceId == null || workspaceId.isBlank()) {
+            workspaceId = "wrkspc_014N4cnyTQiXVFyARaUjgt45";
+        }
+
+        RestClient.Builder builder = RestClient.builder()
                 .requestFactory(factory)
                 .baseUrl(API_URL)
                 .defaultHeader("x-api-key", apiKey)
                 .defaultHeader("anthropic-version", API_VERSION)
-                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .build();
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
+
+        if (workspaceId != null && !workspaceId.isBlank()) {
+            builder.defaultHeader("anthropic-workspace-id", workspaceId);
+        }
+
+        this.restClient = builder.build();
     }
 
     @Override
@@ -61,7 +71,7 @@ public class AnthropicLlmProvider implements LlmProvider {
         try {
             ObjectNode body = MAPPER.createObjectNode();
             body.put("model", model);
-            body.put("max_tokens", maxOutputTokens);
+            body.put("max_tokens", Math.min(maxOutputTokens, 12000));
 
             // System prompt with prompt caching
             ArrayNode systemArray = body.putArray("system");
@@ -88,10 +98,12 @@ public class AnthropicLlmProvider implements LlmProvider {
                     .retrieve()
                     .onStatus(status -> status.is4xxClientError() || status.is5xxServerError(), (req, res) -> {
                         int code = res.getStatusCode().value();
+                        String errBody = new String(res.getBody().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                        log.error("anthropic error body: {}", errBody);
                         if (code == 429 || code >= 500) {
-                            throw new LlmTransientException("anthropic transient error: HTTP " + code);
+                            throw new LlmTransientException("anthropic transient error: HTTP " + code + " " + errBody);
                         }
-                        throw new LlmException("anthropic error: HTTP " + code);
+                        throw new LlmException("anthropic error: HTTP " + code + " - " + errBody);
                     })
                     .body(String.class);
 

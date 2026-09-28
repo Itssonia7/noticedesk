@@ -1,0 +1,37 @@
+================================================================================
+NOTICEDESK JAVA BACKEND — CLAUDE OPUS EXECUTION REPORT
+================================================================================
+Engine Architecture : Java 21 Spring Boot Backend
+Primary Model Used  : Claude Opus (claude-3-opus-20240229 / claude-opus-4-7)
+Date of Execution   : Sun Sep 27 20:48:53 IST 2026
+
+DOCUMENT 1: HR Steel SCN.pdf
+--------------------------------------------------------------------------------
+Taxpayer Name       : M/s H R Steel (Prop. Juned Aliahmed Chaudhari)
+GSTIN / PAN         : 27AGZPC3957D1Z2 / 27AGZPC3957D1Z2
+Notice Ref          : GEXCOM/AE/INV/GST/1886/2026
+Model & Provider    : claude-opus-4-7 (anthropic)
+Tokens Used         : Input=40094 | Output=8192
+Sections Generated  : 7 Sections
+Output Files        : output/Reply_HR_Steel_SCN.docx & .txt
+
+DOCUMENT 2: 1st RFD-08.pdf
+--------------------------------------------------------------------------------
+Taxpayer Name       : M/s NIDIMO MONT PRIVATE LIMITED
+GSTIN / PAN         : 27AAJCN7242F1ZC / 27AAJCN7242F1ZC
+Notice Ref          : ARN: AA2703260810849
+Model & Provider    : claude-opus-4-7 (anthropic)
+Tokens Used         : Input=9518 | Output=5540
+Sections Generated  : 7 Sections
+Output Files        : output/Reply_1st_RFD-08_Notice.docx & .txt
+
+DOCUMENT 3: novel_crypto_gst_notice.pdf
+--------------------------------------------------------------------------------
+Taxpayer Name       : CryptoNode Systems India
+GSTIN / PAN         : 27BBBCC9876K1Z9 / 27BBBCC9876K1Z9
+Notice Ref          : CUSTOM/999/2026
+Model & Provider    : claude-opus-4-7 (anthropic)
+Tokens Used         : Input=6691 | Output=4830
+Sections Generated  : 7 Sections
+Output Files        : output/Reply_Crypto_Notice.docx & .txt
+================================================================================

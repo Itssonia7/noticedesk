@@ -31,7 +31,7 @@ class DraftingAgentTest {
 
         LlmFactory llmFactory = Mockito.mock(LlmFactory.class);
         ObjectMapper objectMapper = new ObjectMapper();
-        draftingAgent = new DraftingAgent(llmFactory, objectMapper, ragStoreService);
+        draftingAgent = new DraftingAgent(llmFactory, objectMapper, ragStoreService, org.mockito.Mockito.mock(com.noticedesk.api.service.llm.ApiUsageLogService.class));
     }
 
     @Test

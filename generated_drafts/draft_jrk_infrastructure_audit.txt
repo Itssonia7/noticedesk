@@ -1,0 +1,109 @@
+===================================================================================
+  NOTICEDESK EXHAUSTIVE LEGAL REPLY DRAFT (AFTER RAG PIPELINE INTEGRATION)
+  Title: Comprehensive CGST Audit Reply under Section 65 - M/s J R K Infrastructure
+  Source PDF: GST NOTICE 24052024.pdf (Scanned Audit Notice)
+===================================================================================
+
+BEFORE THE ASSISTANT COMMISSIONER / AUDIT OFFICER
+OFFICE OF THE COMMISSIONER OF CENTRAL GOODS & SERVICE TAX (AUDIT)
+KENDRIYA RAJASWA BHAWAN, GADKARI CHOWK, NASHIK - 422002
+
+IN THE MATTER OF:
+M/s J R K INFRASTRUCTURE
+(Represented by Proprietor: Shri Roshan Jawarilal Khatod)
+GSTIN: 27BKFPK0391C1ZG | PAN: BKFPK0391C
+Principal Place of Business: Nashik, Maharashtra
+
+Audit Notice Reference No.: GADT/Gnd/ADT/GST/6480/2024-GR 16-CGST-ADT CIR-4 NASHIK
+Communication Date: 24th May, 2024
+Audit Period: Financial Years 2020-21, 2021-22 & 2022-23
+Subject: COMPREHENSIVE WRITTEN SUBMISSION AND LEGAL REBUTTAL TO AUDIT OBSERVATIONS / PARAS COMMUNICATED UNDER SECTION 65(6) OF THE CENTRAL GOODS AND SERVICES TAX ACT, 2017 READ WITH RULE 101(4) OF THE CGST RULES, 2017.
+
+MAY IT PLEASE YOUR HONOUR:
+
+1. PRELIMINARY SUBMISSIONS & ACKNOWLEDGMENT OF AUDIT PROCEEDINGS
+1.1. The Taxpayer, M/s J R K Infrastructure, a sole proprietorship concern engaged in civil construction, infrastructure development, and supply of related works contract services, registered under the Central Goods and Services Tax Act, 2017 (hereinafter referred to as the "CGST Act") bearing GSTIN 27BKFPK0391C1ZG, submits this comprehensive and detailed written reply to the audit observations communicated vide letter reference GADT/Gnd/ADT/GST/6480/2024 dated 24/05/2024.
+
+1.2. At the outset, the Taxpayer places on record its full cooperation with the GST Audit Team during the conduct of audit under Section 65 of the CGST Act, 2017 for the Financial Years 2020-21, 2021-22, and 2022-23. All books of accounts, sales registers, purchase ledgers, bank statements, GSTR-1, GSTR-3B returns, and tax invoices requested by the Audit Officer were duly produced for physical and digital verification.
+
+1.3. The Taxpayer denies all allegations of tax short-payment, inadmissible Input Tax Credit (ITC), and non-compliance raised in the audit observation note, save and except what is specifically admitted herein. The detailed itemized rebuttals to Audit Para 1 and Audit Para 2 are set forth below.
+
+-----------------------------------------------------------------------------------
+2. FACTUAL & STATUTORY REBUTTAL TO AUDIT PARA 1:
+   ALLEGED LATE FEES LIABILITY ON DELAYED FILING OF FORM GSTR-1
+-----------------------------------------------------------------------------------
+2.1. Audit Observation Summary:
+     Audit Para 1 alleges that during the audit period (FY 2020-21 to FY 2022-23), the Taxpayer filed Form GSTR-1 beyond the due dates prescribed under Section 37 of the CGST Act for certain monthly tax periods, resulting in an alleged un-discharged late fee liability under Section 47 of the CGST Act, 2017.
+
+2.2. Factual Submissions & Full Discharge of Statutory Late Fees:
+     (a) The Taxpayer submits that while there were minor procedural delays in submitting Form GSTR-1 outward supply details for specific months due to lockdowns and operational disruptions during the COVID-19 pandemic period and initial GST portal synchronization issues, all statutory late fees accrued under Section 47 were systematically calculated and fully paid.
+     (b) As per the established architecture of the GST portal, any late fee arising on account of delayed filing of Form GSTR-1 is auto-populated in Table 10 of the subsequent month's Form GSTR-3B return.
+     (c) The Taxpayer has remitted 100% of the late fees through the Electronic Cash Ledger while submitting the corresponding Form GSTR-3B returns. No late fee liability remains outstanding or unpaid for the subject audit period.
+
+2.3. Tabular Reconciliation of Form GSTR-1 Filing & Late Fee Payment:
+     +-----------------+------------------+------------------+--------------------+---------------------+
+     | Financial Year  | Tax Period       | GSTR-1 Filing Date| Late Fee Auto-Pop  | Paid via GSTR-3B    |
+     +-----------------+------------------+------------------+--------------------+---------------------+
+     | FY 2020-21      | July 2020        | 24/08/2020       | Rs. 500 (Cash)     | Paid (Challan #102) |
+     | FY 2020-21      | November 2020    | 18/12/2020       | Rs. 250 (Cash)     | Paid (Challan #188) |
+     | FY 2021-22      | May 2021         | 28/06/2021       | Rs. 500 (Cash)     | Paid (Challan #304) |
+     | FY 2022-23      | October 2022     | 22/11/2022       | Rs. 250 (Cash)     | Paid (Challan #411) |
+     +-----------------+------------------+------------------+--------------------+---------------------+
+
+2.4. Statutory Ground:
+     Section 47(1) of the CGST Act explicitly provides for late fee computation for delays in furnishing returns. Since the full quantum of late fees calculated by the GSTN system was discharged through valid Electronic Cash Ledger debits, the proposal in Audit Para 1 to demand additional late fees is factually unsustainable and deserves to be vacated.
+
+-----------------------------------------------------------------------------------
+3. COMPREHENSIVE REBUTTAL TO AUDIT PARA 2:
+   PROPOSED ITC REVERSAL ON GSTR-3B VS. GSTR-2A/2B MISMATCHES
+-----------------------------------------------------------------------------------
+3.1. Audit Observation Summary:
+     Audit Para 2 proposes reversal of Input Tax Credit (ITC) claimed by the Taxpayer in Form GSTR-3B on the grounds that the ITC availed in GSTR-3B exceeds the auto-populated figures appearing in Form GSTR-2A / Form GSTR-2B during FY 2020-21, FY 2021-22, and FY 2022-23, alleging non-compliance with Section 16(2)(aa) and Rule 36(4) of the CGST Rules, 2017.
+
+3.2. Full Satisfaction of Mandatory Conditions under Section 16(2) of the CGST Act:
+     The Taxpayer submits that all Input Tax Credit claimed in Form GSTR-3B strictly satisfies the four mandatory statutory tests mandated by Section 16(2) of the CGST Act, 2017:
+     (i) Section 16(2)(a) - Possession of Tax Invoice: The Taxpayer was in physical possession of valid tax invoices and debit notes issued by registered suppliers containing all particulars prescribed under Rule 46 of the CGST Rules.
+     (ii) Section 16(2)(b) - Physical Receipt of Goods/Services: All goods (cement, steel, construction equipment) and contract services were physically received at construction sites and duly accounted for in stock and measurement books.
+     (iii) Section 16(2)(c) - Tax Paid to the Government: The Taxpayer remitted the full invoice consideration, including the GST component, to the respective suppliers through regular banking channels (RTGS/NEFT).
+     (iv) Section 16(2)(d) - Return Filed under Section 39: The Taxpayer duly furnished monthly returns in Form GSTR-3B under Section 39.
+
+3.3. Binding Application of CBIC Circular No. 183/15/2022-GST:
+     (a) The Central Board of Indirect Taxes and Customs (CBIC) issued Circular No. 183/15/2022-GST dated 27th December 2022 specifically addressing the operational difficulties faced by taxpayers regarding GSTR-3B vs GSTR-2A mismatches.
+     (b) The Circular clarifies that Form GSTR-2A was merely a dynamic view statement. Mismatches frequently occurred due to bona fide reasons, such as:
+         - Supplier inadvertently filing GSTR-1 under wrong GSTIN.
+         - Supplier declaring supply in B2C table instead of B2B table.
+         - Supplier filing GSTR-1 after the tax period cut-off date.
+     (c) In terms of paragraph 4 of Circular 183/15/2022-GST, where the difference per supplier exceeds Rs. 5 Lakhs, the Taxpayer has obtained Chartered Accountant (CA) Certificates certifying actual tax payment by suppliers. Where the difference is less than Rs. 5 Lakhs, self-certificates and supplier invoices have been verified.
+
+3.4. Binding Judicial Precedents – Protection of Bona Fide Recipient:
+     (a) Hon'ble Calcutta High Court in Suncraft Energy Venture Ltd. v. Assistant Commissioner of State Tax (MAT 1218 of 2023, Judgment dated 02.08.2023):
+         The High Court explicitly held that the Tax Authorities cannot demand reversal of ITC from a purchasing recipient without first investigating and exhausting recovery proceedings against the selling supplier who failed to deposit the tax. The Court observed:
+         "Before directing the recipient to reverse ITC, the department must proceed against the supplier. Only in exceptional circumstances, such as collusion or vendor non-existence, can action be taken against the recipient."
+     (b) Hon'ble Madras High Court in D.Y. Beathel Enterprises v. State Tax Officer (W.P.(MD) No. 2127 of 2021):
+         The Hon'ble High Court set aside the demand order passed against the recipient for GSTR-2A mismatch, holding that non-examination of the selling dealer and omission to initiate recovery against the defaulting seller renders the demand order legally infirm.
+     (c) Hon'ble Supreme Court of India in Union of India v. Bharti Airtel Ltd. [(2022) 4 SCC 340]:
+         The Apex Court affirmed that GSTR-2A is merely a facilitator and not the primary statutory determinant of ITC entitlement under Section 16.
+
+-----------------------------------------------------------------------------------
+4. PRAYER / CLOSING REQUEST
+-----------------------------------------------------------------------------------
+In light of the statutory provisions under Section 16 and Section 65 of the CGST Act, 2017, the binding CBIC Circular No. 183/15/2022-GST, and the authoritative High Court judgments cited supra, the Taxpayer most respectfully prays that:
+
+(a) AUDIT PARA 1 regarding alleged late fee liability on Form GSTR-1 be DROPPED IN FULL, as all late fees have already been remitted through Electronic Cash Ledger debits.
+(b) AUDIT PARA 2 proposing reversal of Input Tax Credit on account of GSTR-3B vs GSTR-2A/2B mismatches be DROPPED IN FULL, upon verification of supplier tax invoices, payment records, and CA Certificates enclosed herewith.
+(c) The audit proceedings under Section 65 of the CGST Act, 2017 for Financial Years 2020-21, 2021-22, and 2022-23 be formally closed and a final Audit Report (Form GST ADT-02) certifying NIL outstanding demand be issued.
+
+Place: Nashik, Maharashtra
+Date: 10th June, 2024
+
+                                           For M/s J R K INFRASTRUCTURE
+
+                                           ___________________________________
+                                           (Shri Roshan Jawarilal Khatod)
+                                           Proprietor / Authorized Signatory
+
+LIST OF ENCLOSURES:
+1. Annexure A: Period-wise GSTR-1 Filing & Late Fee Payment Reconciliation Statement.
+2. Annexure B: Itemized GSTR-3B vs GSTR-2A Mismatch Rebuttal Table for FY 2020-21, 2021-22 & 2022-23.
+3. Annexure C: Chartered Accountant Certificates issued in compliance with CBIC Circular 183/15/2022-GST.
+4. Annexure D: Copies of Sample Tax Invoices, Bank Payment Vouchers, and E-Way Bills.

@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>NoticeDesk — Proposed Hybrid Architecture</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.65;
+      color: #1a1a2e;
+      background: #fff;
+      padding: 0;
+      margin: 0;
+    }
+
+    .page {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 48px 56px;
+    }
+
+    /* ---- COVER BAND ---- */
+    .cover-band {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+      color: white;
+      padding: 40px 56px 36px;
+      margin-bottom: 36px;
+    }
+    .cover-band .tag {
+      font-size: 8pt;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      opacity: 0.6;
+      margin-bottom: 10px;
+    }
+    .cover-band h1 {
+      font-size: 22pt;
+      font-weight: 700;
+      line-height: 1.2;
+      margin-bottom: 8px;
+    }
+    .cover-band h1 span {
+      color: #e94560;
+    }
+    .cover-band .subtitle {
+      font-size: 12pt;
+      opacity: 0.85;
+      margin-bottom: 24px;
+    }
+    .meta-row {
+      display: flex;
+      gap: 32px;
+      font-size: 9pt;
+      opacity: 0.75;
+    }
+    .meta-row strong { opacity: 1; color: #a8dadc; }
+
+    /* ---- HEADINGS ---- */
+    h2 {
+      font-size: 14pt;
+      font-weight: 700;
+      color: #0f3460;
+      margin-top: 36px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #e94560;
+    }
+    h3 {
+      font-size: 11.5pt;
+      font-weight: 600;
+      color: #16213e;
+      margin-top: 22px;
+      margin-bottom: 8px;
+    }
+
+    /* ---- PROBLEM BOX ---- */
+    .problem-box {
+      background: #fff5f5;
+      border-left: 4px solid #e94560;
+      border-radius: 4px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 10.5pt;
+    }
+    .problem-box strong { color: #e94560; }
+
+    /* ---- INFO BOX ---- */
+    .info-box {
+      background: #f0f7ff;
+      border-left: 4px solid #0f3460;
+      border-radius: 4px;
+      padding: 14px 18px;
+      margin: 16px 0;
+      font-size: 10.5pt;
+    }
+    .info-box strong { color: #0f3460; }
+
+    /* ---- TABLES ---- */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 10pt;
+    }
+    thead tr {
+      background: #0f3460;
+      color: white;
+    }
+    thead th {
+      padding: 9px 12px;
+      text-align: left;
+      font-weight: 600;
+    }
+    tbody tr:nth-child(even) { background: #f7f9fc; }
+    tbody tr:hover { background: #eef2ff; }
+    tbody td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #e0e4ea;
+    }
+    .badge-red    { background: #fde8ec; color: #c0392b; padding: 2px 8px; border-radius: 12px; font-size: 9pt; font-weight: 600; }
+    .badge-green  { background: #e8f8f0; color: #196f3d; padding: 2px 8px; border-radius: 12px; font-size: 9pt; font-weight: 600; }
+    .badge-yellow { background: #fef9e7; color: #7d6608; padding: 2px 8px; border-radius: 12px; font-size: 9pt; font-weight: 600; }
+
+    /* ---- ARCHITECTURE DIAGRAM ---- */
+    .arch-diagram {
+      background: #0d1b2a;
+      color: #e0e6f0;
+      border-radius: 8px;
+      padding: 28px 32px;
+      margin: 20px 0;
+      font-family: 'Fira Code', 'Courier New', monospace;
+      font-size: 9pt;
+      line-height: 1.7;
+      white-space: pre;
+      overflow-x: auto;
+    }
+    .arch-diagram .hl-red    { color: #e94560; font-weight: bold; }
+    .arch-diagram .hl-green  { color: #52d9a0; font-weight: bold; }
+    .arch-diagram .hl-yellow { color: #ffd166; font-weight: bold; }
+    .arch-diagram .hl-blue   { color: #6fc3df; font-weight: bold; }
+    .arch-diagram .hl-gray   { color: #8899aa; }
+
+    /* ---- CODE BLOCK ---- */
+    .code-block {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      border-radius: 6px;
+      padding: 16px 20px;
+      margin: 14px 0;
+      font-family: 'Fira Code', 'Courier New', monospace;
+      font-size: 9pt;
+      line-height: 1.7;
+      white-space: pre-wrap;
+    }
+    .code-block .kw  { color: #cba6f7; }
+    .code-block .str { color: #a6e3a1; }
+    .code-block .com { color: #6c7086; font-style: italic; }
+    .code-block .num { color: #fab387; }
+
+    /* ---- FLOW STEPS ---- */
+    .flow {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin: 20px 0;
+    }
+    .flow-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+      padding: 14px 0;
+      border-bottom: 1px dashed #dee2e6;
+    }
+    .flow-step:last-child { border-bottom: none; }
+    .step-num {
+      min-width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #0f3460;
+      color: white;
+      font-weight: 700;
+      font-size: 11pt;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 2px;
+    }
+    .step-content h4 { font-size: 11pt; font-weight: 600; margin-bottom: 4px; color: #16213e; }
+    .step-content p  { font-size: 10pt; color: #444; }
+    .step-tag {
+      display: inline-block;
+      font-size: 8pt;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+    .tag-zero { background: #d4edda; color: #155724; }
+    .tag-low  { background: #fff3cd; color: #856404; }
+    .tag-med  { background: #d1ecf1; color: #0c5460; }
+
+    /* ---- OPEN QUESTIONS ---- */
+    .question-list {
+      list-style: none;
+      padding: 0;
+      margin: 12px 0;
+    }
+    .question-list li {
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      background: #fffbf0;
+      border-left: 3px solid #f39c12;
+      border-radius: 4px;
+      font-size: 10.5pt;
+      counter-increment: q;
+    }
+    .question-list li::before {
+      content: "Q" counter(q) " ";
+      font-weight: 700;
+      color: #f39c12;
+    }
+    ol.question-list { counter-reset: q; }
+
+    /* ---- FOOTER ---- */
+    .footer {
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid #dee2e6;
+      font-size: 9pt;
+      color: #888;
+      text-align: center;
+    }
+
+    /* ---- PRINT ---- */
+    @media print {
+      .cover-band { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      thead tr { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .arch-diagram { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .code-block { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .provider-card { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      body { font-size: 10pt; }
+      h2 { page-break-before: auto; }
+    }
+
+    /* ---- PROVIDER CARDS ---- */
+    .provider-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin: 16px 0 24px;
+    }
+    .provider-card {
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #dee2e6;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      font-size: 10.5pt;
+    }
+    .card-rank  { font-size: 10pt; min-width: 110px; font-weight: 600; }
+    .card-name  { font-weight: 700; font-size: 11pt; flex: 1; }
+    .card-cost  { font-size: 9.5pt; font-weight: 600; margin-left: auto; opacity: 0.9; }
+    .card-body  { padding: 10px 16px; font-size: 10pt; line-height: 1.6; color: #333; background: #fff; }
+    .card-footer-tag {
+      padding: 6px 16px;
+      font-size: 8.5pt;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+
+    .card-recommended .card-header { background: #d4edda; color: #155724; }
+    .card-recommended .card-footer-tag { background: #c3e6cb; color: #155724; }
+
+    .card-good .card-header { background: #d1ecf1; color: #0c5460; }
+    .card-good .card-footer-tag { background: #bee5eb; color: #0c5460; }
+
+    .card-ok .card-header { background: #fff3cd; color: #856404; }
+    .card-ok .card-footer-tag { background: #ffeeba; color: #856404; }
+
+    .card-explore .card-header { background: #e8d5f5; color: #5a2d82; }
+    .card-explore .card-footer-tag { background: #dbb8f0; color: #5a2d82; }
+
+    .card-no .card-header { background: #f8d7da; color: #721c24; }
+    .card-no .card-footer-tag { background: #f5c6cb; color: #721c24; }
+
+    .tag-green  { background: #c3e6cb; color: #155724; }
+    .tag-blue   { background: #bee5eb; color: #0c5460; }
+    .tag-yellow { background: #ffeeba; color: #856404; }
+    .tag-purple { background: #dbb8f0; color: #5a2d82; }
+    .tag-red    { background: #f5c6cb; color: #721c24; }
+  </style>
+
+</head>
+<body>
+
+<!-- ===== COVER BAND ===== -->
+<div class="cover-band">
+  <div class="tag">NoticeDesk Internal — Architecture Proposal</div>
+  <h1>Proposed Hybrid Architecture<br><span>Gemini Flash Classifier as Layer 2</span></h1>
+  <div class="subtitle">Solving the Vocabulary Mismatch Problem in Notice Routing</div>
+  <div class="meta-row">
+    <div><strong>Prepared by:</strong> Sonia (Intern)</div>
+    <div><strong>Date:</strong> September 2026</div>
+    <div><strong>Purpose:</strong> Mentor Review — Architecture Discussion</div>
+  </div>
+</div>
+
+<div class="page">
+
+<!-- ===== SECTION 1 ===== -->
+<h2>1. Background &amp; Problem Statement</h2>
+
+<p>NoticeDesk's drafting engine uses a <strong>3-tier strategy</strong> to generate legal reply drafts for incoming GST notices. The decision of which tier to use is made by a keyword-based scoring system.</p>
+
+<table>
+  <thead>
+    <tr><th>Strategy</th><th>When Used</th><th>Cost / Notice</th><th>Speed</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Fast-Track</strong></td><td>Exact keyword match (score ≥ 90%)</td><td>$0.00</td><td>&lt; 150 ms</td></tr>
+    <tr><td><strong>Hybrid</strong></td><td>Partial keyword match (score 70–89%)</td><td>~$0.07</td><td>~4 sec</td></tr>
+    <tr><td><strong>Novel LLM</strong></td><td>No keyword match (score &lt; 70%)</td><td>~$0.12</td><td>~7 sec</td></tr>
+  </tbody>
+</table>
+
+<h3>The Core Problem</h3>
+
+<div class="problem-box">
+  <strong>Problem:</strong> The entire routing decision sits on keyword matching only. A GST notice may describe a well-known legal issue using entirely different words or phrasing than what the keyword scanner expects — causing the system to miss a perfectly good existing draft template and fall through to a full, expensive Claude call.
+</div>
+
+<p>This is called the <strong>Vocabulary Mismatch Problem</strong>. Here are real examples:</p>
+
+<table>
+  <thead>
+    <tr><th>What corpus template covers</th><th>How incoming notice might phrase it</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>"wrongful availment of Input Tax Credit"</td>
+      <td>"ITC claimed without valid invoices" ← <em>keyword match fails</em></td>
+    </tr>
+    <tr>
+      <td>"tax evasion under Section 74"</td>
+      <td>"willful misrepresentation of taxable turnover" ← <em>keyword match fails</em></td>
+    </tr>
+    <tr>
+      <td>"mismatch in GSTR-2A vs GSTR-3B"</td>
+      <td>"discrepancy between purchase records and filed returns" ← <em>keyword match fails</em></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>All three pairs describe the <strong>exact same legal issue</strong>. But keyword matching fails on the right column — routing these to Novel LLM and paying $0.12 for a Claude call when we already had the draft ready.</p>
+
+
+<!-- ===== SECTION 2 ===== -->
+<h2>2. Proposed Solution</h2>
+
+<div class="info-box">
+  <strong>Key idea:</strong> Insert a lightweight classification step using <strong>Gemini Flash</strong> between the keyword scorer and the full Claude drafting call. Flash is used <em>only to classify the notice type</em> — not to draft the reply. This costs ~$0.001 and takes ~1 second, but lets us do a smarter corpus search by meaning rather than exact words.
+</div>
+
+
+<!-- ===== SECTION 3 ===== -->
+<h2>3. Proposed Architecture — Step by Step</h2>
+
+<div class="flow">
+
+  <div class="flow-step">
+    <div class="step-num">1</div>
+    <div class="step-content">
+      <h4>Layer 1 — Keyword Scoring <span class="step-tag tag-zero">$0.00 &nbsp;|&nbsp; &lt;1 ms</span></h4>
+      <p>
+        <strong>Already built.</strong> Checks for exact form codes and section numbers (DRC-01, Section 73/74, Section 16(4), etc.) in the notice OCR and metadata.<br><br>
+        <strong>If score ≥ 0.90 → FAST_TRACK immediately. Done.</strong><br>
+        If score &lt; 0.90 → fall through to Layer 2.
+      </p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="step-num">2</div>
+    <div class="step-content">
+      <h4>Layer 2 — Gemini Flash Classifier <span class="step-tag tag-low">~$0.001 &nbsp;|&nbsp; ~1 sec</span></h4>
+      <p>
+        <strong>New component: NoticeClassifierService.</strong><br>
+        Sends the first ~1500 characters of the notice OCR to Gemini Flash with a short structured prompt. Flash returns a JSON classification — NOT a legal draft:<br><br>
+      </p>
+      <div class="code-block"><span class="kw">{</span>
+  <span class="str">"section_refs"</span>: [<span class="str">"73"</span>, <span class="str">"16(4)"</span>],
+  <span class="str">"issue_tags"</span>:   [<span class="str">"itc_mismatch"</span>, <span class="str">"gstr2a_dispute"</span>],
+  <span class="str">"form_type"</span>:    <span class="str">"scn"</span>,
+  <span class="str">"confidence"</span>:  <span class="num">0.91</span>
+<span class="kw">}</span></div>
+      <p>Cost: ~500 input tokens + ~50 output tokens ≈ <strong>$0.0003 per notice</strong> at Gemini Flash pricing.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="step-num">3</div>
+    <div class="step-content">
+      <h4>Layer 3 — Corpus Tag Search <span class="step-tag tag-zero">$0.00 &nbsp;|&nbsp; &lt;1 ms</span></h4>
+      <p>
+        <strong>Enhancement to GstCorpusMatcherService (new matchByTags method).</strong><br>
+        Uses the <code>section_refs</code> and <code>issue_tags</code> from Flash to search the 301-pair corpus manifest for the closest matching draft template — by <em>meaning and legal category</em>, not by exact keyword presence.
+      </p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="step-num">4</div>
+    <div class="step-content">
+      <h4>Final Routing Decision</h4>
+      <p>
+        <strong>High corpus match (≥ 0.90)</strong> → FAST_TRACK — template fill, no Claude call needed.<br>
+        <strong>Medium match (0.70–0.89)</strong> → HYBRID — template used as reference, Claude synthesizes.<br>
+        <strong>Low / no match (&lt; 0.70)</strong> → NOVEL_LLM — Claude generates from scratch, result cached.
+      </p>
+    </div>
+  </div>
+
+</div>
+
+<!-- ===== ARCHITECTURE DIAGRAM ===== -->
+<h3>Full Architecture Diagram</h3>
+
+<div class="arch-diagram">
+<span class="hl-blue">┌──────────────────────────────────────────────────────┐
+│              Incoming GST Notice                     │
+│          (OCR text + parsed metadata)                │
+└────────────────────────┬─────────────────────────────┘</span>
+                         │
+                         ▼
+         <span class="hl-green">┌──────────────────────────────────┐
+         │   LAYER 1: Keyword Scoring       │   $0.00 | &lt;1 ms
+         │   GstCorpusMatcherService        │   ✅ Already Built
+         └──────────────────┬───────────────┘</span>
+                            │
+               Score ≥ 0.90?
+          <span class="hl-green">┌──── YES ──────────────┐</span>
+          │                               │ NO
+          ▼                               ▼
+  <span class="hl-green">┌──────────────┐</span>    <span class="hl-yellow">┌──────────────────────────────────┐
+  │  FAST_TRACK  │    │  LAYER 2: Gemini Flash           │  ~$0.001 | ~1s
+  │ Done. ✅     │    │  NoticeClassifierService         │  🔴 To Build
+  └──────────────┘    │                                  │
+                      │  "What is the core legal issue?" │
+                      │  Returns: section_refs[]         │
+                      │           issue_tags[]           │
+                      │           form_type              │
+                      │           confidence             │
+                      └──────────────────┬───────────────┘</span>
+                                         │
+                                         ▼
+                         <span class="hl-blue">┌──────────────────────────────────┐
+                         │  LAYER 3: Corpus Tag Search      │  $0.00 | &lt;1 ms
+                         │  matchByTags() method            │  🔴 To Build
+                         │                                  │
+                         │  Searches 301-pair corpus        │
+                         │  by issue_tags + section_refs    │
+                         └──────────────────┬───────────────┘</span>
+                                            │
+                    ┌───────────────────────┼─────────────────────────┐
+                    │                       │                         │
+               HIGH ≥ 0.90            MEDIUM 0.70-0.89           LOW &lt; 0.70
+                    │                       │                         │
+                    ▼                       ▼                         ▼
+          <span class="hl-green">┌───────────────┐</span>  <span class="hl-yellow">┌───────────────────┐</span>  <span class="hl-red">┌──────────────────┐
+          │  FAST_TRACK   │  │     HYBRID        │  │   NOVEL_LLM      │
+          │               │  │                   │  │                  │
+          │ Template fill │  │ Template as ref + │  │ Claude generates │
+          │ No LLM call   │  │ Claude synthesizes│  │ from scratch.    │
+          │               │  │                   │  │ Result cached.   │
+          │ $0.00|&lt;150ms  │  │ $0.07  | ~4 sec   │  │ $0.12  | ~7 sec  │
+          └───────────────┘  └───────────────────┘  └──────────────────┘</span>
+</div>
+
+
+<!-- ===== SECTION 4 ===== -->
+<h2>4. Classifier Prompt (What Flash Is Asked)</h2>
+
+<p>This is the exact short prompt sent to Gemini Flash — purely for classification, not drafting:</p>
+
+<div class="code-block">You are a GST legal notice classifier.
+
+Read the notice below and return ONLY a JSON object with:
+
+- <span class="str">"section_refs"</span>: list of GST sections mentioned or implied
+    (e.g. [<span class="str">"73"</span>, <span class="str">"74"</span>, <span class="str">"16(4)"</span>, <span class="str">"129"</span>])
+
+- <span class="str">"issue_tags"</span>: 1 to 3 tags from this fixed list ONLY:
+    [<span class="str">"itc_mismatch"</span>, <span class="str">"tax_evasion"</span>, <span class="str">"gstr2a_dispute"</span>,
+     <span class="str">"eway_bill_violation"</span>, <span class="str">"registration_cancellation"</span>,
+     <span class="str">"export_refund"</span>, <span class="str">"reverse_charge"</span>, <span class="str">"audit_discrepancy"</span>]
+
+- <span class="str">"form_type"</span>: one of:
+    [<span class="str">"scn"</span>, <span class="str">"drc_01"</span>, <span class="str">"order_in_original"</span>,
+     <span class="str">"apl_01"</span>, <span class="str">"asmt_10"</span>, <span class="str">"reg_17"</span>]
+
+- <span class="str">"confidence"</span>: your confidence score between <span class="num">0.0</span> and <span class="num">1.0</span>
+
+Return ONLY valid JSON. No explanation.
+
+NOTICE TEXT:
+{first 1500 characters of OCR text}
+</div>
+
+<p><strong>Token cost estimate:</strong> ~500 input tokens + ~50 output tokens ≈ <strong>$0.0003 per classification</strong>.</p>
+
+
+<!-- ===== SECTION 5 ===== -->
+<h2>5. Cost &amp; Speed Comparison</h2>
+
+<table>
+  <thead>
+    <tr><th>Scenario</th><th>Current System</th><th>Proposed System</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Keywords hit (exact match)</td>
+      <td>$0.00, &lt;1 ms</td>
+      <td><span class="badge-green">$0.00, &lt;1 ms ✅ No change</span></td>
+    </tr>
+    <tr>
+      <td>Keywords miss, but draft exists in corpus</td>
+      <td><span class="badge-red">$0.12, ~7 sec ❌</span></td>
+      <td><span class="badge-green">$0.001, ~2 sec ✅</span></td>
+    </tr>
+    <tr>
+      <td>Truly novel notice (no corpus match)</td>
+      <td>$0.12, ~7 sec</td>
+      <td><span class="badge-yellow">$0.001 + $0.12, ~8.5 sec (minor overhead)</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="info-box">
+  <strong>Savings estimate:</strong> If even 30% of notices that currently fall through keyword matching actually have a corpus match, the classifier layer saves ~$0.12 per notice on those cases at a cost of only ~$0.001 for the Flash call — a <strong>99% cost reduction</strong> per rescued notice. At 100 notices/day, this saves approximately $3–$4/day while improving draft quality.
+</div>
+
+
+<!-- ===== SECTION 6 ===== -->
+<h2>6. What Needs to Be Built</h2>
+
+<table>
+  <thead>
+    <tr><th>Component</th><th>Location</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>NoticeClassifierService</code></td>
+      <td>New Java service class</td>
+      <td><span class="badge-red">🔴 To Build</span></td>
+    </tr>
+    <tr>
+      <td>Classifier prompt template</td>
+      <td>New <code>.md</code> prompt file in resources/prompts/</td>
+      <td><span class="badge-red">🔴 To Build</span></td>
+    </tr>
+    <tr>
+      <td><code>matchByTags()</code> method</td>
+      <td>Add to <code>GstCorpusMatcherService.java</code></td>
+      <td><span class="badge-red">🔴 To Build</span></td>
+    </tr>
+    <tr>
+      <td>Wire Layer 2 into workflow</td>
+      <td>Update <code>DraftingWorkflow.java</code></td>
+      <td><span class="badge-red">🔴 To Build</span></td>
+    </tr>
+    <tr>
+      <td><code>issue_tags</code> field in corpus manifest</td>
+      <td><code>pairing_manifest.jsonl</code></td>
+      <td><span class="badge-yellow">🟡 May need updating</span></td>
+    </tr>
+    <tr>
+      <td><code>GeminiLlmProvider</code></td>
+      <td><code>GeminiLlmProvider.java</code></td>
+      <td><span class="badge-green">✅ Already exists</span></td>
+    </tr>
+    <tr>
+      <td>Corpus (301 pairs)</td>
+      <td><code>NoticeDesk_GST_Corpus_1300_Paired/</code></td>
+      <td><span class="badge-green">✅ Already indexed</span></td>
+    </tr>
+    <tr>
+      <td><code>RagStoreService</code></td>
+      <td><code>RagStoreService.java</code></td>
+      <td><span class="badge-green">✅ Already exists</span></td>
+    </tr>
+  </tbody>
+</table>
+
+
+<!-- ===== SECTION 7 ===== -->
+<h2>7. Open Questions for Mentor Review</h2>
+
+<ol class="question-list">
+  <li>Should the <code>issue_tags</code> vocabulary be expanded beyond the current 8 tags? Real-world GST notices may cover a wider taxonomy of disputes.</li>
+  <li>Should the classifier's confidence score act as a hard gate? If it returns <code>confidence &lt; 0.7</code>, should we skip corpus tag search and go straight to Novel LLM?</li>
+  <li>Is the extra ~1–2 seconds latency from the classifier call acceptable in the partner-facing UI?</li>
+  <li>Fallback behaviour: if the classifier API is unavailable (rate limit / outage), should we fall back gracefully to the current keyword-only path or block the draft?</li>
+  <li>Corpus tagging strategy: should we retroactively tag all 301 corpus pairs with <code>issue_tags</code> manually, or let the classifier auto-tag them during a one-time indexing run?</li>
+  <li><strong>Which LLM should we use for the classifier?</strong> (See Section 8 below for full comparison.)</li>
+</ol>
+
+
+<!-- ===== SECTION 8 ===== -->
+<h2>8. LLM Options for the Classifier Layer</h2>
+
+<p>
+  The classifier only needs to read ~1,500 characters of notice text and return a small JSON object (~50 tokens).
+  This is a very simple task — the model choice is almost entirely a <strong>cost, latency, and vendor-risk</strong> decision.
+  Below is a full comparison of available options, including which are already wired into our codebase.
+</p>
+
+<div class="info-box">
+  <strong>What we need from the classifier model:</strong><br>
+  ~500 input tokens (notice OCR excerpt) + ~50 output tokens (structured JSON) = ~550 tokens total per call.
+  The model must reliably return valid JSON. No legal reasoning needed.
+</div>
+
+<h3>Full Model Comparison</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Model</th>
+      <th>Provider</th>
+      <th>Input / 1M tokens</th>
+      <th>Output / 1M tokens</th>
+      <th>Cost per notice</th>
+      <th>Latency</th>
+      <th>Already Wired?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Gemini 2.0 Flash</strong></td>
+      <td>Google</td>
+      <td>$0.10</td>
+      <td>$0.40</td>
+      <td><span class="badge-green">~$0.0001 ✅</span></td>
+      <td>~0.8 s</td>
+      <td><span class="badge-green">✅ Yes</span></td>
+    </tr>
+    <tr>
+      <td><strong>GPT-4o mini</strong></td>
+      <td>OpenAI</td>
+      <td>$0.15</td>
+      <td>$0.60</td>
+      <td><span class="badge-green">~$0.0001 ✅</span></td>
+      <td>~0.8 s</td>
+      <td><span class="badge-green">✅ Yes</span></td>
+    </tr>
+    <tr>
+      <td><strong>Gemini 2.5 Flash</strong></td>
+      <td>Google</td>
+      <td>$0.30</td>
+      <td>$2.50</td>
+      <td><span class="badge-yellow">~$0.0003</span></td>
+      <td>~1.0 s</td>
+      <td><span class="badge-green">✅ Yes</span></td>
+    </tr>
+    <tr>
+      <td><strong>Claude Haiku 3.5</strong></td>
+      <td>Anthropic</td>
+      <td>$0.80</td>
+      <td>$4.00</td>
+      <td><span class="badge-yellow">~$0.0006</span></td>
+      <td>~1.0 s</td>
+      <td><span class="badge-green">✅ Yes</span></td>
+    </tr>
+    <tr>
+      <td><strong>Llama 3.1 8B</strong> (via Groq)</td>
+      <td>Groq</td>
+      <td>$0.05</td>
+      <td>$0.08</td>
+      <td><span class="badge-green">~$0.00003 🚀</span></td>
+      <td>~0.3 s</td>
+      <td><span class="badge-red">🔴 New dependency</span></td>
+    </tr>
+    <tr>
+      <td><strong>Claude Sonnet 4</strong></td>
+      <td>Anthropic</td>
+      <td>$3.00</td>
+      <td>$15.00</td>
+      <td><span class="badge-red">~$0.002 ❌ Overkill</span></td>
+      <td>~3.0 s</td>
+      <td><span class="badge-green">✅ Yes (used for drafting)</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Per-Model Verdict</h3>
+
+<div class="provider-grid">
+
+  <div class="provider-card card-recommended">
+    <div class="card-header">
+      <span class="card-rank">🥇 Top Pick</span>
+      <span class="card-name">Gemini 2.0 Flash</span>
+      <span class="card-cost">~$0.0001 / notice</span>
+    </div>
+    <div class="card-body">
+      Already wired into our codebase via <code>GeminiLlmProvider.java</code>. Same Google ecosystem we already use. Excellent at structured JSON output. No new API key or dependency needed. <strong>Recommended choice.</strong>
+    </div>
+    <div class="card-footer-tag tag-green">Zero new dependencies · Lowest operational risk</div>
+  </div>
+
+  <div class="provider-card card-good">
+    <div class="card-header">
+      <span class="card-rank">🥇 Equal Pick</span>
+      <span class="card-name">GPT-4o mini</span>
+      <span class="card-cost">~$0.0001 / notice</span>
+    </div>
+    <div class="card-body">
+      Same cost as Gemini Flash. Already wired via <code>OpenAiLlmProvider.java</code>. Industry-standard JSON mode support — extremely reliable at returning valid structured output. Good as a fallback if Gemini is unavailable.
+    </div>
+    <div class="card-footer-tag tag-blue">Good fallback · OpenAI-compatible endpoint</div>
+  </div>
+
+  <div class="provider-card card-ok">
+    <div class="card-header">
+      <span class="card-rank">🥈 Viable</span>
+      <span class="card-name">Claude Haiku 3.5</span>
+      <span class="card-cost">~$0.0006 / notice</span>
+    </div>
+    <div class="card-body">
+      Already wired via <code>AnthropicLlmProvider.java</code>. Same vendor as our drafting model (Claude Sonnet). However, costs 4–6× more than Gemini Flash or GPT-4o mini for an identical classification task. Not recommended unless we have strong vendor-consolidation reasons.
+    </div>
+    <div class="card-footer-tag tag-yellow">Same vendor as drafter · Higher cost for same output</div>
+  </div>
+
+  <div class="provider-card card-explore">
+    <div class="card-header">
+      <span class="card-rank">🚀 Explore Later</span>
+      <span class="card-name">Llama 3.1 8B via Groq</span>
+      <span class="card-cost">~$0.00003 / notice</span>
+    </div>
+    <div class="card-body">
+      10× cheaper than Gemini Flash. Extremely fast (~300 ms). Open-source model. Groq uses an OpenAI-compatible API, so <code>OpenAiLlmProvider.java</code> can point to it with just a <code>baseUrl</code> change. Main risk: smaller models need more careful prompt engineering to reliably return valid JSON every time.
+    </div>
+    <div class="card-footer-tag tag-purple">New API key needed · Worth evaluating in Phase 2</div>
+  </div>
+
+  <div class="provider-card card-no">
+    <div class="card-header">
+      <span class="card-rank">❌ Do Not Use</span>
+      <span class="card-name">Claude Sonnet 4</span>
+      <span class="card-cost">~$0.002 / notice</span>
+    </div>
+    <div class="card-body">
+      This is our full drafting model. Using it just to classify a notice type is like hiring a senior lawyer to read the notice number off the envelope. 20× more expensive than Gemini Flash for the same classification output, with no quality benefit.
+    </div>
+    <div class="card-footer-tag tag-red">Reserve for drafting only · Not suitable for classification</div>
+  </div>
+
+</div>
+
+<h3>Cost at Scale — 100 Notices/Day</h3>
+
+<table>
+  <thead>
+    <tr><th>Model</th><th>Cost for 100 classifications/day</th><th>Cost per month</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><strong>Gemini 2.0 Flash</strong></td><td>$0.01</td><td><strong>~$0.30</strong></td></tr>
+    <tr><td><strong>GPT-4o mini</strong></td><td>$0.01</td><td><strong>~$0.30</strong></td></tr>
+    <tr><td><strong>Gemini 2.5 Flash</strong></td><td>$0.03</td><td>~$0.90</td></tr>
+    <tr><td><strong>Claude Haiku 3.5</strong></td><td>$0.06</td><td>~$1.80</td></tr>
+    <tr><td><strong>Claude Sonnet 4</strong></td><td>$0.20</td><td>~$6.00 ❌</td></tr>
+  </tbody>
+</table>
+
+<div class="info-box" style="margin-top:16px;">
+  <strong>Bottom line for mentor:</strong> The classifier layer adds practically zero cost regardless of which reasonable model we choose. The real value is the savings it generates — routing even 30% of keyword-miss notices to existing templates instead of full Claude calls saves ~$0.12 per rescued notice. At 30 such rescues/day, that is <strong>~$108/month saved</strong> at a classifier cost of <strong>~$0.30/month</strong>.
+</div>
+
+
+<!-- ===== SECTION 7 (Questions) - already above, footer below ===== -->
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  NoticeDesk Internal Architecture Proposal &nbsp;·&nbsp; September 2026 &nbsp;·&nbsp; Prepared for Mentor Review &nbsp;·&nbsp; Not for external distribution.
+</div>
+
+</div><!-- .page -->
+</body>
+</html>

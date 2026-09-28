@@ -27,10 +27,12 @@ class AnthropicProvider(LLMProvider):
         *,
         api_key: str,
         model: str = "claude-opus-4-7",
+        workspace_id: str | None = None,
         client: Any | None = None,
         timeout_seconds: float = 180.0,
     ) -> None:
         self._api_key = api_key
+        self._workspace_id = workspace_id
         self.model = model
         self._client = client
         self._timeout = timeout_seconds
@@ -44,7 +46,12 @@ class AnthropicProvider(LLMProvider):
             raise LLMError(
                 "anthropic SDK not installed; install it or pick a different provider"
             ) from e
-        self._client = AsyncAnthropic(api_key=self._api_key)
+        
+        kwargs = {"api_key": self._api_key}
+        if self._workspace_id:
+            kwargs["default_headers"] = {"anthropic-workspace-id": self._workspace_id}
+            
+        self._client = AsyncAnthropic(**kwargs)
         return self._client
 
     async def generate_text(
