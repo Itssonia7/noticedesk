@@ -422,6 +422,23 @@ public class DraftingAgent {
         String system = """
                 You are a Senior GST Advocate. Your job is to merge all provided legal chunks and notice context into a formal 15-section written reply to the GST Notice.
 
+                EVERY SINGLE SECTION FROM 1 TO 15 MUST BE PRESENT IN THE OUTPUT JSON:
+                1. Addressee and Reference Block
+                2. Subject
+                3. Synopsis
+                4. Statement of Facts
+                5. Preliminary Objections — Jurisdiction
+                6. Preliminary Objections — Limitation and Procedure
+                7. Para-wise Reply
+                8. Ground 1
+                9. Ground 2
+                10. Ground 3
+                11. Without Prejudice — Alternative Submissions
+                12. Quantum, Interest and Computation
+                13. Prayer
+                14. Annexures
+                15. Declaration and Signature Block
+
                 CRITICAL OUTPUT CONTRACT:
                 Return ONLY a valid JSON object containing exactly 15 sections numbered 1 to 15 matching this schema. Do not output anything outside the JSON object.
                 {
@@ -460,7 +477,36 @@ public class DraftingAgent {
                       "Generate all 15 legal sections in body_html JSON format.";
 
         LlmProvider formatter = llmFactory.getLlmForAgent("formatting");
-        return callProvider(formatter, system, user);
+        int maxTokens = DRAFTING_MAX_OUTPUT_TOKENS;
+        log.info("mergeAndFormatDraft max_tokens passed={}", maxTokens);
+
+        LlmResponse response = formatter.generateText(system, user, maxTokens, DRAFTING_TEMPERATURE);
+        log.info("mergeAndFormatDraft attempt 1: max_tokens={} stop_reason={} tokens_out={}",
+                maxTokens, response.stopReason(), response.outputTokens());
+
+        Map<String, Object> payload = parsePayload(response.content());
+        Set<Integer> missingSections = validate15SectionsContract(payload);
+
+        if (!missingSections.isEmpty()) {
+            log.warn("mergeAndFormatDraft attempt 1 contract validation failed. Missing section numbers: {}. Retrying once with explicit instruction.", missingSections);
+
+            String retryUser = user + "\n\nCRITICAL RETRY CONTRACT REQUIREMENT:\n" +
+                    "Your previous JSON response was missing section numbers " + missingSections + ".\n" +
+                    "You MUST output a valid JSON containing ALL 15 sections numbered contiguous 1 through 15 with no missing section numbers. Re-generate the complete 15-section JSON object now.";
+
+            LlmResponse retryResponse = formatter.generateText(system, retryUser, maxTokens, DRAFTING_TEMPERATURE);
+            log.info("mergeAndFormatDraft attempt 2: max_tokens={} stop_reason={} tokens_out={}",
+                    maxTokens, retryResponse.stopReason(), retryResponse.outputTokens());
+
+            payload = parsePayload(retryResponse.content());
+            Set<Integer> retryMissing = validate15SectionsContract(payload);
+            if (!retryMissing.isEmpty()) {
+                throw new JsonSchemaValidationException("mergeAndFormatDraft failed 15-section contract validation after 1 retry. Missing sections: " + retryMissing);
+            }
+            response = retryResponse;
+        }
+
+        return buildGeneratedDraftFromPayload(payload, formatter, response);
     }
 
     /**
@@ -545,49 +591,8 @@ public class DraftingAgent {
     private GeneratedDraft callProvider(LlmProvider provider, String system, String user) {
         LlmResponse response = provider.generateText(
                 system, user, DRAFTING_MAX_OUTPUT_TOKENS, DRAFTING_TEMPERATURE);
-
-        String raw = stripCodeFence(response.content());
-        Map<String, Object> payload;
-        try {
-            payload = objectMapper.readValue(raw, new TypeReference<>() {});
-        } catch (Exception e) {
-            payload = tryRepairOrExtractSections(raw);
-            if (payload == null) {
-                throw new JsonSchemaValidationException("drafter returned non-JSON: " + e.getMessage());
-            }
-        }
-
-        validatePayload(payload);
-
-        List<Map<String, Object>> rawSections =
-                (List<Map<String, Object>>) payload.get("sections");
-        List<DraftSection> sections = rawSections.stream()
-                .map(s -> {
-                    Object numObj = s.get("num");
-                    int num = (numObj instanceof Number n) ? n.intValue() : Integer.parseInt(numObj.toString());
-                    return new DraftSection(
-                            num,
-                            (String) s.get("title"),
-                            (String) s.get("body_html"));
-                })
-                .toList();
-
-        log.info("draft generated provider={} model={} sections={} tokens_out={}",
-                provider.getName(), response.model(), sections.size(), response.outputTokens());
-
-        if (apiUsageLogService != null) {
-            apiUsageLogService.logUsage(response.providerName(), response.model(), response.inputTokens(), response.outputTokens());
-        }
-
-        return new GeneratedDraft(
-                sections,
-                Objects.toString(payload.getOrDefault("internal_partner_note", ""), ""),
-                Objects.toString(payload.getOrDefault("client_summary", ""), ""),
-                PROMPT_VERSION,
-                response.model(),
-                response.providerName(),
-                response.inputTokens(),
-                response.outputTokens());
+        Map<String, Object> payload = parsePayload(response.content());
+        return buildGeneratedDraftFromPayload(payload, provider, response);
     }
 
     private Map<String, Object> tryRepairOrExtractSections(String raw) {
@@ -890,6 +895,82 @@ public class DraftingAgent {
         }
 
         return sb.toString();
+    }
+
+    public Set<Integer> validate15SectionsContract(Map<String, Object> payload) {
+        if (payload == null || !(payload.get("sections") instanceof List<?> sections)) {
+            Set<Integer> allMissing = new TreeSet<>();
+            for (int i = 1; i <= 15; i++) allMissing.add(i);
+            return allMissing;
+        }
+
+        Set<Integer> presentNumbers = new HashSet<>();
+        for (Object s : sections) {
+            if (s instanceof Map<?, ?> m) {
+                Object numObj = m.get("num");
+                if (numObj instanceof Number n) {
+                    presentNumbers.add(n.intValue());
+                } else if (numObj instanceof String str && str.matches("\\d+")) {
+                    presentNumbers.add(Integer.parseInt(str));
+                }
+            }
+        }
+
+        Set<Integer> missing = new TreeSet<>();
+        for (int i = 1; i <= 15; i++) {
+            if (!presentNumbers.contains(i)) {
+                missing.add(i);
+            }
+        }
+        return missing;
+    }
+
+    private Map<String, Object> parsePayload(String rawContent) {
+        String raw = stripCodeFence(rawContent);
+        Map<String, Object> payload;
+        try {
+            payload = objectMapper.readValue(raw, new TypeReference<>() {});
+        } catch (Exception e) {
+            payload = tryRepairOrExtractSections(raw);
+            if (payload == null) {
+                throw new JsonSchemaValidationException("drafter returned non-JSON: " + e.getMessage());
+            }
+        }
+        validatePayload(payload);
+        return payload;
+    }
+
+    @SuppressWarnings("unchecked")
+    private GeneratedDraft buildGeneratedDraftFromPayload(Map<String, Object> payload, LlmProvider provider, LlmResponse response) {
+        List<Map<String, Object>> rawSections =
+                (List<Map<String, Object>>) payload.get("sections");
+        List<DraftSection> sections = rawSections.stream()
+                .map(s -> {
+                    Object numObj = s.get("num");
+                    int num = (numObj instanceof Number n) ? n.intValue() : Integer.parseInt(numObj.toString());
+                    return new DraftSection(
+                            num,
+                            (String) s.get("title"),
+                            (String) s.get("body_html"));
+                })
+                .toList();
+
+        log.info("draft generated provider={} model={} sections={} tokens_out={} stop_reason={}",
+                provider.getName(), response.model(), sections.size(), response.outputTokens(), response.stopReason());
+
+        if (apiUsageLogService != null) {
+            apiUsageLogService.logUsage(response.providerName(), response.model(), response.inputTokens(), response.outputTokens());
+        }
+
+        return new GeneratedDraft(
+                sections,
+                Objects.toString(payload.getOrDefault("internal_partner_note", ""), ""),
+                Objects.toString(payload.getOrDefault("client_summary", ""), ""),
+                PROMPT_VERSION,
+                response.model(),
+                response.providerName(),
+                response.inputTokens(),
+                response.outputTokens());
     }
 
     // ---- Private: validation ---------------------------------------------
