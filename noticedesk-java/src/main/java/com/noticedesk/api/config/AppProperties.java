@@ -150,6 +150,7 @@ public class AppProperties {
         private double similarityThreshold = 0.70;
         private String demoFirmNameOverride;
         private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
+        private boolean opusDiskCacheEnabled = false;
     }
 
     public String modelForAgent(String agent, String provider) {

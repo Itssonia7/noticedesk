@@ -110,8 +110,9 @@ public class AnthropicLlmProvider implements LlmProvider {
             String content = json.path("content").get(0).path("text").asText();
             int inputTokens = json.path("usage").path("input_tokens").asInt(0);
             int outputTokens = json.path("usage").path("output_tokens").asInt(0);
+            String stopReason = json.path("stop_reason").asText("unknown");
 
-            return new LlmResponse(content, model, "anthropic", inputTokens, outputTokens);
+            return new LlmResponse(content, model, "anthropic", inputTokens, outputTokens, stopReason);
 
         } catch (LlmException e) {
             throw e;

@@ -81,8 +81,9 @@ public class OpenAiLlmProvider implements LlmProvider {
             String content = json.path("choices").get(0).path("message").path("content").asText();
             int inputTokens = json.path("usage").path("prompt_tokens").asInt(0);
             int outputTokens = json.path("usage").path("completion_tokens").asInt(0);
+            String stopReason = json.path("choices").get(0).path("finish_reason").asText("unknown");
 
-            return new LlmResponse(content, model, "openai", inputTokens, outputTokens);
+            return new LlmResponse(content, model, "openai", inputTokens, outputTokens, stopReason);
 
         } catch (LlmException e) {
             throw e;
