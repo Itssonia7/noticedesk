@@ -27,6 +27,8 @@ import java.util.*;
  * persists the draft + citation rows, and emits the audit event — all in a
  * single database transaction.
  */
+import com.noticedesk.api.service.DraftingPipelineService;
+import com.noticedesk.api.service.DraftingPipelineResult;
 import com.noticedesk.api.service.rag.RagStoreService;
 
 @Service
@@ -43,6 +45,7 @@ public class DraftingWorkflow {
     private final GstCorpusMatcherService     corpusMatcherService;
     private final GstTemplateFillerService     templateFillerService;
     private final RagStoreService             ragStoreService;
+    private final DraftingPipelineService     draftingPipelineService;
 
     // ---- Public data types -----------------------------------------------
 
@@ -81,52 +84,12 @@ public class DraftingWorkflow {
                 job.partnerInstructions(),
                 job.includeCrossRegistration());
 
-        // 3. Required 5-Step Pipeline (Option A)
-        // Step 1: Issue Extraction via Claude Haiku
-        DraftingAgent.ExtractionResult extractionResult = draftingAgent.extractIssues(input);
-        log.info("Step 1 Issue Extraction complete: extracted {} issues", extractionResult.issues().size());
-
-        // Step 2: Per-Issue RAG Search & Chunk Deduplication
-        double similarityThreshold = properties.getDrafting().getSimilarityThreshold();
-        Set<String> uniqueChunkContents = new LinkedHashSet<>();
-        List<DraftingAgent.ExtractedIssue> unmatchedIssues = new ArrayList<>();
-
-        for (DraftingAgent.ExtractedIssue issue : extractionResult.issues()) {
-            String query = issue.title() + " " + issue.description();
-            List<com.noticedesk.api.model.rag.LegalChunk> searchResults = ragStoreService.searchLegal(query, 1);
-
-            if (!searchResults.isEmpty() && searchResults.get(0).similarityScore() != null
-                    && searchResults.get(0).similarityScore() >= similarityThreshold) {
-                com.noticedesk.api.model.rag.LegalChunk match = searchResults.get(0);
-                log.info("Issue '{}' MATCHED RAG chunk id={} score={}", issue.title(), match.chunkId(), match.similarityScore());
-                uniqueChunkContents.add(match.content()); // Deduplicated automatically!
-            } else {
-                log.info("Issue '{}' UNMATCHED in RAG (score below threshold {})", issue.title(), similarityThreshold);
-                unmatchedIssues.add(issue);
-            }
-        }
-
-        // Step 3: Unmatched Issues - Claude Opus Template Generation & RAG Caching
-        for (DraftingAgent.ExtractedIssue unmatched : unmatchedIssues) {
-            String opusTemplate = draftingAgent.generateOpusTemplateForUnmatchedIssue(unmatched, input);
-            ragStoreService.saveNewChunk(unmatched.title(), opusTemplate);
-            uniqueChunkContents.add(opusTemplate);
-        }
-
-        if (uniqueChunkContents.isEmpty()) {
-            uniqueChunkContents.add("General Statutory Ground under Tax Law Notice Response");
-        }
-
-        // Step 4: Merge & Format into 15-Section Draft via Claude Haiku
-        GeneratedDraft generated = draftingAgent.mergeAndFormatDraft(input, new ArrayList<>(uniqueChunkContents));
-
-        // Step 5: Verify citations — concatenate all section body_html for extraction
-        String allHtml = generated.sections().stream()
-                .map(DraftSection::bodyHtml)
-                .reduce("", (a, b) -> a + "\n" + b);
-        String citationProvider = resolveCitationProvider();
-        CitationVerificationResult citationResult =
-                citationVerificationAgent.verify(allHtml, citationProvider);
+        // 3. Required 5-Step Pipeline (delegated to DraftingPipelineService)
+        boolean enableDiskCache = properties.getDrafting().isOpusDiskCacheEnabled();
+        DraftingPipelineResult pipelineResult = draftingPipelineService.runPipeline(input, enableDiskCache);
+        GeneratedDraft generated = pipelineResult.draft();
+        List<VerifiedCitation> citations = pipelineResult.citations();
+        Map<String, Object> citationSummary = pipelineResult.citationSummary();
 
         // 5. Compute next draft version for this matter
         Integer nextVersion = jdbc.queryForObject(
@@ -153,7 +116,7 @@ public class DraftingWorkflow {
         String pmapJson;
         try {
             sectionsJson       = objectMapper.writeValueAsString(sectionsData);
-            citationSummaryJson = objectMapper.writeValueAsString(citationResult.summary());
+            citationSummaryJson = objectMapper.writeValueAsString(citationSummary);
             pmapJson           = objectMapper.writeValueAsString(paragraphToSourceMap);
         } catch (Exception e) {
             throw new RuntimeException("Failed to serialise draft data: " + e.getMessage(), e);
@@ -185,7 +148,7 @@ public class DraftingWorkflow {
                         sectionsJson, citationSummaryJson, pmapJson));
 
         // 9. INSERT one row per verified citation (including stripped)
-        for (VerifiedCitation vc : citationResult.citations()) {
+        for (VerifiedCitation vc : citations) {
             Map<String, Object> cp = new HashMap<>();
             cp.put("tid",    job.tenantId().toString());
             cp.put("did",    draftId.toString());
@@ -235,16 +198,16 @@ public class DraftingWorkflow {
                         "prompt_version",   generated.promptVersion(),
                         "tone",             job.tone(),
                         "sections",         sectionsData.size(),
-                        "citation_summary", citationResult.summary()),
+                        "citation_summary", citationSummary),
                 1);
 
         log.info("draft.complete draft_id={} version={} sections={} citations={}",
-                draftId, nextVersion, sectionsData.size(), citationResult.citations().size());
+                draftId, nextVersion, sectionsData.size(), citations.size());
 
         return new GenerateDraftResult(
                 draftId,
                 nextVersion,
-                citationResult.summary(),
+                citationSummary,
                 sectionsData.size());
     }
 
