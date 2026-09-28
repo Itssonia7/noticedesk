@@ -63,9 +63,9 @@ class DraftingPipelineTest {
 
     @Test
     void testMultiIssueNoticeScenarios() {
-        // Index 2 chunks in RAG
-        ragStoreService.indexLegalChunk("Act 1", "Sec 16(2)", "ITC", "Legal Ground for Issue 1");
-        ragStoreService.indexLegalChunk("Act 2", "Sec 74", "Limitation", "Legal Ground for Issue 2");
+        // Index 2 chunks in RAG with matching titles/descriptions for SHA-256 stub vector match
+        ragStoreService.indexLegalChunk("Act 1", "Sec 16(2)", "ITC Mismatch", "ITC Mismatch GSTR 2A vs 3B");
+        ragStoreService.indexLegalChunk("Act 2", "Sec 74", "Section 16(4) Bar", "Section 16(4) Bar Time limitation");
 
         LlmFactory llmFactory = Mockito.mock(LlmFactory.class);
         LlmProvider extractorProvider = Mockito.mock(LlmProvider.class);
@@ -81,8 +81,8 @@ class DraftingPipelineTest {
                 {
                   "notice_info": { "notice_number": "SCN-301" },
                   "issues": [
-                    { "issue_id": "I1", "title": "ITC", "description": "ITC", "statutory_section": "Sec 16(2)" },
-                    { "issue_id": "I2", "title": "Limitation", "description": "Limitation", "statutory_section": "Sec 74" },
+                    { "issue_id": "I1", "title": "ITC Mismatch", "description": "GSTR 2A vs 3B", "statutory_section": "Sec 16(2)" },
+                    { "issue_id": "I2", "title": "Section 16(4) Bar", "description": "Time limitation", "statutory_section": "Sec 74" },
                     { "issue_id": "I3", "title": "Novel Crypto Tax", "description": "Unknown Crypto Tax", "statutory_section": "Sec 99" }
                   ]
                 }
