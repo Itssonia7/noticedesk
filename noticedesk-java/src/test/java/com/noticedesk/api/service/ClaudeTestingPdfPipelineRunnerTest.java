@@ -63,7 +63,10 @@ public class ClaudeTestingPdfPipelineRunnerTest {
             }
         }
 
-        if (resolvedApiKey != null && !resolvedApiKey.isBlank()) {
+        boolean enableE2e = "true".equalsIgnoreCase(System.getProperty("enable.e2e.tests"))
+                || System.getenv("ENABLE_E2E_TESTS") != null;
+
+        if (enableE2e && resolvedApiKey != null && !resolvedApiKey.isBlank()) {
             properties.getLlm().setProviderPrimary("anthropic");
             properties.getLlm().getAnthropic().setApiKey(resolvedApiKey);
             properties.getLlm().getAnthropic().setModel("claude-opus-4-7");
@@ -73,7 +76,8 @@ public class ClaudeTestingPdfPipelineRunnerTest {
             properties.getLlm().getAnthropic().setTimeoutSeconds(300.0);
             System.out.println("Loaded Anthropic API Key for Java pipeline execution.");
         } else {
-            System.out.println("WARNING: Anthropic API Key not found. Falling back to stub.");
+            properties.getLlm().setProviderPrimary("stub");
+            System.out.println("Using stub LLM provider for standard automated unit test suite.");
         }
 
         llmFactory = new LlmFactory(properties);

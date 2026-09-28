@@ -56,14 +56,18 @@ public class ClaudeOpusBatchRunnerTest {
             }
         }
 
-        if (apiKey != null && !apiKey.isBlank()) {
+        boolean enableE2e = "true".equalsIgnoreCase(System.getProperty("enable.e2e.tests"))
+                || System.getenv("ENABLE_E2E_TESTS") != null;
+
+        if (enableE2e && apiKey != null && !apiKey.isBlank()) {
             properties.getLlm().setProviderPrimary("anthropic");
             properties.getLlm().getAnthropic().setApiKey(apiKey);
             properties.getLlm().getAnthropic().setModel("claude-opus-4-7");
             properties.getLlm().getAnthropic().setTimeoutSeconds(300.0);
             System.out.println("Loaded Anthropic API Key for Claude Opus execution.");
         } else {
-            System.out.println("WARNING: Anthropic API Key not found. Falling back to stub.");
+            properties.getLlm().setProviderPrimary("stub");
+            System.out.println("Using stub LLM provider for standard automated unit test suite.");
         }
 
         LlmFactory llmFactory = new LlmFactory(properties);

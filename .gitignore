@@ -53,3 +53,8 @@ pgdata/
 test_venv/
 *.pdf
 
+# Test artifacts & cache
+.opus_cache.json
+output/Sunrise_Polymers_*.docx
+scratch/generate_change_audit_pdf.py
+
