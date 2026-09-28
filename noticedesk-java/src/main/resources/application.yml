@@ -77,12 +77,16 @@ noticedesk:
   llm:
     provider-primary: ${LLM_PROVIDER_PRIMARY:stub}
     provider-secondary: ${LLM_PROVIDER_SECONDARY:}
-    model-drafting: ${LLM_MODEL_DRAFTING:claude-opus-4-7}
-    model-triage: ${LLM_MODEL_TRIAGE:claude-opus-4-7}
-    model-parsing: ${LLM_MODEL_PARSING:claude-opus-4-7}
+    model-extraction: ${LLM_MODEL_EXTRACTION:claude-haiku-4-5-20251001}
+    model-formatting: ${LLM_MODEL_FORMATTING:claude-haiku-4-5-20251001}
+    model-opus: ${LLM_MODEL_OPUS:claude-opus-4-7}
+    model-drafting: ${LLM_MODEL_DRAFTING:claude-haiku-4-5-20251001}
+    model-triage: ${LLM_MODEL_TRIAGE:claude-haiku-4-5-20251001}
+    model-parsing: ${LLM_MODEL_PARSING:claude-haiku-4-5-20251001}
     stub-default-canned: ${STUB_DEFAULT_CANNED:acme_mh_asmt10}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:}
+      workspace-id: ${ANTHROPIC_WORKSPACE_ID:}
       model: ${ANTHROPIC_MODEL:claude-opus-4-7}
       timeout-seconds: ${ANTHROPIC_TIMEOUT_SECONDS:180.0}
     openai:

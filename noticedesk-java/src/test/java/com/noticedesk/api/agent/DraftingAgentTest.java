@@ -78,4 +78,59 @@ class DraftingAgentTest {
         assertTrue(input.confidenceAssessment().isHighConfidence());
         assertTrue(input.confidenceAssessment().guidedTemplate().contains("GOLD-STANDARD TEMPLATE GUIDANCE"));
     }
+
+    @Test
+    void testExtractionFailure_RetriesOnceAndThrowsException() {
+        LlmFactory llmFactory = Mockito.mock(LlmFactory.class);
+        com.noticedesk.api.service.llm.LlmProvider mockProvider = Mockito.mock(com.noticedesk.api.service.llm.LlmProvider.class);
+        Mockito.when(llmFactory.getLlmForAgent("extraction")).thenReturn(mockProvider);
+        Mockito.when(mockProvider.generateText(Mockito.anyString(), Mockito.anyString(), Mockito.anyInt(), Mockito.anyDouble()))
+                .thenReturn(new com.noticedesk.api.service.llm.LlmResponse("Invalid non-JSON text response", "haiku", "anthropic", 10, 10));
+
+        DraftingAgent agent = new DraftingAgent(llmFactory, new ObjectMapper(), ragStoreService, null);
+        DraftingAgent.DraftingInput input = createSampleInput();
+
+        assertThrows(com.noticedesk.api.service.llm.JsonSchemaValidationException.class, () -> agent.extractIssues(input));
+        Mockito.verify(mockProvider, Mockito.times(2)).generateText(Mockito.anyString(), Mockito.anyString(), Mockito.anyInt(), Mockito.anyDouble());
+    }
+
+    @Test
+    void testExtractionSuccess() {
+        LlmFactory llmFactory = Mockito.mock(LlmFactory.class);
+        com.noticedesk.api.service.llm.LlmProvider mockProvider = Mockito.mock(com.noticedesk.api.service.llm.LlmProvider.class);
+        Mockito.when(llmFactory.getLlmForAgent("extraction")).thenReturn(mockProvider);
+        String validJson = """
+                {
+                  "notice_info": { "notice_number": "SCN-101", "total_demand_amount": 100000.0 },
+                  "issues": [
+                    { "issue_id": "ISSUE-1", "title": "ITC Mismatch", "description": "GSTR 2A vs 3B", "statutory_section": "Section 16(2)" },
+                    { "issue_id": "ISSUE-2", "title": "Section 16(4) Bar", "description": "Time limitation", "statutory_section": "Section 16(4)" }
+                  ]
+                }
+                """;
+        Mockito.when(mockProvider.generateText(Mockito.anyString(), Mockito.anyString(), Mockito.anyInt(), Mockito.anyDouble()))
+                .thenReturn(new com.noticedesk.api.service.llm.LlmResponse(validJson, "haiku", "anthropic", 10, 10));
+
+        DraftingAgent agent = new DraftingAgent(llmFactory, new ObjectMapper(), ragStoreService, null);
+        DraftingAgent.ExtractionResult result = agent.extractIssues(createSampleInput());
+
+        assertNotNull(result);
+        assertEquals(2, result.issues().size());
+        assertEquals("ITC Mismatch", result.issues().get(0).title());
+    }
+
+    private DraftingAgent.DraftingInput createSampleInput() {
+        return new DraftingAgent.DraftingInput(
+                UUID.randomUUID(), "firm", "",
+                "Acme Traders Pvt Ltd", "ABCDE1234F", "PRIVATE_LIMITED",
+                "GST", "27ABCDE1234F1Z5", "Maharashtra",
+                "GST", "2017-18", null,
+                Map.of("notice_number", "DRC-01/2023", "demand_amount", 500000.0),
+                Map.of(),
+                "Show Cause Notice OCR Text Excerpt",
+                List.of(), List.of(), List.of(), List.of(),
+                List.of(), List.of(),
+                null, null
+        );
+    }
 }

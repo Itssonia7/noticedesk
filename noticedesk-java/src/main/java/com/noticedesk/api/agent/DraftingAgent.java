@@ -72,6 +72,24 @@ public class DraftingAgent {
             Integer            inputTokens,
             Integer            outputTokens) {}
 
+    public record ExtractedIssue(
+            String issueId,
+            String title,
+            String description,
+            String statutorySection) {}
+
+    public record ExtractedNoticeInfo(
+            String noticeNumber,
+            String dinOrRfn,
+            String issueDate,
+            String taxPeriod,
+            String authority,
+            Double totalDemandAmount) {}
+
+    public record ExtractionResult(
+            ExtractedNoticeInfo noticeInfo,
+            List<ExtractedIssue> issues) {}
+
     public record DraftingInput(
             UUID                      matterId,
             String                    tone,
@@ -283,6 +301,166 @@ public class DraftingAgent {
                 pendingReqs,
                 ragBundle,
                 confidenceDec);
+    }
+
+    /**
+     * Step 1: Issue Extraction via Claude Haiku.
+     * Extracts structured issues and notice info. Retries once if invalid JSON is returned.
+     */
+    @SuppressWarnings("unchecked")
+    public ExtractionResult extractIssues(DraftingInput input) {
+        String system = """
+                You are an expert Indian Tax Advocate assistant.
+                Read the tax notice text and extract all separate issues/allegations/sub-issues, plus essential notice metadata.
+                Return ONLY a valid JSON object with the following schema:
+                {
+                  "notice_info": {
+                    "notice_number": "SCN Number or null",
+                    "din_or_rfn": "DIN/RFN or null",
+                    "issue_date": "YYYY-MM-DD or null",
+                    "tax_period": "FY 2017-18 or null",
+                    "authority": "Proper Officer Ward X or null",
+                    "total_demand_amount": 0.0
+                  },
+                  "issues": [
+                    {
+                      "issue_id": "ISSUE-1",
+                      "title": "Short title of the discrepancy",
+                      "description": "Detailed factual and legal description of this specific issue",
+                      "statutory_section": "Relevant section, e.g. Section 16(2)(c) / Section 73"
+                    }
+                  ]
+                }
+                """;
+
+        String user = "Notice metadata:\n" + input.notice() +
+                      "\n\nOCR Excerpt:\n" + input.noticeOcrExcerpt();
+
+        LlmProvider extractor = llmFactory.getLlmForAgent("extraction");
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            try {
+                LlmResponse resp = extractor.generateText(system, user, 4000, 0.0);
+                if (apiUsageLogService != null) {
+                    apiUsageLogService.logUsage(resp.providerName(), resp.model(), resp.inputTokens(), resp.outputTokens());
+                }
+                String raw = stripCodeFence(resp.content());
+                Map<String, Object> parsed = objectMapper.readValue(raw, new TypeReference<>() {});
+
+                List<Map<String, Object>> rawIssues = (List<Map<String, Object>>) parsed.get("issues");
+                if (rawIssues != null && !rawIssues.isEmpty()) {
+                    List<ExtractedIssue> issues = new ArrayList<>();
+                    for (int i = 0; i < rawIssues.size(); i++) {
+                        Map<String, Object> m = rawIssues.get(i);
+                        issues.add(new ExtractedIssue(
+                                Objects.toString(m.getOrDefault("issue_id", "ISSUE-" + (i + 1)), "ISSUE-" + (i + 1)),
+                                Objects.toString(m.getOrDefault("title", "Issue " + (i + 1)), "Issue " + (i + 1)),
+                                Objects.toString(m.getOrDefault("description", ""), ""),
+                                Objects.toString(m.getOrDefault("statutory_section", "Section 73"), "Section 73")
+                        ));
+                    }
+
+                    Map<String, Object> infoMap = (Map<String, Object>) parsed.getOrDefault("notice_info", Map.of());
+                    ExtractedNoticeInfo info = new ExtractedNoticeInfo(
+                            Objects.toString(infoMap.get("notice_number"), null),
+                            Objects.toString(infoMap.get("din_or_rfn"), null),
+                            Objects.toString(infoMap.get("issue_date"), null),
+                            Objects.toString(infoMap.get("tax_period"), null),
+                            Objects.toString(infoMap.get("authority"), null),
+                            infoMap.get("total_demand_amount") instanceof Number n ? n.doubleValue() : null
+                    );
+
+                    log.info("extract_issues_success attempt={} issuesCount={}", attempt, issues.size());
+                    return new ExtractionResult(info, issues);
+                }
+                log.warn("extract_issues_attempt_invalid_json attempt={} raw={}", attempt, raw);
+            } catch (Exception e) {
+                log.warn("extract_issues_attempt_failed attempt={} error={}", attempt, e.getMessage());
+            }
+        }
+
+        log.error("extract_issues_failed_after_retry");
+        throw new JsonSchemaValidationException("Notice issue extraction failed: returned invalid JSON after retry");
+    }
+
+    /**
+     * Step 3: Unmatched Issue Template Generation via Claude Opus.
+     * Generates a statutory rebuttal template for ONLY a single unmatched issue.
+     */
+    public String generateOpusTemplateForUnmatchedIssue(ExtractedIssue issue, DraftingInput input) {
+        log.info("Generating Opus template chunk for unmatched issue: {}", issue.title());
+        String system = """
+                You are a Senior GST Advocate. Generate a comprehensive legal rebuttal argument template for ONLY the single unmatched issue specified.
+                Provide statutory grounds, CBIC circular references, and judicial precedents.
+                Return clear, structured text for this issue only.
+                """;
+
+        String user = "Client: " + input.clientLegalName() + "\n" +
+                      "Law: " + input.law() + "\n\n" +
+                      "UNMATCHED ISSUE DETAILS:\n" +
+                      "Title: " + issue.title() + "\n" +
+                      "Statutory Section: " + issue.statutorySection() + "\n" +
+                      "Description: " + issue.description();
+
+        LlmProvider opusProvider = llmFactory.getOpusProvider();
+        LlmResponse resp = opusProvider.generateText(system, user, 4000, 0.1);
+
+        if (apiUsageLogService != null) {
+            apiUsageLogService.logUsage(resp.providerName(), resp.model(), resp.inputTokens(), resp.outputTokens());
+        }
+
+        return resp.content().strip();
+    }
+
+    /**
+     * Step 4: Merge & Format Draft via Claude Haiku.
+     * Merges all deduplicated chunks into a complete 15-section GeneratedDraft.
+     */
+    public GeneratedDraft mergeAndFormatDraft(DraftingInput input, List<String> deduplicatedChunks) {
+        log.info("Merging and formatting {} unique chunks into 15-section final draft via Haiku.", deduplicatedChunks.size());
+
+        String system = """
+                You are a Senior GST Advocate. Your job is to merge all provided legal chunks and notice context into a formal 15-section written reply to the GST Notice.
+
+                CRITICAL OUTPUT CONTRACT:
+                Return ONLY a valid JSON object containing exactly 15 sections numbered 1 to 15 matching this schema. Do not output anything outside the JSON object.
+                {
+                  "sections": [
+                    { "num": 1, "title": "Addressee and Reference Block", "body_html": "<p>...</p>" },
+                    { "num": 2, "title": "Subject", "body_html": "<p>...</p>" },
+                    { "num": 3, "title": "Synopsis", "body_html": "<p>...</p>" },
+                    { "num": 4, "title": "Statement of Facts", "body_html": "<p>...</p>" },
+                    { "num": 5, "title": "Preliminary Objections — Jurisdiction", "body_html": "<p>...</p>" },
+                    { "num": 6, "title": "Preliminary Objections — Limitation and Procedure", "body_html": "<p>...</p>" },
+                    { "num": 7, "title": "Para-wise Reply", "body_html": "<p>...</p>" },
+                    { "num": 8, "title": "Ground 1", "body_html": "<p>...</p>" },
+                    { "num": 9, "title": "Ground 2", "body_html": "<p>...</p>" },
+                    { "num": 10, "title": "Ground 3", "body_html": "<p>...</p>" },
+                    { "num": 11, "title": "Without Prejudice — Alternative Submissions", "body_html": "<p>...</p>" },
+                    { "num": 12, "title": "Quantum, Interest and Computation", "body_html": "<p>...</p>" },
+                    { "num": 13, "title": "Prayer", "body_html": "<p>...</p>" },
+                    { "num": 14, "title": "Annexures", "body_html": "<p>...</p>" },
+                    { "num": 15, "title": "Declaration and Signature Block", "body_html": "<p>...</p>" }
+                  ],
+                  "internal_partner_note": "Brief review note for partner",
+                  "client_summary": "Layman summary for client"
+                }
+                """;
+
+        StringBuilder chunksBlock = new StringBuilder();
+        for (int i = 0; i < deduplicatedChunks.size(); i++) {
+            chunksBlock.append("--- LEGAL CHUNK ").append(i + 1).append(" ---\n")
+                       .append(deduplicatedChunks.get(i)).append("\n\n");
+        }
+
+        String user = renderUserPrompt(loadPromptTemplate()[1], input) +
+                      "\n\n--- DEDUPLICATED RETRIEVED & GENERATED LEGAL CHUNKS ---\n" +
+                      chunksBlock +
+                      "\n----------------------------------------------------\n" +
+                      "Generate all 15 legal sections in body_html JSON format.";
+
+        LlmProvider formatter = llmFactory.getLlmForAgent("formatting");
+        return callProvider(formatter, system, user);
     }
 
     /**

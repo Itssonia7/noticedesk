@@ -41,15 +41,19 @@ public class AppProperties {
         private Anthropic anthropic = new Anthropic();
         private OpenAi openai = new OpenAi();
         private Gemini gemini = new Gemini();
-        // Per-agent model overrides — default to Opus for all legal testing until requested otherwise
-        private String modelDrafting = "claude-opus-4-7";
-        private String modelTriage = "claude-opus-4-7";
-        private String modelParsing = "claude-opus-4-7";
+        // Per-agent model overrides
+        private String modelExtraction = "claude-haiku-4-5-20251001";
+        private String modelFormatting = "claude-haiku-4-5-20251001";
+        private String modelOpus = "claude-opus-4-7";
+        private String modelDrafting = "claude-haiku-4-5-20251001";
+        private String modelTriage = "claude-haiku-4-5-20251001";
+        private String modelParsing = "claude-haiku-4-5-20251001";
         private String stubDefaultCanned;
 
         @Data
         public static class Anthropic {
             private String apiKey;
+            private String workspaceId;
             private String model = "claude-opus-4-7";
             private double timeoutSeconds = 180.0;
         }
@@ -143,6 +147,7 @@ public class AppProperties {
         private int maxOutputTokens = 16000;
         private int supportingDocExcerptChars = 5000;
         private int supportingEvidenceMaxChars = 40000;
+        private double similarityThreshold = 0.70;
         private String demoFirmNameOverride;
         private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
     }
@@ -156,9 +161,12 @@ public class AppProperties {
             return "";
         }
         String override = switch (agent) {
-            case "drafting" -> llm.modelDrafting;
-            case "triage"   -> llm.modelTriage;
-            case "parsing"  -> llm.modelParsing;
+            case "extraction" -> llm.modelExtraction;
+            case "formatting" -> llm.modelFormatting;
+            case "opus", "template_generation" -> llm.modelOpus;
+            case "drafting"   -> llm.modelDrafting;
+            case "triage"     -> llm.modelTriage;
+            case "parsing"    -> llm.modelParsing;
             default         -> "";
         };
         return (override != null && !override.isBlank()) ? override : llm.anthropic.model;

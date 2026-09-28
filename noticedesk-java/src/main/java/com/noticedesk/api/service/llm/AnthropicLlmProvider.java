@@ -27,7 +27,7 @@ public class AnthropicLlmProvider implements LlmProvider {
     private final String model;
     private final RestClient restClient;
 
-    public AnthropicLlmProvider(String apiKey, String model, double timeoutSeconds) {
+    public AnthropicLlmProvider(String apiKey, String model, double timeoutSeconds, String workspaceId) {
         this.apiKey = apiKey;
         this.model = model;
 
@@ -41,11 +41,6 @@ public class AnthropicLlmProvider implements LlmProvider {
                 .build();
         HttpComponentsClientHttpRequestFactory factory = new HttpComponentsClientHttpRequestFactory(httpClient);
 
-        String workspaceId = System.getenv("ANTHROPIC_WORKSPACE_ID");
-        if (workspaceId == null || workspaceId.isBlank()) {
-            workspaceId = "wrkspc_014N4cnyTQiXVFyARaUjgt45";
-        }
-
         RestClient.Builder builder = RestClient.builder()
                 .requestFactory(factory)
                 .baseUrl(API_URL)
@@ -58,6 +53,10 @@ public class AnthropicLlmProvider implements LlmProvider {
         }
 
         this.restClient = builder.build();
+    }
+
+    public AnthropicLlmProvider(String apiKey, String model, double timeoutSeconds) {
+        this(apiKey, model, timeoutSeconds, null);
     }
 
     @Override

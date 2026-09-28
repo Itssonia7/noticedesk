@@ -81,44 +81,46 @@ public class DraftingWorkflow {
                 job.partnerInstructions(),
                 job.includeCrossRegistration());
 
-        // 3. Automated GST Corpus Matching & 4-Tier Divergence Dispatching
-        Optional<GstCorpusMatcherService.CorpusMatchResult> matchOpt =
-                corpusMatcherService.matchNotice(input.notice(), input.noticeOcrExcerpt());
+        // 3. Required 5-Step Pipeline (Option A)
+        // Step 1: Issue Extraction via Claude Haiku
+        DraftingAgent.ExtractionResult extractionResult = draftingAgent.extractIssues(input);
+        log.info("Step 1 Issue Extraction complete: extracted {} issues", extractionResult.issues().size());
 
-        GeneratedDraft generated;
-        if (matchOpt.isPresent()) {
-            GstCorpusMatcherService.CorpusMatchResult match = matchOpt.get();
-            log.info("Corpus match evaluation: serial={} kind={} strategy={} score={}",
-                    match.serial(), match.noticeKind(), match.strategy(), match.matchScore());
+        // Step 2: Per-Issue RAG Search & Chunk Deduplication
+        double similarityThreshold = properties.getDrafting().getSimilarityThreshold();
+        Set<String> uniqueChunkContents = new LinkedHashSet<>();
+        List<DraftingAgent.ExtractedIssue> unmatchedIssues = new ArrayList<>();
 
-            if (match.strategy() == GstCorpusMatcherService.Strategy.FAST_TRACK) {
-                // Case 1: 100% Single Exact Match -> Fast-Track Template Filler ($0 drafting token cost)
-                log.info("Case 1 triggered: Fast-Track Readymade Template Fill for serial={} (Zero Token Cost)", match.serial());
-                generated = templateFillerService.fillTemplate(input, match.draftPath(), match.noticeKind());
-            } else if (match.strategy() == GstCorpusMatcherService.Strategy.EXACT_MULTI) {
-                // Case 2: 100% Exact Multi-Issue Match -> Multi-Chunk Synthesis via Haiku/Gemini
-                log.info("Case 2 triggered: 100% Multi-Issue Synthesis for serial={}", match.serial());
-                String referenceText = templateFillerService.extractAndPopulateTemplate(match.draftPath(), input);
-                generated = draftingAgent.generateDraft(input, referenceText);
-            } else if (match.strategy() == GstCorpusMatcherService.Strategy.HYBRID) {
-                // Case 3: Partial Match (Known + New Issue) -> Synthesize + Auto-Cache New Issue Chunk to RAG
-                log.info("Case 3 triggered: Partial Match (Known + New Issue). Drafting and caching new issue to RAG for serial={}", match.serial());
-                String referenceText = templateFillerService.extractAndPopulateTemplate(match.draftPath(), input);
-                generated = draftingAgent.generateDraft(input, referenceText);
-                savePartialMatchNewChunk(input, generated);
+        for (DraftingAgent.ExtractedIssue issue : extractionResult.issues()) {
+            String query = issue.title() + " " + issue.description();
+            List<com.noticedesk.api.model.rag.LegalChunk> searchResults = ragStoreService.searchLegal(query, 1);
+
+            if (!searchResults.isEmpty() && searchResults.get(0).similarityScore() != null
+                    && searchResults.get(0).similarityScore() >= similarityThreshold) {
+                com.noticedesk.api.model.rag.LegalChunk match = searchResults.get(0);
+                log.info("Issue '{}' MATCHED RAG chunk id={} score={}", issue.title(), match.chunkId(), match.similarityScore());
+                uniqueChunkContents.add(match.content()); // Deduplicated automatically!
             } else {
-                // Case 4: 100% Novel Notice -> Deep Drafting via Claude Opus + Auto-Cache Solution to RAG
-                log.info("Case 4 triggered: 100% Novel Notice. Drafting via Claude Opus & auto-caching solution into RAG.");
-                generated = draftingAgent.generateOpusDraft(input);
-                cacheNovelDraft(input, generated);
+                log.info("Issue '{}' UNMATCHED in RAG (score below threshold {})", issue.title(), similarityThreshold);
+                unmatchedIssues.add(issue);
             }
-        } else {
-            log.info("No corpus match (Case 4 Fallback). Drafting via Claude Opus & caching.");
-            generated = draftingAgent.generateOpusDraft(input);
-            cacheNovelDraft(input, generated);
         }
 
-        // 4. Verify citations — concatenate all section body_html for extraction
+        // Step 3: Unmatched Issues - Claude Opus Template Generation & RAG Caching
+        for (DraftingAgent.ExtractedIssue unmatched : unmatchedIssues) {
+            String opusTemplate = draftingAgent.generateOpusTemplateForUnmatchedIssue(unmatched, input);
+            ragStoreService.saveNewChunk(unmatched.title(), opusTemplate);
+            uniqueChunkContents.add(opusTemplate);
+        }
+
+        if (uniqueChunkContents.isEmpty()) {
+            uniqueChunkContents.add("General Statutory Ground under Tax Law Notice Response");
+        }
+
+        // Step 4: Merge & Format into 15-Section Draft via Claude Haiku
+        GeneratedDraft generated = draftingAgent.mergeAndFormatDraft(input, new ArrayList<>(uniqueChunkContents));
+
+        // Step 5: Verify citations — concatenate all section body_html for extraction
         String allHtml = generated.sections().stream()
                 .map(DraftSection::bodyHtml)
                 .reduce("", (a, b) -> a + "\n" + b);

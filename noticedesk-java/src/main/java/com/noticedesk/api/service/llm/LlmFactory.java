@@ -52,14 +52,18 @@ public class LlmFactory {
     }
 
     /**
-     * Returns a dedicated Claude Opus provider for Case 4 novel notice deep drafting.
+     * Returns a dedicated Claude Opus provider for unmatched template generation.
      */
     public LlmProvider getOpusProvider() {
         String apiKey = properties.getLlm().getAnthropic().getApiKey();
         if (apiKey != null && !apiKey.isBlank()) {
-            return getOrCreate("anthropic", "claude-opus-4-7");
+            String opusModel = properties.getLlm().getModelOpus();
+            if (opusModel == null || opusModel.isBlank()) {
+                opusModel = properties.getLlm().getAnthropic().getModel();
+            }
+            return getOrCreate("anthropic", opusModel);
         }
-        return getLlmForAgent("drafting");
+        return getLlmForAgent("formatting");
     }
 
     /**
@@ -100,7 +104,7 @@ public class LlmFactory {
                             "noticedesk.llm.anthropic.api-key must be set for anthropic provider");
                 }
                 String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
-                yield new AnthropicLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds());
+                yield new AnthropicLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds(), cfg.getWorkspaceId());
             }
             case "openai" -> {
                 AppProperties.Llm.OpenAi cfg = properties.getLlm().getOpenai();

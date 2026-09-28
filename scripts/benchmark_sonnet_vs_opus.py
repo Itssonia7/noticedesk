@@ -139,7 +139,7 @@ def main():
             if line.startswith("ANTHROPIC_API_KEY="):
                 api_key = line.strip().split("=")[1]
     
-    workspace_id = "wrkspc_014N4cnyTQiXVFyARaUjgt45"
+    workspace_id = os.environ.get("ANTHROPIC_WORKSPACE_ID", "")
     
     print(f"=== Running Full Untruncated Benchmark (max_tokens: 4096 + Continuation) ===")
     
