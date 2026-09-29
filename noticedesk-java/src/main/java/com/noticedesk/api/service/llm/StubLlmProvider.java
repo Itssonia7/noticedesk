@@ -51,14 +51,45 @@ public class StubLlmProvider implements LlmProvider {
     private static final String DRAFT_RESPONSE = """
             {
               "sections": [
-                {"num": 1, "title": "Overview",       "body_html": "<p>Stub draft — Section 1 Overview.</p>"},
-                {"num": 2, "title": "Facts of the Case", "body_html": "<p>Stub draft — Section 2 Facts.</p>"},
-                {"num": 3, "title": "Legal Grounds",  "body_html": "<p>Stub draft — Section 3 Grounds.</p>"},
-                {"num": 4, "title": "Submissions",    "body_html": "<p>Stub draft — Section 4 Submissions.</p>"},
-                {"num": 5, "title": "Prayer",         "body_html": "<p>Stub draft — Section 5 Prayer.</p>"}
+                {"num": 1,  "title": "Addressee and Reference Block", "body_html": "<p>Stub draft — Section 1.</p>"},
+                {"num": 2,  "title": "Subject",                      "body_html": "<p>Stub draft — Section 2.</p>"},
+                {"num": 3,  "title": "Synopsis",                     "body_html": "<p>Stub draft — Section 3.</p>"},
+                {"num": 4,  "title": "Statement of Facts",           "body_html": "<p>Stub draft — Section 4.</p>"},
+                {"num": 5,  "title": "Preliminary Objections — Jurisdiction", "body_html": "<p>Stub draft — Section 5.</p>"},
+                {"num": 6,  "title": "Preliminary Objections — Limitation and Procedure", "body_html": "<p>Stub draft — Section 6.</p>"},
+                {"num": 7,  "title": "Para-wise Reply",              "body_html": "<p>Stub draft — Section 7.</p>"},
+                {"num": 8,  "title": "Ground 1",                     "body_html": "<p>Stub draft — Section 8.</p>"},
+                {"num": 9,  "title": "Ground 2",                     "body_html": "<p>Stub draft — Section 9.</p>"},
+                {"num": 10, "title": "Ground 3",                     "body_html": "<p>Stub draft — Section 10.</p>"},
+                {"num": 11, "title": "Without Prejudice — Alternative Submissions", "body_html": "<p>Stub draft — Section 11.</p>"},
+                {"num": 12, "title": "Quantum, Interest and Computation", "body_html": "<p>Stub draft — Section 12.</p>"},
+                {"num": 13, "title": "Prayer",                       "body_html": "<p>Stub draft — Section 13.</p>"},
+                {"num": 14, "title": "Annexures",                    "body_html": "<p>Stub draft — Section 14.</p>"},
+                {"num": 15, "title": "Declaration and Signature Block", "body_html": "<p>Stub draft — Section 15.</p>"}
               ],
               "internal_partner_note": "Stub draft generated for testing.",
               "client_summary": "This is a stub response. Please configure a real LLM provider."
+            }
+            """;
+
+    private static final String EXTRACTION_RESPONSE = """
+            {
+              "notice_info": {
+                "notice_number": "SCN-STUB-001",
+                "din_or_rfn": "DIN-STUB-001",
+                "issue_date": "2024-01-01",
+                "tax_period": "FY 2017-18",
+                "authority": "Proper Officer Ward 1",
+                "total_demand_amount": 100000.0
+              },
+              "issues": [
+                {
+                  "issue_id": "ISSUE-1",
+                  "title": "Stub Issue 1 - ITC Mismatch",
+                  "description": "Stub description for ITC mismatch discrepancy.",
+                  "statutory_section": "Section 16(2)(c)"
+                }
+              ]
             }
             """;
 
@@ -118,6 +149,9 @@ public class StubLlmProvider implements LlmProvider {
         String lower = system.toLowerCase();
         if (lower.contains("document_type") || lower.contains("parse") || lower.contains("ocr")) {
             return PARSE_RESPONSE;
+        }
+        if (lower.contains("issue_id") || lower.contains("extraction") || lower.contains("allegations")) {
+            return EXTRACTION_RESPONSE;
         }
         if (lower.contains("sections") || lower.contains("draft") || lower.contains("reply")) {
             return DRAFT_RESPONSE;

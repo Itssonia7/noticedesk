@@ -55,6 +55,7 @@ test_venv/
 
 # Test artifacts & cache
 .opus_cache.json
-output/Sunrise_Polymers_*.docx
+output/*.docx
+output/*.txt
 scratch/generate_change_audit_pdf.py
 

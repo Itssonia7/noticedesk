@@ -39,6 +39,7 @@ public class ClaudeTestingPdfPipelineRunnerTest {
     private GstTemplateFillerService templateFillerService;
     private RagStoreService ragStoreService;
     private DraftingAgent draftingAgent;
+    private DraftingPipelineService draftingPipelineService;
     private CitationVerificationAgent citationVerificationAgent;
     private DocxExportService docxExportService;
     private String resolvedApiKey;
@@ -48,16 +49,18 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         properties = new AppProperties();
         objectMapper = new ObjectMapper();
 
-        // 1. Resolve Anthropic API Key
+        // 1. Resolve Anthropic API Key & Workspace ID
         resolvedApiKey = System.getenv("ANTHROPIC_API_KEY");
-        if (resolvedApiKey == null || resolvedApiKey.isBlank()) {
+        String resolvedWorkspaceId = System.getenv("ANTHROPIC_WORKSPACE_ID");
+        if (resolvedApiKey == null || resolvedApiKey.isBlank() || resolvedWorkspaceId == null || resolvedWorkspaceId.isBlank()) {
             Path envPath = Paths.get("../apps/api/.env");
             if (Files.exists(envPath)) {
                 List<String> lines = Files.readAllLines(envPath);
                 for (String line : lines) {
-                    if (line.startsWith("ANTHROPIC_API_KEY=")) {
+                    if ((resolvedApiKey == null || resolvedApiKey.isBlank()) && line.startsWith("ANTHROPIC_API_KEY=")) {
                         resolvedApiKey = line.substring("ANTHROPIC_API_KEY=".length()).trim();
-                        break;
+                    } else if ((resolvedWorkspaceId == null || resolvedWorkspaceId.isBlank()) && line.startsWith("ANTHROPIC_WORKSPACE_ID=")) {
+                        resolvedWorkspaceId = line.substring("ANTHROPIC_WORKSPACE_ID=".length()).trim();
                     }
                 }
             }
@@ -69,12 +72,15 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         if (enableE2e && resolvedApiKey != null && !resolvedApiKey.isBlank()) {
             properties.getLlm().setProviderPrimary("anthropic");
             properties.getLlm().getAnthropic().setApiKey(resolvedApiKey);
+            if (resolvedWorkspaceId != null && !resolvedWorkspaceId.isBlank()) {
+                properties.getLlm().getAnthropic().setWorkspaceId(resolvedWorkspaceId);
+            }
             properties.getLlm().getAnthropic().setModel("claude-opus-4-7");
             properties.getLlm().setModelDrafting("claude-opus-4-7");
             properties.getLlm().setModelParsing("claude-opus-4-7");
             properties.getLlm().setModelTriage("claude-opus-4-7");
             properties.getLlm().getAnthropic().setTimeoutSeconds(300.0);
-            System.out.println("Loaded Anthropic API Key for Java pipeline execution.");
+            System.out.println("Loaded Anthropic API Key & Workspace ID for Java pipeline execution.");
         } else {
             properties.getLlm().setProviderPrimary("stub");
             System.out.println("Using stub LLM provider for standard automated unit test suite.");
@@ -112,15 +118,16 @@ public class ClaudeTestingPdfPipelineRunnerTest {
 
         draftingAgent = new DraftingAgent(llmFactory, objectMapper, ragStoreService, org.mockito.Mockito.mock(com.noticedesk.api.service.llm.ApiUsageLogService.class));
         citationVerificationAgent = new CitationVerificationAgent(objectMapper);
+        draftingPipelineService = new DraftingPipelineService(draftingAgent, ragStoreService, citationVerificationAgent, properties, objectMapper);
         docxExportService = new DocxExportService();
     }
 
     @Test
     void runPipelineForClaudeTestingPdf() throws Exception {
-        String pdfPathStr = "../claude testing /SCN_Test_Sample_ITC_Mismatch.pdf";
+        String pdfPathStr = "../claude testing /Sunrise_Polymers_SCN_Multi_Issue_Notice.pdf";
         File pdfFile = new File(pdfPathStr);
         if (!pdfFile.exists()) {
-            pdfPathStr = "./claude testing /SCN_Test_Sample_ITC_Mismatch.pdf";
+            pdfPathStr = "../claude testing /SCN_Test_Sample_ITC_Mismatch.pdf";
             pdfFile = new File(pdfPathStr);
         }
 
@@ -146,7 +153,7 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         ParsedDocument parsedDoc = parsingAgent.parseDocument(parseInput);
         long parseDuration = System.currentTimeMillis() - parseStartTime;
 
-        String parseModel = parsedDoc.model() != null ? parsedDoc.model() : "claude-sonnet-4-6";
+        String parseModel = parsedDoc.model() != null ? parsedDoc.model() : "claude-haiku-4-5-20251001";
         int parseInTokens = parsedDoc.inputTokens() != null ? parsedDoc.inputTokens() : 0;
         int parseOutTokens = parsedDoc.outputTokens() != null ? parsedDoc.outputTokens() : 0;
         double parseCost = calculateCost(parseModel, parseInTokens, parseOutTokens);
@@ -179,12 +186,12 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         // Step 4: Drafting Input Assembly
         Map<String, Object> noticeMap = new HashMap<>();
         noticeMap.put("document_type", payload.getOrDefault("document_type", "drc_01"));
-        noticeMap.put("notice_number", payload.getOrDefault("notice_number", "SCN No. 07/2026-27/AC/Sample-Circle/Group-4/GST Audit"));
+        noticeMap.put("notice_number", payload.getOrDefault("notice_number", "SCN/2026/001"));
         noticeMap.put("din_or_rfn", payload.getOrDefault("din_or_rfn", "RFN-TEST0000000000"));
         noticeMap.put("authority", payload.getOrDefault("authority", "ASSISTANT COMMISSIONER, CGST (AUDIT) CIRCLE, SAMPLE CITY"));
         noticeMap.put("issue", payload.getOrDefault("summary_statement", "Demand under Section 73 & Section 74 for GSTR-2A/3B ITC Mismatch and Section 17(5) Blocked Credits"));
 
-        String clientName = (String) payload.getOrDefault("taxpayer_name", "M/s Sample Test Traders Pvt. Ltd.");
+        String clientName = (String) payload.getOrDefault("taxpayer_name", "M/s Sunrise Polymers Pvt. Ltd.");
         String clientPan = (String) payload.getOrDefault("pan", "AAAAT1234A");
         String gstin = (String) payload.getOrDefault("gstin", "27AAAAT1234A1Z5");
 
@@ -214,40 +221,40 @@ public class ClaudeTestingPdfPipelineRunnerTest {
                 null
         );
 
-        // Step 5: Drafting Agent Execution (LLM Call 2)
-        long draftStartTime = System.currentTimeMillis();
-        GeneratedDraft generatedDraft = draftingAgent.generateDraft(draftingInput);
-        long draftDuration = System.currentTimeMillis() - draftStartTime;
+        // Step 5: Drafting Pipeline Service Execution (Pass 1 - Cache Empty)
+        long draftStartTime1 = System.currentTimeMillis();
+        DraftingPipelineResult pass1 = draftingPipelineService.runPipeline(draftingInput, true);
+        long draftDuration1 = System.currentTimeMillis() - draftStartTime1;
 
-        String draftModel = generatedDraft.model() != null ? generatedDraft.model() : "claude-sonnet-4-6";
-        int draftInTokens = generatedDraft.inputTokens() != null ? generatedDraft.inputTokens() : 0;
-        int draftOutTokens = generatedDraft.outputTokens() != null ? generatedDraft.outputTokens() : 0;
-        double draftCost = calculateCost(draftModel, draftInTokens, draftOutTokens);
+        GeneratedDraft draft1 = pass1.draft();
+        String draftModel1 = draft1.model() != null ? draft1.model() : "claude-haiku-4-5-20251001";
+        int draftInTokens1 = pass1.totalInputTokens();
+        int draftOutTokens1 = pass1.totalOutputTokens();
+        double draftCost1 = calculateCost(draftModel1, draftInTokens1, draftOutTokens1);
 
-        System.out.println("4. Drafting Agent Completed (LLM Call 2)");
-        System.out.println("   Model Used: " + draftModel);
-        System.out.println("   Tokens: Input=" + draftInTokens + ", Output=" + draftOutTokens);
-        System.out.println("   Cost: $" + String.format("%.6f", draftCost) + " (" + draftDuration + " ms)");
+        System.out.println("4. Drafting Pipeline Service Pass 1 Completed");
+        System.out.println("   3-Tier Counts: rag_hit=" + pass1.ragHitCount() + " disk_cache_hit=" + pass1.diskCacheHitCount() + " opus_call=" + pass1.opusCallCount());
+        System.out.println("   Stop Reason: " + pass1.stopReason());
+        System.out.println("   Sections Generated: " + draft1.sections().size());
+        System.out.println("   Tokens: Input=" + draftInTokens1 + ", Output=" + draftOutTokens1);
 
-        // Step 6: Citation Verification Agent
-        long verifyStartTime = System.currentTimeMillis();
-        StringBuilder fullDraftText = new StringBuilder();
-        for (DraftSection s : generatedDraft.sections()) {
-            fullDraftText.append(s.title()).append("\n").append(s.bodyHtml()).append("\n");
-        }
+        // Step 6: Drafting Pipeline Service Execution (Pass 2 - Disk Cache Populated)
+        long draftStartTime2 = System.currentTimeMillis();
+        DraftingPipelineResult pass2 = draftingPipelineService.runPipeline(draftingInput, true);
+        long draftDuration2 = System.currentTimeMillis() - draftStartTime2;
 
-        var verificationResult = citationVerificationAgent.verify(fullDraftText.toString(), "stub");
-        long verifyDuration = System.currentTimeMillis() - verifyStartTime;
+        System.out.println("5. Drafting Pipeline Service Pass 2 Completed");
+        System.out.println("   3-Tier Counts: rag_hit=" + pass2.ragHitCount() + " disk_cache_hit=" + pass2.diskCacheHitCount() + " opus_call=" + pass2.opusCallCount());
+        System.out.println("   Stop Reason: " + pass2.stopReason());
+        System.out.println("   Sections Generated: " + pass2.draft().sections().size());
 
-        System.out.println("5. Citation Verification Completed (" + verifyDuration + " ms, " + verificationResult.citations().size() + " citations evaluated)");
-
-        // Step 7: Export Draft & Reports to ./output/
+        // Export Draft & Reports to ./output/
         File outputDir = new File("../output");
         if (!outputDir.exists()) {
             outputDir.mkdirs();
         }
 
-        List<Map<String, Object>> rawSections = generatedDraft.sections().stream().map(s -> {
+        List<Map<String, Object>> rawSections = draft1.sections().stream().map(s -> {
             Map<String, Object> m = new HashMap<>();
             m.put("num", s.num());
             m.put("title", s.title());
@@ -274,35 +281,24 @@ public class ClaudeTestingPdfPipelineRunnerTest {
                 "NoticeDesk Java 21 Pipeline — Verification Status: CITATIONS VERIFIED"
         );
 
-        String docxPath = "../output/SCN_Test_Sample_ITC_Mismatch_Draft.docx";
+        String docxPath = "../output/Sunrise_Polymers_SCN_Reply_Draft_Run1.docx";
         Files.write(Paths.get(docxPath), docxBytes);
 
-        String txtPath = "../output/SCN_Test_Sample_ITC_Mismatch_Draft.txt";
-        writeTxtDraft(txtPath, clientName, gstin, generatedDraft);
+        String txtPath = "../output/Sunrise_Polymers_SCN_Reply_Draft_Run1.txt";
+        writeTxtDraft(txtPath, clientName, gstin, draft1);
 
-        String summaryPath = "../output/SCN_Test_Sample_ITC_Mismatch_Pipeline_Report.txt";
-        writePipelineReport(
-                summaryPath,
-                clientName, gstin,
-                parseModel, parseInTokens, parseOutTokens, parseCost, parseDuration,
-                draftModel, draftInTokens, draftOutTokens, draftCost, draftDuration,
-                strategy, corpusSerial, matchScore
-        );
-
-        double totalCost = parseCost + draftCost;
-        long totalDuration = ocrDuration + parseDuration + draftDuration + verifyDuration;
+        double totalCost = parseCost + draftCost1;
+        long totalDuration = ocrDuration + parseDuration + draftDuration1;
 
         System.out.println("=================================================");
         System.out.println("=== PIPELINE EXECUTION SUMMARY ===");
         System.out.println("=================================================");
         System.out.println("Taxpayer: " + clientName + " (" + gstin + ")");
-        System.out.println("LLM Call 1 (Parsing): " + parseModel + " | Cost: $" + String.format("%.6f", parseCost) + " | In: " + parseInTokens + " / Out: " + parseOutTokens);
-        System.out.println("LLM Call 2 (Drafting): " + draftModel + " | Cost: $" + String.format("%.6f", draftCost) + " | In: " + draftInTokens + " / Out: " + draftOutTokens);
+        System.out.println("Pass 1 3-Tier Counts: rag_hit=" + pass1.ragHitCount() + ", disk_cache_hit=" + pass1.diskCacheHitCount() + ", opus_call=" + pass1.opusCallCount());
+        System.out.println("Pass 2 3-Tier Counts: rag_hit=" + pass2.ragHitCount() + ", disk_cache_hit=" + pass2.diskCacheHitCount() + ", opus_call=" + pass2.opusCallCount());
         System.out.println("Total LLM Cost: $" + String.format("%.6f", totalCost));
         System.out.println("Total Execution Time: " + totalDuration + " ms");
         System.out.println("Saved Word Document: " + new File(docxPath).getCanonicalPath());
-        System.out.println("Saved Text File: " + new File(txtPath).getCanonicalPath());
-        System.out.println("Saved Pipeline Report: " + new File(summaryPath).getCanonicalPath());
         System.out.println("=================================================");
 
         assertNotNull(docxBytes);

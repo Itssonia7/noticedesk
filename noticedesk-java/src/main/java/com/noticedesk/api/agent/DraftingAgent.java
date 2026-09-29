@@ -439,6 +439,9 @@ public class DraftingAgent {
                 14. Annexures
                 15. Declaration and Signature Block
 
+                CRITICAL CONCISENESS REQUIREMENT:
+                Keep body_html concise (1-2 clear, punchy paragraphs per section, max 150 words per section) so that all 15 sections fit within token limits and the JSON is completed cleanly with stop_reason=end_turn.
+
                 CRITICAL OUTPUT CONTRACT:
                 Return ONLY a valid JSON object containing exactly 15 sections numbered 1 to 15 matching this schema. Do not output anything outside the JSON object.
                 {
