@@ -20,6 +20,7 @@ public class AppProperties {
     private Workflow workflow = new Workflow();
     private DocumentParsing documentParsing = new DocumentParsing();
     private Drafting drafting = new Drafting();
+    private Embedding embedding = new Embedding();
     private String sentryDsn;
     private List<String> allowedOrigins = List.of("http://localhost:3000");
 
@@ -151,6 +152,14 @@ public class AppProperties {
         private String demoFirmNameOverride;
         private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
         private boolean opusDiskCacheEnabled = false;
+    }
+
+    @Data
+    public static class Embedding {
+        private String provider = "stub";
+        private String model = "gemini-embedding-001";
+        private double similarityThreshold = 0.70;
+        private int outputDimensionality = 1536;
     }
 
     public String modelForAgent(String agent, String provider) {
