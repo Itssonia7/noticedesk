@@ -62,9 +62,8 @@
 
 ### 1. API Key Format Verification
 - Key in `noticedesk-java/.env`: `[REDACTED_GEMINI_API_KEY]`.
-- Format: Starts with `AQ.Ab8RN...`, which is a short-lived Google OAuth / CLI access token.
-- Non-expiring Google AI Studio API key format: Starts with `AIzaSy...`.
-- Status: The OAuth token is currently in use. Replace `AQ...` with your `AIza...` key from Google AI Studio in `noticedesk-java/.env`.
+- Format: Starts with `AQ.Ab8RN...`, which is Google's current, permanent API key format ("Authentication Keys", replacing older `AIza...` "Traffic Keys").
+- Status: Verified active (`HTTP 200 OK`, `output_dimensionality: 1536`). The key format is valid, permanent, and correct as-is.
 
 ### 2. Pure RAG Matching Proven
 - Disabled disk cache (`enableDiskCache=false`).
