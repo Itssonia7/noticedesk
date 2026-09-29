@@ -8,7 +8,6 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.List;
 
-@Service
 public class StubEmbeddingProvider implements EmbeddingProvider {
 
     private static final int DIMENSION = 1536;
