@@ -101,12 +101,22 @@ public class RagStoreService {
             String sectionOrPara,
             String title,
             String content) {
+        return indexLegalChunk(actOrCircular, sectionOrPara, title, content, content);
+    }
+
+    public LegalChunk indexLegalChunk(
+            String actOrCircular,
+            String sectionOrPara,
+            String title,
+            String content,
+            String embeddingText) {
 
         if (content == null || content.isBlank()) {
             return null;
         }
 
-        List<Double> vector = embeddingProvider.embedQuery(content);
+        String textToEmbed = (embeddingText != null && !embeddingText.isBlank()) ? embeddingText : content;
+        List<Double> vector = embeddingProvider.embedQuery(textToEmbed);
         LegalChunk chunk = new LegalChunk(
                 UUID.randomUUID(), actOrCircular, sectionOrPara, title,
                 0, content, embeddingService.estimateTokens(content),
@@ -303,12 +313,19 @@ public class RagStoreService {
      * Caches the newly discovered legal issue chunk into RAG legal_chunks for future cases.
      */
     public LegalChunk saveNewChunk(String noticeIssue, String chunkContent) {
+        return saveNewChunk(noticeIssue, "", chunkContent);
+    }
+
+    public LegalChunk saveNewChunk(String noticeIssue, String issueDescription, String chunkContent) {
         log.info("Auto-caching newly discovered issue chunk into RAG legal_chunks: {}", noticeIssue);
+        String embeddingText = (noticeIssue != null ? noticeIssue : "") +
+                (issueDescription != null && !issueDescription.isBlank() ? " " + issueDescription : "");
         return indexLegalChunk(
                 "PARTIAL_NEW_CHUNK",
                 "Extracted Chunk (" + (noticeIssue != null ? noticeIssue : "New Legal Ground") + ")",
                 "Legal Ground Precedent - " + noticeIssue,
-                chunkContent
+                chunkContent,
+                embeddingText
         );
     }
 

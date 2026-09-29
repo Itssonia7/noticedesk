@@ -55,7 +55,7 @@ public class DraftingPipelineService {
         log.info("Step 1 complete: extracted {} issues", extractionResult.issues().size());
 
         // Step 2 & 3: 3-Tier Per-Issue Lookup (1. RAG -> 2. Disk Cache -> 3. Opus)
-        double similarityThreshold = properties.getDrafting().getSimilarityThreshold();
+        double similarityThreshold = properties.getEmbedding() != null ? properties.getEmbedding().getSimilarityThreshold() : properties.getDrafting().getSimilarityThreshold();
         Set<String> uniqueChunkContents = new LinkedHashSet<>();
 
         int ragHitCount = 0;
@@ -85,7 +85,7 @@ public class DraftingPipelineService {
                 log.info("Issue '{}': DISK CACHE HIT from .opus_cache.json", issue.title());
                 diskCacheHitCount++;
                 uniqueChunkContents.add(cachedChunk);
-                ragStoreService.saveNewChunk(issue.title(), cachedChunk);
+                ragStoreService.saveNewChunk(issue.title(), issue.description(), cachedChunk);
                 continue;
             }
 
@@ -93,7 +93,7 @@ public class DraftingPipelineService {
             log.info("Issue '{}': UNMATCHED (RAG miss & Disk Cache miss). Calling Opus...", issue.title());
             opusCallCount++;
             String opusTemplate = draftingAgent.generateOpusTemplateForUnmatchedIssue(issue, input);
-            ragStoreService.saveNewChunk(issue.title(), opusTemplate);
+            ragStoreService.saveNewChunk(issue.title(), issue.description(), opusTemplate);
             uniqueChunkContents.add(opusTemplate);
 
             if (enableDiskCache) {
