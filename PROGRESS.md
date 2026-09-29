@@ -1,62 +1,88 @@
-# Pipeline Refactoring Progress Log
+# Implementation Progress & Verification Report
 
-## (a) Approved Spec & Technical Decisions
-- **Architecture Flow**: Implemented Option A 5-step pipeline in `DraftingWorkflow.java` (after OCR + Triage):
-  1. **Issue Extraction**: Claude Haiku reads notice & OCR excerpt, returning structured JSON (`ExtractionResult` with `ExtractedIssue` list and `ExtractedNoticeInfo`).
-  2. **Per-Issue RAG Search & Deduplication**: Vector search per issue against RAG store (`similarityThreshold = 0.70`). Matched chunks are stored in a `LinkedHashSet` to deduplicate identical chunks automatically.
-  3. **Unmatched Issues Template Generation**: Sends **ONLY** unmatched issues to Claude Opus to generate a statutory rebuttal template chunk for each. Saves newly generated template chunks to `RagStoreService` (`saveNewChunk(...)`).
-  4. **Formatting**: Merges all deduplicated chunks (retrieved + newly generated) into a final **15-section JSON reply** via Claude Haiku.
-  5. **Citation Verification**: Runs `CitationVerificationAgent.verify(...)` on the concatenated HTML of the final 15 sections.
-- **Model Defaults**:
-  - `LLM_MODEL_EXTRACTION` & `LLM_MODEL_FORMATTING`: `claude-haiku-4-5-20251001`
-  - `LLM_MODEL_OPUS`: `claude-opus-4-7`
-  - No `claude-3-*` models used.
-- **Extraction Failures**:
-  - `extractIssues` retries once if JSON parsing fails.
-  - If the retry also fails, it logs `extract_issues_failed_after_retry` and throws `JsonSchemaValidationException`. No silent fallback to a single issue.
-- **15-Section Draft Contract**:
-  - Enforced exact 15-section JSON structure matching `GstTemplateFillerService` and DOCX export.
-- **Anthropic Workspace ID**:
-  - Workspace ID is loaded via `AppProperties` (`noticedesk.llm.anthropic.workspace-id` / `${ANTHROPIC_WORKSPACE_ID:}`) and passed directly to `AnthropicLlmProvider`. Hardcoded fallback `wrkspc_014N4cnyTQiXVFyARaUjgt45` removed across Java, Python, and benchmark script.
+## (a) Implemented Features
 
----
+1. **GeminiEmbeddingProvider**:
+   - Implemented `GeminiEmbeddingProvider` (`com.noticedesk.api.service.embedding.GeminiEmbeddingProvider`) using `gemini-embedding-001`.
+   - Configured REST endpoint `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent` with `"output_dimensionality": 1536`.
+   - Added 3 exponential backoff retries (up to 4 attempts total) for handling HTTP 429/503 rate limits.
+   - Built `EmbeddingFactory` (`com.noticedesk.api.service.embedding.EmbeddingFactory`) for Spring bean creation, defaulting to `stub` mode (`StubEmbeddingProvider`) so all standard automated unit tests stay 100% free, fast, and offline.
 
-## (b) Steps Completed with File Names
+2. **Configuration Consolidation**:
+   - Added `noticedesk.embedding.provider` (default `stub`), `noticedesk.embedding.model` (default `gemini-embedding-001`), `noticedesk.embedding.similarity-threshold` (default `0.70`), and `noticedesk.embedding.output-dimensionality` (default `1536`) to `AppProperties.java` and `application.yml`.
+   - Consolidated similarity threshold logic in `RagStoreService` and `DraftingPipelineService` to read from configuration properties.
 
-1. **Configuration & Properties**:
-   - `noticedesk-java/src/main/resources/application.yml`: Updated model overrides to `claude-haiku-4-5-20251001` and `claude-opus-4-7`. Added `anthropic.workspace-id`.
-   - `noticedesk-java/src/main/java/com/noticedesk/api/config/AppProperties.java`: Added `modelExtraction`, `modelFormatting`, `modelOpus`, `similarityThreshold`, and `workspaceId` fields.
-2. **LLM Provider & Factory Layer**:
-   - `noticedesk-java/src/main/java/com/noticedesk/api/service/llm/AnthropicLlmProvider.java`: Removed hardcoded workspace ID fallback. Receives `workspaceId` parameter from `AppProperties`.
-   - `noticedesk-java/src/main/java/com/noticedesk/api/service/llm/LlmFactory.java`: Updated `getOpusProvider()` to use `AppProperties.getModelOpus()` and pass `workspaceId`.
-   - `scripts/benchmark_sonnet_vs_opus.py`: Removed hardcoded `workspace_id` string; reads from environment variable.
-3. **Core Pipeline Implementation**:
-   - `noticedesk-java/src/main/java/com/noticedesk/api/agent/DraftingAgent.java`: Implemented `extractIssues` (with 1-retry and exception throw), `generateOpusTemplateForUnmatchedIssue`, and `mergeAndFormatDraft` (15-section contract).
-   - `noticedesk-java/src/main/java/com/noticedesk/api/workflow/DraftingWorkflow.java`: Integrated 5-step pipeline with per-issue RAG, `LinkedHashSet` chunk deduplication, Opus unmatched generation & caching, Haiku 15-section formatting, and `CitationVerificationAgent` Step 5.
-4. **Unit & Integration Tests Written**:
-   - `noticedesk-java/src/test/java/com/noticedesk/api/agent/DraftingAgentTest.java`: Added `testExtractionFailure_RetriesOnceAndThrowsException` and `testExtractionSuccess`.
-   - `noticedesk-java/src/test/java/com/noticedesk/api/workflow/DraftingPipelineTest.java`: Created test suite for chunk deduplication (`testPipelineDeduplicationWhenTwoIssuesMatchSameChunk`) and multi-issue scenarios (2/3 matched + 1/3 unmatched, 15-section formatting).
+3. **Retrieval Key Alignment**:
+   - Overloaded `indexLegalChunk` in `RagStoreService.java` to accept an explicit `embeddingText` parameter (`indexLegalChunk(actOrCircular, sectionOrPara, title, content, embeddingText)`).
+   - Overloaded `saveNewChunk` to accept `issueDescription`: `saveNewChunk(noticeIssue, issueDescription, chunkContent)`.
+   - Updated `DraftingPipelineService` so auto-cached Opus/disk-cached chunks embed `issue.title() + " " + issue.description()` rather than the 1,000-word HTML response draft.
+   - Updated `CorpusRagSeederService` to embed the clean issue description derived from `draft_file` + `notice_kind`.
 
 ---
 
-## (c) Step in Progress & Remaining Work
+## (b) Actual `mvn test` Results
 
-- **Status**: Complete. All unit and integration pipeline tests (`DraftingAgentTest`, `DraftingPipelineTest`, `RagStoreServiceTest`, `GstCorpusMatcherServiceTest`, `GstTemplateFillerServiceTest`) ran and passed cleanly (`BUILD SUCCESS`).
-- **Remaining Work**: None.
+Executed unit test suite (`mvn test -Dtest=*Test,!NoticedeskApiApplicationTests`):
 
----
-
-## (d) Verified Test Output
-
-```
-[INFO] Running com.noticedesk.api.agent.DraftingAgentTest
-[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0 -- in DraftingAgentTest
-[INFO] Running com.noticedesk.api.workflow.DraftingPipelineTest
-18:53:04.377 INFO  DraftingAgent -- extract_issues_success attempt=1 issuesCount=3
-18:53:04.386 INFO  DraftingAgent -- Generating Opus template chunk for unmatched issue: Novel Crypto Tax
-18:53:04.396 INFO  RagStoreService -- Auto-caching newly discovered issue chunk into RAG legal_chunks: Novel Crypto Tax
-18:53:04.399 INFO  DraftingAgent -- Merging and formatting 3 unique chunks into 15-section final draft via Haiku.
-18:53:04.457 INFO  DraftingAgent -- draft generated provider=null model=haiku sections=15 tokens_out=30
-[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0 -- in DraftingPipelineTest
+```text
+[INFO] Results:
+[INFO] Tests run: 20, Failures: 0, Errors: 0, Skipped: 0
+[INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time: 43.508 s
 ```
+
+`ClaudeTestingPdfPipelineRunnerTest` Output:
+```text
+=== PIPELINE EXECUTION SUMMARY ===
+Taxpayer: M/s Sunrise Polymers Pvt. Ltd. (27AAAAT1234A1Z5)
+Pass 1 3-Tier Counts: rag_hit=0, disk_cache_hit=0, opus_call=1
+Pass 2 3-Tier Counts: rag_hit=1, disk_cache_hit=0, opus_call=0
+Total LLM Cost: $0.006600
+Total Execution Time: 477 ms
+=================================================
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- BUILD SUCCESS
+```
+
+---
+
+## (c) Corpus Item Field Used for `embeddingText` and Rationale
+
+- **Field Used**: Derived clean title from `draft_file` combined with `notice_kind` in `pairing_manifest.jsonl`.
+- **Extraction Function**:
+  ```java
+  private String extractEmbeddingText(String draftFile, String noticeKind) {
+      String cleanName = draftFile.replaceAll("(?i)\\.docx$", "")
+              .replaceAll("(?i)^(Reply|Notice)_[0-9A-Z]+_Noticedesk_", "")
+              .replace("_", " ")
+              .trim();
+      return cleanName + (noticeKind != null && !noticeKind.isBlank() ? " (" + noticeKind + ")" : "");
+  }
+  ```
+- **Rationale**: `pairing_manifest.jsonl` contains `draft_file` entries with descriptive names like `Reply_04D_Noticedesk_ITC_Mismatch_GSTR2A_3B_FY1718_1819.docx`. Parsing out the clean descriptive title (`ITC Mismatch GSTR2A 3B FY1718 1819 (scn_73)`) creates the exact same text shape as the search query (`issue.title() + " " + issue.description()`), eliminating retrieval key mismatch.
+
+---
+
+## (d) Gemini Model `gemini-embedding-001` Dimension Support (`output_dimensionality=1536`)
+
+Official Google Gemini API documentation (`gemini-api-guides/models/gemini-embedding-001.md` & `gemini-api-guides/embeddings.md#controlling-embedding-size`) confirms:
+
+> Both `gemini-embedding-001` and `gemini-embedding-2` support Matryoshka Representation Learning (MRL). By default, both models output a 3072-dimensional embedding, but can be truncated using `output_dimensionality` parameter to 768, 1536, or 3072 without losing quality.
+
+REST request format verified against official docs:
+```json
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent
+Header: x-goog-api-key: $GEMINI_API_KEY
+{
+  "content": { "parts": [{ "text": "ITC Mismatch Section 16(2)(c)" }] },
+  "output_dimensionality": 1536
+}
+```
+
+---
+
+## (e) Remaining Work & Next Steps
+
+- **Completed**: All requested features implemented in small incremental steps, verified via `mvn test`, and committed.
+- **Next Steps**: Opt-in to live `EMBEDDING_PROVIDER=gemini` with `GEMINI_API_KEY` in staging/production environments when ready.
