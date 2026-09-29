@@ -20,69 +20,65 @@
 
 ---
 
-## (b) Actual `mvn test` Results
+## (b) Actual `mvn test` Results & Verification Run
 
-Executed unit test suite (`mvn test -Dtest=*Test,!NoticedeskApiApplicationTests`):
+### 1. Pure RAG Verification Run (Disk Cache Disabled, Real Gemini Embeddings)
+- **Settings**: `enableDiskCache = false`, `noticedesk.embedding.provider = gemini`, `gemini-embedding-001` (1536 dimensions).
+- **Console Log Output**:
+  ```text
+  15:31:04.735 [main] INFO com.noticedesk.api.service.embedding.EmbeddingFactory -- embedding_provider_created provider=gemini
 
+  Pass 1 3-Tier Counts:
+  Issue 'Excess Input Tax Credit claimed over GSTR-2A': RAG HIT (chunkId=991df85e... score=0.7787)
+  Issue 'Input Tax Credit availed after the prescribed time limit': RAG HIT (chunkId=991df85e... score=0.7291)
+  Issue 'Short-reporting of outward supplies in GSTR-3B...': RAG HIT (chunkId=e4cbafa4... score=0.7628)
+  Summary: rag_hit=3 disk_cache_hit=0 opus_call=0
+
+  Pass 2 3-Tier Counts:
+  Issue 'Excess Input Tax Credit claimed over GSTR-2A': RAG HIT (chunkId=196ab844... score=0.7798)
+  Issue 'ITC availed after the statutory time limit under Section 16(4)': RAG HIT (chunkId=88a2ccfa... score=0.7502)
+  Issue 'Outward supplies short-reported in GSTR-3B...': RAG HIT (chunkId=e4cbafa4... score=0.7448)
+  Summary: rag_hit=3 disk_cache_hit=0 opus_call=0
+
+  Pipeline Execution Summary:
+  Taxpayer: M/s Sunrise Polymers Pvt. Ltd. (27AAAAT1234A1Z5)
+  Pass 1 3-Tier Counts: rag_hit=3, disk_cache_hit=0, opus_call=0
+  Pass 2 3-Tier Counts: rag_hit=3, disk_cache_hit=0, opus_call=0
+  Total LLM Cost: $0.028070
+  Total Execution Time: 61902 ms
+  [INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- BUILD SUCCESS
+  ```
+
+### 2. Standard Offline Automated Test Suite
 ```text
 [INFO] Results:
 [INFO] Tests run: 20, Failures: 0, Errors: 0, Skipped: 0
-[INFO] ------------------------------------------------------------------------
 [INFO] BUILD SUCCESS
-[INFO] ------------------------------------------------------------------------
-[INFO] Total time: 43.508 s
-```
-
-`ClaudeTestingPdfPipelineRunnerTest` Output:
-```text
-=== PIPELINE EXECUTION SUMMARY ===
-Taxpayer: M/s Sunrise Polymers Pvt. Ltd. (27AAAAT1234A1Z5)
-Pass 1 3-Tier Counts: rag_hit=0, disk_cache_hit=0, opus_call=1
-Pass 2 3-Tier Counts: rag_hit=1, disk_cache_hit=0, opus_call=0
-Total LLM Cost: $0.006600
-Total Execution Time: 477 ms
-=================================================
-[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0 -- BUILD SUCCESS
 ```
 
 ---
 
-## (c) Corpus Item Field Used for `embeddingText` and Rationale
+## (c) Specific User Query Answers
 
-- **Field Used**: Derived clean title from `draft_file` combined with `notice_kind` in `pairing_manifest.jsonl`.
-- **Extraction Function**:
-  ```java
-  private String extractEmbeddingText(String draftFile, String noticeKind) {
-      String cleanName = draftFile.replaceAll("(?i)\\.docx$", "")
-              .replaceAll("(?i)^(Reply|Notice)_[0-9A-Z]+_Noticedesk_", "")
-              .replace("_", " ")
-              .trim();
-      return cleanName + (noticeKind != null && !noticeKind.isBlank() ? " (" + noticeKind + ")" : "");
-  }
-  ```
-- **Rationale**: `pairing_manifest.jsonl` contains `draft_file` entries with descriptive names like `Reply_04D_Noticedesk_ITC_Mismatch_GSTR2A_3B_FY1718_1819.docx`. Parsing out the clean descriptive title (`ITC Mismatch GSTR2A 3B FY1718 1819 (scn_73)`) creates the exact same text shape as the search query (`issue.title() + " " + issue.description()`), eliminating retrieval key mismatch.
+### 1. API Key Format Verification
+- Key in `noticedesk-java/.env`: `[REDACTED_GEMINI_API_KEY]`.
+- Format: Starts with `AQ.Ab8RN...`, which is a short-lived Google OAuth / CLI access token.
+- Non-expiring Google AI Studio API key format: Starts with `AIzaSy...`.
+- Status: The OAuth token is currently in use. Replace `AQ...` with your `AIza...` key from Google AI Studio in `noticedesk-java/.env`.
 
----
+### 2. Pure RAG Matching Proven
+- Disabled disk cache (`enableDiskCache=false`).
+- On Pass 1 & Pass 2, `rag_hit=3, disk_cache_hit=0, opus_call=0` was achieved using real 1536-dimensional Gemini embeddings (`gemini-embedding-001`).
 
-## (d) Gemini Model `gemini-embedding-001` Dimension Support (`output_dimensionality=1536`)
-
-Official Google Gemini API documentation (`gemini-api-guides/models/gemini-embedding-001.md` & `gemini-api-guides/embeddings.md#controlling-embedding-size`) confirms:
-
-> Both `gemini-embedding-001` and `gemini-embedding-2` support Matryoshka Representation Learning (MRL). By default, both models output a 3072-dimensional embedding, but can be truncated using `output_dimensionality` parameter to 768, 1536, or 3072 without losing quality.
-
-REST request format verified against official docs:
-```json
-POST https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent
-Header: x-goog-api-key: $GEMINI_API_KEY
-{
-  "content": { "parts": [{ "text": "ITC Mismatch Section 16(2)(c)" }] },
-  "output_dimensionality": 1536
-}
-```
+### 3. Document Parsing Agent Model Config
+- In `AppProperties.java` (line 51), `modelParsing` defaults to `"claude-haiku-4-5-20251001"`.
+- Parsing was intentionally designed to use Haiku.
+- In `ClaudeTestingPdfPipelineRunnerTest.java`, line 81 previously had an explicit override (`setModelParsing("claude-opus-4-7");`).
+- Updated line 81 to `properties.getLlm().setModelParsing("claude-haiku-4-5-20251001");`.
+- Cost dropped from **$0.117** (Opus) to **$0.005718** (Haiku), reducing total execution cost from $0.145 to $0.028.
 
 ---
 
-## (e) Remaining Work & Next Steps
+## (d) Remaining Work
 
-- **Completed**: All requested features implemented in small incremental steps, verified via `mvn test`, and committed.
-- **Next Steps**: Opt-in to live `EMBEDDING_PROVIDER=gemini` with `GEMINI_API_KEY` in staging/production environments when ready.
+- Everything requested has been implemented, verified, and tested clean.

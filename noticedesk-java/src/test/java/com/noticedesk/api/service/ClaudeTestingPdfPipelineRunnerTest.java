@@ -50,9 +50,10 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         properties = new AppProperties();
         objectMapper = new ObjectMapper();
 
-        // 1. Resolve Anthropic API Key & Workspace ID
+        // 1. Resolve Anthropic API Key & Workspace ID & Gemini API Key
         resolvedApiKey = System.getenv("ANTHROPIC_API_KEY");
         String resolvedWorkspaceId = System.getenv("ANTHROPIC_WORKSPACE_ID");
+        String resolvedGeminiKey = System.getenv("GEMINI_API_KEY");
         if (resolvedApiKey == null || resolvedApiKey.isBlank() || resolvedWorkspaceId == null || resolvedWorkspaceId.isBlank()) {
             Path envPath = Paths.get("../apps/api/.env");
             if (Files.exists(envPath)) {
@@ -62,6 +63,17 @@ public class ClaudeTestingPdfPipelineRunnerTest {
                         resolvedApiKey = line.substring("ANTHROPIC_API_KEY=".length()).trim();
                     } else if ((resolvedWorkspaceId == null || resolvedWorkspaceId.isBlank()) && line.startsWith("ANTHROPIC_WORKSPACE_ID=")) {
                         resolvedWorkspaceId = line.substring("ANTHROPIC_WORKSPACE_ID=".length()).trim();
+                    }
+                }
+            }
+        }
+        if (resolvedGeminiKey == null || resolvedGeminiKey.isBlank()) {
+            Path localEnv = Paths.get(".env");
+            if (Files.exists(localEnv)) {
+                List<String> lines = Files.readAllLines(localEnv);
+                for (String line : lines) {
+                    if (line.startsWith("GEMINI_API_KEY=")) {
+                        resolvedGeminiKey = line.substring("GEMINI_API_KEY=".length()).trim();
                     }
                 }
             }
@@ -76,9 +88,13 @@ public class ClaudeTestingPdfPipelineRunnerTest {
             if (resolvedWorkspaceId != null && !resolvedWorkspaceId.isBlank()) {
                 properties.getLlm().getAnthropic().setWorkspaceId(resolvedWorkspaceId);
             }
+            if (resolvedGeminiKey != null && !resolvedGeminiKey.isBlank()) {
+                properties.getEmbedding().setProvider("gemini");
+                properties.getLlm().getGemini().setApiKey(resolvedGeminiKey);
+            }
             properties.getLlm().getAnthropic().setModel("claude-opus-4-7");
             properties.getLlm().setModelDrafting("claude-opus-4-7");
-            properties.getLlm().setModelParsing("claude-opus-4-7");
+            properties.getLlm().setModelParsing("claude-haiku-4-5-20251001");
             properties.getLlm().setModelTriage("claude-opus-4-7");
             properties.getLlm().getAnthropic().setTimeoutSeconds(300.0);
             System.out.println("Loaded Anthropic API Key & Workspace ID for Java pipeline execution.");
@@ -100,8 +116,10 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         EmbeddingProvider embeddingProvider = new EmbeddingFactory(properties).embeddingProvider();
 
         ragStoreService = new RagStoreService(null, embeddingService, embeddingProvider);
-        CorpusRagSeederService seederService = new CorpusRagSeederService(properties, objectMapper, ragStoreService);
-        seederService.seedCorpusToRag();
+        if (!"gemini".equalsIgnoreCase(properties.getEmbedding().getProvider())) {
+            CorpusRagSeederService seederService = new CorpusRagSeederService(properties, objectMapper, ragStoreService);
+            seederService.seedCorpusToRag();
+        }
 
         draftingAgent = new DraftingAgent(llmFactory, objectMapper, ragStoreService, org.mockito.Mockito.mock(com.noticedesk.api.service.llm.ApiUsageLogService.class));
         citationVerificationAgent = new CitationVerificationAgent(objectMapper);
@@ -208,9 +226,9 @@ public class ClaudeTestingPdfPipelineRunnerTest {
                 null
         );
 
-        // Step 5: Drafting Pipeline Service Execution (Pass 1 - Cache Empty)
+        // Step 5: Drafting Pipeline Service Execution (Pass 1 - RAG Store Empty)
         long draftStartTime1 = System.currentTimeMillis();
-        DraftingPipelineResult pass1 = draftingPipelineService.runPipeline(draftingInput, true);
+        DraftingPipelineResult pass1 = draftingPipelineService.runPipeline(draftingInput, false);
         long draftDuration1 = System.currentTimeMillis() - draftStartTime1;
 
         GeneratedDraft draft1 = pass1.draft();
@@ -225,9 +243,9 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         System.out.println("   Sections Generated: " + draft1.sections().size());
         System.out.println("   Tokens: Input=" + draftInTokens1 + ", Output=" + draftOutTokens1);
 
-        // Step 6: Drafting Pipeline Service Execution (Pass 2 - Disk Cache Populated)
+        // Step 6: Drafting Pipeline Service Execution (Pass 2 - RAG Store Populated)
         long draftStartTime2 = System.currentTimeMillis();
-        DraftingPipelineResult pass2 = draftingPipelineService.runPipeline(draftingInput, true);
+        DraftingPipelineResult pass2 = draftingPipelineService.runPipeline(draftingInput, false);
         long draftDuration2 = System.currentTimeMillis() - draftStartTime2;
 
         System.out.println("5. Drafting Pipeline Service Pass 2 Completed");
