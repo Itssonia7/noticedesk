@@ -12,6 +12,7 @@ import com.noticedesk.api.agent.DraftingAgent.GeneratedDraft;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.embedding.EmbeddingProvider;
 import com.noticedesk.api.service.embedding.EmbeddingService;
+import com.noticedesk.api.service.embedding.EmbeddingFactory;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.rag.CorpusRagSeederService;
 import com.noticedesk.api.service.rag.RagStoreService;
@@ -96,21 +97,7 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         templateFillerService = new GstTemplateFillerService();
 
         EmbeddingService embeddingService = new EmbeddingService();
-        EmbeddingProvider embeddingProvider = new EmbeddingProvider() {
-            @Override
-            public List<List<Double>> embedDocuments(List<String> texts) {
-                List<List<Double>> res = new ArrayList<>();
-                for (String t : texts) {
-                    res.add(List.of(0.1, 0.2, 0.3, 0.4, 0.5));
-                }
-                return res;
-            }
-
-            @Override
-            public List<Double> embedQuery(String query) {
-                return List.of(0.1, 0.2, 0.3, 0.4, 0.5);
-            }
-        };
+        EmbeddingProvider embeddingProvider = new EmbeddingFactory(properties).embeddingProvider();
 
         ragStoreService = new RagStoreService(null, embeddingService, embeddingProvider);
         CorpusRagSeederService seederService = new CorpusRagSeederService(properties, objectMapper, ragStoreService);
