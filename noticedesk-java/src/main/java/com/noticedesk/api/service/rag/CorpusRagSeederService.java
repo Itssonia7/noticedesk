@@ -73,11 +73,13 @@ public class CorpusRagSeederService {
                 String draftText = readDraftText(draftPath);
 
                 if (!draftText.isBlank()) {
+                    String embeddingText = extractEmbeddingText(draftFile, noticeKind);
                     ragStoreService.indexLegalChunk(
                             "GST_CORPUS",
                             serial + " (" + noticeKind + ")",
                             draftFile,
-                            draftText
+                            draftText,
+                            embeddingText
                     );
                     count++;
                 }
@@ -87,6 +89,14 @@ public class CorpusRagSeederService {
         } catch (Exception e) {
             log.error("Failed during Corpus RAG seeding from {}", corpusDir, e);
         }
+    }
+
+    private String extractEmbeddingText(String draftFile, String noticeKind) {
+        String cleanName = draftFile.replaceAll("(?i)\\.docx$", "")
+                .replaceAll("(?i)^(Reply|Notice)_[0-9A-Z]+_Noticedesk_", "")
+                .replace("_", " ")
+                .trim();
+        return cleanName + (noticeKind != null && !noticeKind.isBlank() ? " (" + noticeKind + ")" : "");
     }
 
     private String readDraftText(Path draftPath) {
