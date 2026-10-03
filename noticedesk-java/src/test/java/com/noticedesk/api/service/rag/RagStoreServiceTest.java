@@ -120,4 +120,27 @@ class RagStoreServiceTest {
         assertEquals("NOVEL_CASE", assessment.matchTier());
         assertNull(assessment.guidedTemplate());
     }
+
+    @Test
+    void testChunkExpiryExemptionAndTtl() {
+        LegalChunk actChunk = ragStoreService.indexLegalChunk(
+                "CGST Act 2017",
+                "Section 73",
+                "Determination of tax",
+                "Statutory provision text"
+        );
+        assertNotNull(actChunk.savedAt());
+        assertNull(actChunk.expiresAt(), "Statutory Act chunks must be exempt from expiry (expiresAt = null)");
+        assertFalse(actChunk.isExpired());
+
+        LegalChunk tempChunk = ragStoreService.saveNewChunk(
+                "Novel Issue Ground",
+                "Issue Description",
+                "Auto-cached Opus template content"
+        );
+        assertNotNull(tempChunk.savedAt());
+        assertNotNull(tempChunk.expiresAt(), "Auto-cached Opus chunks must have an expiry date set");
+        assertTrue(tempChunk.expiresAt().isAfter(tempChunk.savedAt()));
+        assertFalse(tempChunk.isExpired());
+    }
 }

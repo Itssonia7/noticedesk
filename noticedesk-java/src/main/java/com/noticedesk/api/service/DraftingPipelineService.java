@@ -52,7 +52,10 @@ public class DraftingPipelineService {
 
         // Step 1: Issue Extraction via Claude Haiku
         ExtractionResult extractionResult = draftingAgent.extractIssues(input);
-        log.info("Step 1 complete: extracted {} issues", extractionResult.issues().size());
+        log.info("Step 1 complete: extracted {} issues (inputTokens={} outputTokens={})",
+                extractionResult.issues().size(), extractionResult.inputTokens(), extractionResult.outputTokens());
+        totalInputTokens += (extractionResult.inputTokens() != null ? extractionResult.inputTokens() : 0);
+        totalOutputTokens += (extractionResult.outputTokens() != null ? extractionResult.outputTokens() : 0);
 
         // Step 2 & 3: 3-Tier Per-Issue Lookup (1. RAG -> 2. Disk Cache -> 3. Opus)
         double similarityThreshold = properties.getEmbedding() != null ? properties.getEmbedding().getSimilarityThreshold() : properties.getDrafting().getSimilarityThreshold();
@@ -63,37 +66,87 @@ public class DraftingPipelineService {
         int opusCallCount = 0;
 
         Map<String, String> diskCacheMap = enableDiskCache ? loadDiskCache() : new HashMap<>();
+        String citationProvider = resolveCitationProvider();
+        String expiredPolicy = properties.getDrafting() != null ? properties.getDrafting().getExpiredChunkPolicy() : "FLAG_AND_USE";
+        String failPolicy = properties.getDrafting() != null ? properties.getDrafting().getCitationFailPolicy() : "FLAG_AND_CONTINUE";
+        List<CitationVerificationAgent.VerifiedCitation> chunkReverifiedCitations = new ArrayList<>();
 
         for (ExtractedIssue issue : extractionResult.issues()) {
             String query = issue.title() + " " + issue.description();
 
             // Tier 1: RAG Search First
             List<LegalChunk> searchResults = ragStoreService.searchLegal(query, 1);
-            if (!searchResults.isEmpty() && searchResults.get(0).similarityScore() != null
-                    && searchResults.get(0).similarityScore() >= similarityThreshold) {
+            if (!searchResults.isEmpty()) {
                 LegalChunk match = searchResults.get(0);
-                log.info("Issue '{}': RAG HIT (chunkId={} score={})", issue.title(), match.chunkId(), match.similarityScore());
-                ragHitCount++;
-                uniqueChunkContents.add(match.content());
-                continue;
+                boolean isHit = match.similarityScore() != null && match.similarityScore() >= similarityThreshold;
+                log.info("Issue '{}': RAG SEARCH RESULT -> isHit={} (chunkId={} score={} actOrCircular='{}' title='{}')",
+                        issue.title(), isHit, match.chunkId(), match.similarityScore(), match.actOrCircular(), match.title());
+                
+                if (isHit) {
+                    if (match.isExpired() && "EXCLUDE".equalsIgnoreCase(expiredPolicy)) {
+                        log.warn("Issue '{}': RAG MATCH chunkId={} EXPIRED on {}. Policy is EXCLUDE -> skipping match to trigger Opus fallback.",
+                                issue.title(), match.chunkId(), match.expiresAt());
+                    } else {
+                        // Citation Re-Check on Retrieved Chunk Content
+                        CitationVerificationResult chunkCitationResult = citationVerificationAgent.verify(match.content(), citationProvider);
+                        if (chunkCitationResult != null && chunkCitationResult.citations() != null) {
+                            chunkReverifiedCitations.addAll(chunkCitationResult.citations());
+                        }
+
+                        boolean hasInvalidCitations = chunkCitationResult != null 
+                                && chunkCitationResult.citations() != null 
+                                && chunkCitationResult.citations().stream().anyMatch(c -> "UNVERIFIED".equalsIgnoreCase(c.status()) || "flagged".equalsIgnoreCase(c.actionTaken()));
+
+                        if (hasInvalidCitations && "FALL_THROUGH_TO_OPUS".equalsIgnoreCase(failPolicy)) {
+                            log.warn("Issue '{}': RAG MATCH chunkId={} has invalid citations. Policy is FALL_THROUGH_TO_OPUS -> falling through to Opus.",
+                                    issue.title(), match.chunkId());
+                        } else {
+                            ragHitCount++;
+                            uniqueChunkContents.add(match.content());
+                            continue;
+                        }
+                    }
+                }
             }
 
             // Tier 2: Disk Cache Next (if enabled)
             String cacheKey = normalizeKey(issue.title());
             if (enableDiskCache && diskCacheMap.containsKey(cacheKey)) {
                 String cachedChunk = diskCacheMap.get(cacheKey);
-                log.info("Issue '{}': DISK CACHE HIT from .opus_cache.json", issue.title());
-                diskCacheHitCount++;
-                uniqueChunkContents.add(cachedChunk);
-                ragStoreService.saveNewChunk(issue.title(), issue.description(), cachedChunk);
-                continue;
+                // Citation Re-Check on Disk Cache Chunk Content
+                CitationVerificationResult chunkCitationResult = citationVerificationAgent.verify(cachedChunk, citationProvider);
+                if (chunkCitationResult != null && chunkCitationResult.citations() != null) {
+                    chunkReverifiedCitations.addAll(chunkCitationResult.citations());
+                }
+
+                boolean hasInvalidCitations = chunkCitationResult != null 
+                        && chunkCitationResult.citations() != null 
+                        && chunkCitationResult.citations().stream().anyMatch(c -> "UNVERIFIED".equalsIgnoreCase(c.status()) || "flagged".equalsIgnoreCase(c.actionTaken()));
+
+                if (hasInvalidCitations && "FALL_THROUGH_TO_OPUS".equalsIgnoreCase(failPolicy)) {
+                    log.warn("Issue '{}': DISK CACHE chunk has invalid citations. Policy is FALL_THROUGH_TO_OPUS -> falling through to Opus.",
+                            issue.title());
+                } else {
+                    log.info("Issue '{}': DISK CACHE HIT from .opus_cache.json", issue.title());
+                    diskCacheHitCount++;
+                    uniqueChunkContents.add(cachedChunk);
+                    ragStoreService.saveNewChunk(issue.title(), issue.description(), cachedChunk);
+                    continue;
+                }
             }
 
             // Tier 3: Opus Call
             log.info("Issue '{}': UNMATCHED (RAG miss & Disk Cache miss). Calling Opus...", issue.title());
             opusCallCount++;
-            String opusTemplate = draftingAgent.generateOpusTemplateForUnmatchedIssue(issue, input);
-            ragStoreService.saveNewChunk(issue.title(), issue.description(), opusTemplate);
+            DraftingAgent.OpusTemplateResult opusRes = draftingAgent.generateOpusTemplateResultForUnmatchedIssue(issue, input);
+            totalInputTokens += (opusRes.inputTokens() != null ? opusRes.inputTokens() : 0);
+            totalOutputTokens += (opusRes.outputTokens() != null ? opusRes.outputTokens() : 0);
+            String opusTemplate = opusRes.content();
+            LegalChunk savedChunk = ragStoreService.saveNewChunk(issue.title(), issue.description(), opusTemplate);
+            if (savedChunk != null) {
+                log.info("Auto-cached new Opus chunk into RAG legal_chunks: chunkId={} actOrCircular='{}' title='{}'",
+                        savedChunk.chunkId(), savedChunk.actOrCircular(), savedChunk.title());
+            }
             uniqueChunkContents.add(opusTemplate);
 
             if (enableDiskCache) {
@@ -120,12 +173,15 @@ public class DraftingPipelineService {
                 .map(DraftSection::bodyHtml)
                 .reduce("", (a, b) -> a + "\n" + b);
 
-        String citationProvider = resolveCitationProvider();
         CitationVerificationResult citationResult = citationVerificationAgent.verify(allHtml, citationProvider);
+        List<CitationVerificationAgent.VerifiedCitation> allVerifiedCitations = new ArrayList<>(chunkReverifiedCitations);
+        if (citationResult.citations() != null) {
+            allVerifiedCitations.addAll(citationResult.citations());
+        }
 
         return new DraftingPipelineResult(
                 generated,
-                citationResult.citations(),
+                allVerifiedCitations,
                 citationResult.summary(),
                 ragHitCount,
                 diskCacheHitCount,
