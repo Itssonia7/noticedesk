@@ -152,6 +152,9 @@ public class AppProperties {
         private String demoFirmNameOverride;
         private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
         private boolean opusDiskCacheEnabled = false;
+        private int chunkTtlDays = 365;
+        private String expiredChunkPolicy = "FLAG_AND_USE"; // FLAG_AND_USE | EXCLUDE
+        private String citationFailPolicy = "FLAG_AND_CONTINUE"; // FLAG_AND_CONTINUE | FALL_THROUGH_TO_OPUS
     }
 
     @Data
