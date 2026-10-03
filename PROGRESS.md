@@ -78,6 +78,23 @@
 
 ---
 
-## (d) Remaining Work
+4. **GST RAG Evaluation Labelled Set Candidate Generation**:
+   - Created candidate generation script [`scripts/generate_rag_eval_pairs.py`](file:///home/sonia/internship/noticedesk/scripts/generate_rag_eval_pairs.py).
+   - Generated **160 candidate issue pairs** across the 301-pair GST corpus into [`NoticeDesk_RAG_Labelled_Set_Template.xlsx`](file:///home/sonia/internship/noticedesk/NoticeDesk_RAG_Labelled_Set_Template.xlsx) starting at row 3 of the `Data` tab.
+   - Pair Mix: **64 `likely_same` (40%)**, **32 `hard_same_words_diff_law` (20%)**, **32 `hard_diff_words_same_issue` (20%)**, and **32 `random_control` (20%)**.
+   - Preserved row 2 (`EX-1` example row), Data Validation dropdowns (`F3:F202`, `G3:G202`), column widths, `Instructions` tab, and `Summary` tab formulas. Left `CA Label` and `CA Notes` blank for human CA review.
+   - **Bugs Found and Fixed**:
+     - *Bug 1 (General Topic Over-matching)*: Fixed `hard_diff_words_same_issue` to exclude generic fallback topics (`general_tax_demand`, `other`), requiring strict matching on specific legal topic buckets (`itc_mismatch`, `eway_detention`, `interest_demand`, `rule_86a_credit_block`, `cancellation_registration`, `refund_claim`, `fake_invoice`, `wrong_head_tax`, `blocked_credit_17_5`).
+     - *Bug 2 (Loose Keyword Rules)*: Tightened keyword classification for `rule_86a_credit_block` (requiring explicit `"86a"`), `blocked_credit_17_5` (Section 17(5) substantive credit disputes), `interest_demand` (requiring primary interest subject, excluding boilerplate "with interest and penalty"), and `eway_detention` (requiring explicit e-way/transit keywords + Section 129 detention context).
+   - **Document Concentration Cap**: Enforced a global per-document cap (`max_global_reuse = 4`) across all 4 pair types combined. Max reuse of any single document across the 160 pairs is 4.
+   - **Confidentiality Audit**: 0 PII, amount, or GSTIN violations detected.
 
-- Everything requested has been implemented, verified, and tested clean.
+---
+
+## (d) Remaining Work / Next Steps
+
+- **CA Ground-Truth Labelling**: Mentor / human CA to review the 160 candidate pairs in `NoticeDesk_RAG_Labelled_Set_Template.xlsx` and assign `same_answer` vs `different_answer` vs `unsure`.
+- **Claude Sonnet Baseline Evaluation**: Benchmark baseline retrieval performance on the labelled evaluation set.
+- **Gemini vs Voyage Embedding Model Comparison**: Compare embedding retrieval performance (e.g. `gemini-embedding-001` vs Voyage) on the ground-truth labelled set.
+- **Similarity Threshold Calibration**: Calibrate optimal similarity threshold based on CA ground-truth evaluation results.
+
