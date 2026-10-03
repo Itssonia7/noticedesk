@@ -1,5 +1,6 @@
 package com.noticedesk.api.service.rag;
 
+import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.rag.*;
 import com.noticedesk.api.service.embedding.EmbeddingProvider;
 import com.noticedesk.api.service.embedding.EmbeddingService;
@@ -14,13 +15,24 @@ import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class RagStoreService {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final EmbeddingService          embeddingService;
     private final EmbeddingProvider         embeddingProvider;
+    private final AppProperties              properties;
+
+    public RagStoreService(NamedParameterJdbcTemplate jdbc, EmbeddingService embeddingService, EmbeddingProvider embeddingProvider, AppProperties properties) {
+        this.jdbc = jdbc;
+        this.embeddingService = embeddingService;
+        this.embeddingProvider = embeddingProvider;
+        this.properties = properties != null ? properties : new AppProperties();
+    }
+
+    public RagStoreService(NamedParameterJdbcTemplate jdbc, EmbeddingService embeddingService, EmbeddingProvider embeddingProvider) {
+        this(jdbc, embeddingService, embeddingProvider, new AppProperties());
+    }
 
     private static final List<EvidenceChunk> IN_MEMORY_EVIDENCE_STORE = new CopyOnWriteArrayList<>();
     private static final List<LegalChunk>    IN_MEMORY_LEGAL_STORE    = new CopyOnWriteArrayList<>();
@@ -117,10 +129,14 @@ public class RagStoreService {
 
         String textToEmbed = (embeddingText != null && !embeddingText.isBlank()) ? embeddingText : content;
         List<Double> vector = embeddingProvider.embedQuery(textToEmbed);
+        OffsetDateTime now = OffsetDateTime.now();
+        int ttlDays = properties.getDrafting() != null ? properties.getDrafting().getChunkTtlDays() : 365;
+        OffsetDateTime expiresAt = isExemptFromExpiry(actOrCircular) ? null : now.plusDays(ttlDays);
+
         LegalChunk chunk = new LegalChunk(
                 UUID.randomUUID(), actOrCircular, sectionOrPara, title,
                 0, content, embeddingService.estimateTokens(content),
-                vector, OffsetDateTime.now(), null
+                vector, now, null, now, null, expiresAt
         );
         IN_MEMORY_LEGAL_STORE.add(chunk);
 
@@ -131,10 +147,10 @@ public class RagStoreService {
                         """
                         INSERT INTO legal_chunks (
                             chunk_id, act_or_circular, section_or_para, title,
-                            chunk_index, content, token_count, embedding
+                            chunk_index, content, token_count, embedding, saved_at, expires_at
                         ) VALUES (
                             :chunk_id, :act_or_circular, :section_or_para, :title,
-                            :chunk_index, :content, :token_count, :embedding::vector
+                            :chunk_index, :content, :token_count, :embedding::vector, :saved_at, :expires_at
                         )
                         """,
                         new MapSqlParameterSource()
@@ -146,12 +162,21 @@ public class RagStoreService {
                                 .addValue("content", content)
                                 .addValue("token_count", chunk.tokenCount())
                                 .addValue("embedding", vecStr)
+                                .addValue("saved_at", chunk.savedAt())
+                                .addValue("expires_at", chunk.expiresAt())
                 );
             } catch (Exception e) {
                 log.debug("Database legal chunk insert skipped or deferred: {}", e.getMessage());
             }
         }
         return chunk;
+    }
+
+    private boolean isExemptFromExpiry(String actOrCircular) {
+        if (actOrCircular == null) return false;
+        String lower = actOrCircular.toLowerCase();
+        return lower.contains("act") || lower.contains("rules") || lower.contains("court") 
+                || lower.contains("tribunal") || "GST_CORPUS".equalsIgnoreCase(actOrCircular);
     }
 
     public List<EvidenceChunk> searchEvidence(UUID matterId, String query, int topK) {
@@ -222,6 +247,8 @@ public class RagStoreService {
         }
 
         List<Double> qvec = embeddingProvider.embedQuery(query);
+        boolean excludeExpired = properties.getDrafting() != null 
+                && "EXCLUDE".equalsIgnoreCase(properties.getDrafting().getExpiredChunkPolicy());
 
         if (jdbc != null) {
             try {
@@ -229,27 +256,43 @@ public class RagStoreService {
                 List<LegalChunk> dbResults = jdbc.query(
                         """
                         SELECT chunk_id, act_or_circular, section_or_para, title,
-                               chunk_index, content, token_count,
+                               chunk_index, content, token_count, created_at, saved_at, effective_date, expires_at,
                                1 - (embedding <=> :qvec::vector) AS similarity_score
                         FROM legal_chunks
+                        WHERE (:exclude_expired = FALSE OR expires_at IS NULL OR expires_at > NOW())
                         ORDER BY embedding <=> :qvec::vector ASC
                         LIMIT :top_k
                         """,
                         new MapSqlParameterSource()
                                 .addValue("qvec", vecStr)
-                                .addValue("top_k", topK),
-                        (rs, rowNum) -> new LegalChunk(
-                                UUID.fromString(rs.getString("chunk_id")),
-                                rs.getString("act_or_circular"),
-                                rs.getString("section_or_para"),
-                                rs.getString("title"),
-                                rs.getInt("chunk_index"),
-                                rs.getString("content"),
-                                rs.getInt("token_count"),
-                                null,
-                                null,
-                                rs.getDouble("similarity_score")
-                        )
+                                .addValue("top_k", topK)
+                                .addValue("exclude_expired", excludeExpired),
+                        (rs, rowNum) -> {
+                            java.sql.Timestamp createdTs = rs.getTimestamp("created_at");
+                            java.sql.Timestamp savedTs = rs.getTimestamp("saved_at");
+                            java.sql.Timestamp effTs = rs.getTimestamp("effective_date");
+                            java.sql.Timestamp expTs = rs.getTimestamp("expires_at");
+                            java.time.OffsetDateTime createdAt = createdTs != null ? createdTs.toInstant().atOffset(java.time.ZoneOffset.UTC) : null;
+                            java.time.OffsetDateTime savedAt = savedTs != null ? savedTs.toInstant().atOffset(java.time.ZoneOffset.UTC) : createdAt;
+                            java.time.OffsetDateTime effectiveDate = effTs != null ? effTs.toInstant().atOffset(java.time.ZoneOffset.UTC) : null;
+                            java.time.OffsetDateTime expiresAt = expTs != null ? expTs.toInstant().atOffset(java.time.ZoneOffset.UTC) : null;
+
+                            return new LegalChunk(
+                                    UUID.fromString(rs.getString("chunk_id")),
+                                    rs.getString("act_or_circular"),
+                                    rs.getString("section_or_para"),
+                                    rs.getString("title"),
+                                    rs.getInt("chunk_index"),
+                                    rs.getString("content"),
+                                    rs.getInt("token_count"),
+                                    null,
+                                    createdAt,
+                                    rs.getDouble("similarity_score"),
+                                    savedAt,
+                                    effectiveDate,
+                                    expiresAt
+                            );
+                        }
                 );
                 if (!dbResults.isEmpty()) {
                     return dbResults;
@@ -261,6 +304,9 @@ public class RagStoreService {
 
         List<LegalChunk> scored = new ArrayList<>();
         for (LegalChunk c : IN_MEMORY_LEGAL_STORE) {
+            if (excludeExpired && c.isExpired()) {
+                continue;
+            }
             if (c.embedding() != null) {
                 double score = cosineSimilarity(qvec, c.embedding());
                 scored.add(c.withSimilarityScore(Math.round(score * 10000.0) / 10000.0));
