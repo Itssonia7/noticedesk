@@ -60,12 +60,65 @@ public class AppProperties {
         private String modelHighStakes = "";
         private String stubDefaultCanned;
 
+        // Per-agent thinking effort (output_config.effort) for models listed in anthropic.effort-models.
+        // Blank = no effort sent (the model's own default applies). Values come from application.yml.
+        private String effortMatching = "";
+        private String effortPartialDrafting = "";
+        private String effortNewIssue = "";
+        private String effortHighStakes = "";
+
+        // Per-agent max_tokens. A thinking model spends output tokens on thinking before the JSON,
+        // so the cap must leave room for both. A max_tokens stop is retried once with the *Retry cap.
+        // Integer so an empty env var binds to null and falls back to the default below.
+        private Integer maxTokensMatching = 8000;
+        private Integer maxTokensMatchingRetry = 16000;
+        private Integer maxTokensPartialDrafting = 16000;
+        private Integer maxTokensPartialDraftingRetry = 24000;
+        private Integer maxTokensNewIssue = 16000;
+        private Integer maxTokensNewIssueRetry = 24000;
+        private Integer maxTokensHighStakes = 16000;
+        private Integer maxTokensHighStakesRetry = 24000;
+
+        /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes); "" when unset. */
+        public String effortForAgent(String agent) {
+            String v = switch (agent) {
+                case "matching" -> effortMatching;
+                case "partial_drafting" -> effortPartialDrafting;
+                case "new_issue" -> effortNewIssue;
+                case "high_stakes" -> effortHighStakes;
+                default -> "";
+            };
+            return v != null ? v.trim() : "";
+        }
+
+        /** max_tokens for a v7 agent key; {@code retry} = the higher cap used after a max_tokens stop. */
+        public int maxTokensForAgent(String agent, boolean retry) {
+            return switch (agent) {
+                case "matching" -> orDefault(retry ? maxTokensMatchingRetry : maxTokensMatching, retry ? 16000 : 8000);
+                case "partial_drafting" -> orDefault(retry ? maxTokensPartialDraftingRetry : maxTokensPartialDrafting, retry ? 24000 : 16000);
+                case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 24000 : 16000);
+                case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 24000 : 16000);
+                default -> retry ? 16000 : 8000;
+            };
+        }
+
+        private static int orDefault(Integer value, int fallback) {
+            return value != null && value > 0 ? value : fallback;
+        }
+
         @Data
         public static class Anthropic {
             private String apiKey;
             private String workspaceId;
             private String model = "";
             private double timeoutSeconds = 180.0;
+            /**
+             * Models that always think: they get output_config.effort and never thinking/temperature/
+             * top_p/top_k. Other Anthropic models keep the legacy request shape.
+             */
+            private List<String> effortModels = new java.util.ArrayList<>();
+            /** Upper bound applied to any max_tokens value sent to Anthropic. */
+            private Integer maxTokensCeiling = 32000;
         }
 
         @Data

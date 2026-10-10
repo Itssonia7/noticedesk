@@ -117,7 +117,8 @@ public class LlmFactory {
                     throw new LlmException(
                             "Anthropic model name must not be empty. Please set ANTHROPIC_MODEL or LLM_MODEL_* env var");
                 }
-                yield new AnthropicLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds(), cfg.getWorkspaceId());
+                yield new AnthropicLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds(), cfg.getWorkspaceId(),
+                        cfg.getEffortModels(), cfg.getMaxTokensCeiling() != null ? cfg.getMaxTokensCeiling() : 0);
             }
             case "openai" -> {
                 AppProperties.Llm.OpenAi cfg = properties.getLlm().getOpenai();
