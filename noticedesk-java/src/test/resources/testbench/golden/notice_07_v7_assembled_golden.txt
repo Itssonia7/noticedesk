@@ -1,22 +1,24 @@
-=== NOTICE 07 V7 STAGE 3 GOLDEN DRAFT SNAPSHOT (PARTIAL MATCH) ===
+=== NOTICE 07 V7 STAGE 3 GOLDEN DRAFT (PARTIAL MATCH: CAPITAL GOODS ITC) ===
 
 ================================================================================
 SECTION 1: 01 Executive Summary
 ================================================================================
-Executive Summary: Reply to Notice Ref SCN/MH/2023-24/707 dated 10-10-2023 for GSTIN 27IIIJJ1234I1Z9. Total Demand Amount: Rs 2,50,000.
-  * Issue #1: Input Tax Credit disallowance under Section 16(2)(aa) of Rs 2,50,000.
+Executive Summary: Reply to Notice Ref SCN/GJ/2023-24/707 dated 22-10-2023 issued under Section 73 for GSTIN 24KKKLL5678K1Z3. Total Demand Amount: Rs 4,00,000.
+  * Issue #1 (Section 16; amount involved: Rs 4,00,000): Input Tax Credit of Rs 4,00,000 on capital goods is admissible: Rule 46 does not require machine serial or chassis numbers on a tax invoice.
 
 
 ================================================================================
 SECTION 2: 02 Notice Understanding
 ================================================================================
-The taxpayer M/s Apex Freight Systems Pvt Ltd has received notice reference SCN/MH/2023-24/707 issued under Section 73 of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year 2022-23.
+The taxpayer M/s Apex Industrial Heavy Machinery has received notice reference SCN/GJ/2023-24/707 dated 22-10-2023 under Section 73 of the CGST Act, 2017, for Financial Year 2023-24.
+The notice raises 1 issue, each answered in Section 04 and paragraph-wise in Section 05.
 
 
 ================================================================================
 SECTION 3: 03 Factual Background
 ================================================================================
-M/s Apex Freight Systems Pvt Ltd (GSTIN: 27IIIJJ1234I1Z9) is a registered taxable person under the jurisdiction of Maharashtra. Notice reference SCN/MH/2023-24/707 dated 10-10-2023 pertains to Financial Year 2022-23.
+M/s Apex Industrial Heavy Machinery (GSTIN: 24KKKLL5678K1Z3) is registered under the GST law in the State of Gujarat.
+Notice reference SCN/GJ/2023-24/707 dated 22-10-2023 pertains to Financial Year 2023-24.
 
 
 ================================================================================
@@ -24,7 +26,9 @@ SECTION 4: 04 Issue-wise Response
 ================================================================================
 
 --- Issue #1 Grounds of Defence ---
-4.1 [[PENDING_AI: Issue 1 — partial/new, written in Stage 3]]
+4.1 The Noticee availed Input Tax Credit of Rs 4,00,000 on capital goods described in the notice as specialised industrial generator units and heavy mobile crane equipment. The notice does not allege that the goods were not received or were not used in the course or furtherance of business; its only objection is that the purchase tax invoices and delivery receipts do not carry manufacturer machine registration serial numbers and equipment chassis numbers.
+4.2 Rule 46 of the CGST Rules, 2017 prescribes the particulars of a tax invoice, such as the description, HSN code, quantity, taxable value and tax charged. It does not require a machine serial number or a chassis number. Omission of these identifiers is not a defect under Rule 46 and does not take the invoices outside Section 16(2)(a).
+4.3 The Noticee holds the tax invoices for the capital goods [[MISSING: invoice_numbers_and_dates]] and evidence of their receipt [[MISSING: goods_receipt_evidence]].
 
 
 ================================================================================
@@ -32,11 +36,11 @@ SECTION 5: 05 Para-wise Reply
 ================================================================================
 Point-by-point reply to the paragraphs of the notice:
   * Para 1: Matter of record; no comments.
-  * Para 2: Denied. Please refer to the reply to Issue #1 at para 4.1.
-  * Para 3: Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.
-  * Para 4: Denied, for the reasons stated in reply to Issues #1 and #2 at paras 4.1 and para [ref].
-  * Para 5: Matter of record; no comments.
-  * Para 6: Matter of record; no comments.
+  * Para 2: It is admitted that Input Tax Credit of Rs 4,00,000 was availed on the capital goods described. That the credit is ineligible is denied.
+  * Para 3: Denied. Rule 46 of the CGST Rules, 2017 does not require machine serial numbers or chassis numbers on a tax invoice.
+  * Para 4: Denied. The proposed disallowance under Section 16(2)(a) has no basis, as the Noticee holds tax invoices for the goods.
+  * Para 5: Denied. As the credit is admissible, nothing is recoverable under Section 73(1), and no interest under Section 50 or penalty under Section 73(9) arises.
+  * Para 6: Noted. This reply is submitted in compliance with the direction.
 
 
 ================================================================================
@@ -44,7 +48,8 @@ SECTION 6: 06 Legal Submissions
 ================================================================================
 
 --- Legal Submissions for Issue #1 ---
-6.1 [[PENDING_AI: Issue 1 — partial/new, written in Stage 3]]
+6.1 Section 16(2)(a) of the CGST Act, 2017 requires the recipient to be in possession of a tax invoice. The particulars of a tax invoice are those listed in Rule 46; identifiers outside that list cannot be read into it.
+6.2 Even where a document does not contain every specified particular, the proviso to Rule 36(2) of the CGST Rules, 2017 allows credit when it contains the amount of tax charged, description of goods, total value of supply, GSTINs of the supplier and recipient and, for inter-State supplies, the place of supply.
 
 
 ================================================================================
@@ -69,8 +74,10 @@ Not applicable.
 SECTION 10: 10 Documents Enclosed
 ================================================================================
 The following documents are enclosed in support of the reply:
-  * Copy of GSTR-3B and GSTR-1 returns for the relevant periods.
-  * Reconciliation Statement of Input Tax Credit.
+  * Purchase tax invoices for the generator units and mobile crane equipment on which the credit was availed
+  * Delivery challans / goods receipt notes for the capital goods
+  * Fixed asset register extract showing capitalisation of the capital goods
+  * Proof of payment to the suppliers
 
 
 ================================================================================
@@ -78,14 +85,16 @@ SECTION 11: 11 Annexure Index
 ================================================================================
 Annexure Index:
 Annexure | Document Description
-Annexure A-1 | Form GSTR-3B Return Acknowledgments
-Annexure A-2 | GSTR-2B Statement & Reconciliation
+Annexure A-1 | Purchase tax invoices for the generator units and mobile crane equipment on which the credit was availed
+Annexure A-2 | Delivery challans / goods receipt notes for the capital goods
+Annexure A-3 | Fixed asset register extract showing capitalisation of the capital goods
+Annexure A-4 | Proof of payment to the suppliers
 
 
 ================================================================================
 SECTION 12: 12 Prayer
 ================================================================================
-[DEV - not CA reviewed] PRAYER: It is humbly prayed that the Show Cause Notice issued under Section 73 be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.
+[DEV - not CA reviewed] PRAYER: It is humbly prayed that the proceedings initiated by notice SCN/GJ/2023-24/707 dated 22-10-2023 under Section 73 be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.
 
 
 ================================================================================
@@ -93,26 +102,27 @@ SECTION 13: 13 Internal Partner Note
 ================================================================================
 
 --- Internal Partner Review Note ---
-Notice ID: SCN/MH/2023-24/707
+Notice: SCN/GJ/2023-24/707 | Stage template: scn_73 | Section: Section 73
 Matched Issues & Templates:
-  * Issue #1: Match Status=partial, Cards=[CARD-006], Template=TPL-006 (v1)
+  * Issue #1: Match Status=partial, Cards=[CARD-006], Template=TPL-006 (v1), Written by=AI partial, Template blocks used=none
 Procedural Objection Options (Partner to Select):
-  * Check opportunity of hearing under Section 75(4).
-  * Verify statutory limitation period under Section 73(10).
+  * Check whether an opportunity of personal hearing has been offered (Section 75(4)).
+  * Verify the limitation period under Section 73(10).
 Code Quality Check Results & Flags:
 Check Name | Status | Severity | Details
 CHECK_ALL_SECTIONS_PRESENT | PASS | block | {missing_sections=[], total_sections=15}
-CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {unanswered_issues=[], total_issues=1}
-CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, record, issue]}
+CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=1, unanswered_issues=[]}
+CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
 CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
-CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {unresolved_placeholders=[]}
-CHECK_MARKERS_LIST | FAIL | block | {missing_count=1, missing_markers=[date_of_receipt], pending_ai_count=2, pending_ai_markers=[Issue 1 — partial/new, written in Stage 3, Issue 1 — partial/new, written in Stage 3]}
-CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {unique_rendered_blocks=0, total_rendered_blocks=0}
+CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
+CHECK_MARKERS_LIST | FAIL | block | {missing_count=3, missing_markers=[invoice_numbers_and_dates, goods_receipt_evidence, date_of_service], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=5, unique_rendered_blocks=5}
+CHECK_PROCEEDING_CONSISTENT | PASS | block | {notice_section=Section 73, problems=[], stage=scn_73}
 Missing Data Markers:
-  * date_of_receipt (severity: block)
-Pending AI Markers:
-  * PENDING_AI: Issue 1 (severity: block)
-  * PENDING_AI: Issue 1 (severity: block)
+  * invoice_numbers_and_dates (severity: block)
+  * goods_receipt_evidence (severity: block)
+  * date_of_service (severity: block)
+Pending AI Markers: None
 
 
 ================================================================================
@@ -121,12 +131,14 @@ SECTION 14: 14 Client Summary
 
 --- Client Summary ---
 Notice Type: Show Cause Notice under Section 73
-Total Amount Demanded: Rs 2,50,000
-Reply Due Date: Within 30 days of receipt (date of receipt: [[MISSING: date_of_receipt]])
+Notice Reference: SCN/GJ/2023-24/707 dated 22-10-2023
+Total Amount Demanded: Rs 4,00,000
+Reply Due Date: Within 30 days from service (date of service: [[MISSING: date_of_service]])
 Documents Required from Client:
-  * Copy of Tax Invoices and Purchase Register for FY 2022-23.
-  * Form GSTR-3B return filing acknowledgments and GSTR-2B reconciliation statement.
-  * Electronic Cash Ledger statement / Bank payment proof of tax deposited.
+  * Purchase tax invoices for the generator units and mobile crane equipment on which the credit was availed
+  * Delivery challans / goods receipt notes for the capital goods
+  * Fixed asset register extract showing capitalisation of the capital goods
+  * Proof of payment to the suppliers
 
 
 ================================================================================

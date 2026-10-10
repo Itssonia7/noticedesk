@@ -1,8 +1,6 @@
 package com.noticedesk.api.agent;
 
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.noticedesk.api.agent.IssueMatchingAgent.MatchedNoticeInfo;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
 import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
 import com.noticedesk.api.config.AppProperties;
@@ -13,14 +11,27 @@ import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.Pattern;
 
+/**
+ * v7 Stage 3 high-stakes mode: Section 74/74A proceedings, appeal stage, or demand at/above
+ * {@code HIGH_STAKES_DEMAND_THRESHOLD} (only when that variable is set). The high-stakes model writes
+ * the narrative of sections 01 and 03; the pipeline also routes the AI parts of 04/05/06 to it.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class HighStakesDraftingAgent {
+
+    public static final String PROMPT_VERSION = "high_stakes_v1";
+
+    private static final Pattern SECTION_74 = Pattern.compile("(?i)(?:section|sec\\.?|u/s)?\\s*\\b74A?\\b");
 
     private final AppProperties properties;
     private final ObjectMapper objectMapper;
@@ -31,108 +42,123 @@ public class HighStakesDraftingAgent {
             boolean active,
             String section01Html,
             String section03Html,
-            List<RawAiCitation> citations
-    ) {}
+            List<RawAiCitation> citations,
+            String model,
+            String promptVersion
+    ) {
+        public HighStakesResult(boolean active, String section01Html, String section03Html, List<RawAiCitation> citations) {
+            this(active, section01Html, section03Html, citations, null, PROMPT_VERSION);
+        }
+    }
 
     public boolean isHighStakesActive(String noticeSec, String stageName, Double totalDemandAmount) {
         if (properties.getDrafting() == null || properties.getDrafting().getHighStakes() == null) {
             return false;
         }
-
         var hs = properties.getDrafting().getHighStakes();
 
-        // 1. Section 74 check
-        if (Boolean.TRUE.equals(hs.getSection74()) && noticeSec != null && noticeSec.toLowerCase().contains("74")) {
+        if (Boolean.TRUE.equals(hs.getSection74()) && noticeSec != null && SECTION_74.matcher(noticeSec).find()) {
             return true;
         }
-
-        // 2. Appeal stage check
         if (Boolean.TRUE.equals(hs.getAppealStage()) && stageName != null && stageName.toLowerCase().contains("appeal")) {
             return true;
         }
-
-        // 3. Demand threshold check
         String thresholdStr = hs.getDemandThreshold();
         if (thresholdStr != null && !thresholdStr.isBlank() && totalDemandAmount != null) {
             try {
-                double threshold = Double.parseDouble(thresholdStr);
-                if (totalDemandAmount >= threshold) {
+                if (totalDemandAmount >= Double.parseDouble(thresholdStr.trim())) {
                     return true;
                 }
-            } catch (Exception ignored) {}
+            } catch (NumberFormatException e) {
+                log.warn("HIGH_STAKES_DEMAND_THRESHOLD is not a number; demand threshold check skipped");
+            }
         }
-
         return false;
     }
 
+    /**
+     * Writes the high-stakes narrative for sections 01 and 03.
+     *
+     * @return the result, or {@code null} when the model call failed (the pipeline keeps the code-built
+     *         sections and records the failure in Section 13)
+     */
     public HighStakesResult generateHighStakesDraft(
             MatchingResult matchingResult,
             DraftingAgent.DraftingInput input,
             String stageName,
             UUID noticeId
     ) {
-        String noticeSec = (input != null && input.notice() != null && input.notice().get("section") != null) ?
-                input.notice().get("section").toString() : "";
-        Double totalDemand = (matchingResult != null && matchingResult.notice() != null) ?
-                matchingResult.notice().totalDemandAmount() : null;
-
-        if (!isHighStakesActive(noticeSec, stageName, totalDemand)) {
-            return new HighStakesResult(false, null, null, List.of());
-        }
-
         String model = properties.getLlm() != null ? properties.getLlm().getModelHighStakes() : null;
         if (model == null || model.isBlank()) {
             throw new IllegalStateException("LLM_MODEL_HIGH_STAKES is not configured. Set environment variable LLM_MODEL_HIGH_STAKES.");
         }
 
-        log.info("High-Stakes Mode TRIGGERED for notice {}. Model: {}", noticeId, model);
-
-        String systemPrompt = "You are a Senior Tax Advocate writing custom executive summary and factual background for a high-stakes GST matter. Emits JSON {section01_html, section03_html, citations:[]}. No invented facts.";
-        String userPrompt = "High stakes matter context: " + (matchingResult != null ? matchingResult.notice() : "Notice");
-
-        String provider = properties.getLlm() != null ? properties.getLlm().getProviderPrimary() : "stub";
+        String provider = properties.getLlm().getProviderPrimary();
         if ("stub".equalsIgnoreCase(provider) || llmFactory == null) {
+            log.info("HighStakesDraftingAgent running in stub mode");
             return stubResult();
         }
 
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("notice", matchingResult != null ? matchingResult.notice() : null);
+        payload.put("issues", matchingResult != null ? matchingResult.issues() : List.of());
+        payload.put("stage", stageName);
+        if (input != null) {
+            payload.put("notice_section", input.notice() != null ? input.notice().get("section") : null);
+            payload.put("client_legal_name", input.clientLegalName());
+            payload.put("gstin", input.registrationIdentifier());
+            payload.put("state", input.registrationStateName());
+            payload.put("financial_year", input.financialYear());
+            payload.put("full_ocr_text", input.noticeOcrExcerpt());
+        }
+
         try {
+            String userPrompt = objectMapper.writeValueAsString(payload);
             LlmProvider llmProvider = llmFactory.getLlmForAgent("high_stakes");
-            LlmResponse response = llmProvider.generateText(systemPrompt, userPrompt, 4096, 0.0);
+            LlmResponse response = llmProvider.generateText(loadPrompt(), userPrompt, 4096, 0.0);
             if (apiUsageLogService != null) {
                 apiUsageLogService.logUsage("anthropic", response.model() != null ? response.model() : model,
                         response.inputTokens() != null ? response.inputTokens() : 0,
                         response.outputTokens() != null ? response.outputTokens() : 0,
                         "high_stakes", null, noticeId);
             }
-
-            return parseAndSanitize(response.content());
+            return parseAndSanitize(response.content(), response.model() != null ? response.model() : model);
         } catch (Exception e) {
             log.error("HighStakesDraftingAgent failed: {}", e.getMessage());
-            return stubResult();
+            return null;
         }
     }
 
-    private HighStakesResult parseAndSanitize(String json) {
-        if (json == null || json.isBlank()) return stubResult();
+    HighStakesResult parseAndSanitize(String json, String model) {
+        if (json == null || json.isBlank()) return null;
         try {
-            String cleanJson = json.replaceAll("^```json\\s*", "").replaceAll("^```\\s*", "").replaceAll("\\s*```$", "").trim();
-            Map<String, Object> map = objectMapper.readValue(cleanJson, new TypeReference<>() {});
-
-            String sec01 = HtmlSanitizer.sanitize(map.getOrDefault("section01_html", "").toString());
-            String sec03 = HtmlSanitizer.sanitize(map.getOrDefault("section03_html", "").toString());
-
-            return new HighStakesResult(true, sec01, sec03, List.of());
+            Map<String, Object> map = AiOutputParser.readJsonObject(objectMapper, json);
+            String sec01 = HtmlSanitizer.sanitize(Objects.toString(map.get("section01_html"), ""));
+            String sec03 = HtmlSanitizer.sanitize(Objects.toString(map.get("section03_html"), ""));
+            return new HighStakesResult(true, sec01, sec03, AiOutputParser.citations(map), model, PROMPT_VERSION);
         } catch (Exception e) {
-            return stubResult();
+            log.warn("Failed to parse HighStakesDraftingAgent JSON: {}", e.getMessage());
+            return null;
         }
     }
 
     private HighStakesResult stubResult() {
         return new HighStakesResult(
                 true,
-                "<p><strong>[High-Stakes Executive Summary]</strong> Strategic high-stakes defence prepared for Section 74 proceedings.</p>",
-                "<p><strong>[High-Stakes Factual Background]</strong> Comprehensive multi-year operational facts compiled.</p>",
-                List.of()
+                "<p>[STUB - no model call] High-stakes executive summary to be written by the high-stakes model.</p>",
+                "<p>[STUB - no model call] High-stakes factual background to be written by the high-stakes model.</p>",
+                List.of(), "stub", PROMPT_VERSION
         );
+    }
+
+    private String loadPrompt() {
+        try {
+            ClassPathResource res = new ClassPathResource("prompts/" + PROMPT_VERSION + ".md");
+            try (InputStream is = res.getInputStream()) {
+                return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("Prompt prompts/" + PROMPT_VERSION + ".md missing from classpath", e);
+        }
     }
 }

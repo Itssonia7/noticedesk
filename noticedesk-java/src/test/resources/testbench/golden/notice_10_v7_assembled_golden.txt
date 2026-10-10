@@ -1,22 +1,24 @@
-=== NOTICE 10 V7 STAGE 3 GOLDEN DRAFT SNAPSHOT (NO MATCH / NOVEL ISSUE) ===
+=== NOTICE 10 V7 STAGE 3 GOLDEN DRAFT (NO MATCH: ANTI-PROFITEERING, SECTION 171) ===
 
 ================================================================================
 SECTION 1: 01 Executive Summary
 ================================================================================
-Executive Summary: Reply to Notice Ref SCN/MH/2023-24/1010 dated 15-10-2023 for GSTIN 27IIIJJ1234I1Z9. Total Demand Amount: Rs 5,00,000.
-  * Issue #1: No template available for card null
+Executive Summary: Reply to Notice Ref NAPA/ND/2023-24/1010 dated 05-06-2023 issued under Section 171 for GSTIN 07QQQRR7890Q1Z6. Total Demand Amount: Rs 15,00,000.
+  * Issue #1 (Section 171; amount involved: Rs 15,00,000): The Noticee denies profiteering under Section 171; the proposed amount of Rs 15,00,000, interest and penalty under Section 171(3A) are contested.
 
 
 ================================================================================
 SECTION 2: 02 Notice Understanding
 ================================================================================
-The taxpayer M/s Oceanline Logistics India Pvt Ltd has received notice reference SCN/MH/2023-24/1010 issued under Section 73 of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year 2022-23.
+The taxpayer M/s Horizon Electronics has received notice reference NAPA/ND/2023-24/1010 dated 05-06-2023 under Section 171 of the CGST Act, 2017, for Financial Year 2022-23.
+The notice raises 1 issue, each answered in Section 04 and paragraph-wise in Section 05.
 
 
 ================================================================================
 SECTION 3: 03 Factual Background
 ================================================================================
-M/s Oceanline Logistics India Pvt Ltd (GSTIN: 27IIIJJ1234I1Z9) is a registered taxable person under the jurisdiction of Maharashtra. Notice reference SCN/MH/2023-24/1010 dated 15-10-2023 pertains to Financial Year 2022-23.
+M/s Horizon Electronics (GSTIN: 07QQQRR7890Q1Z6) is registered under the GST law in the State of Delhi.
+Notice reference NAPA/ND/2023-24/1010 dated 05-06-2023 pertains to Financial Year 2022-23.
 
 
 ================================================================================
@@ -24,19 +26,21 @@ SECTION 4: 04 Issue-wise Response
 ================================================================================
 
 --- Issue #1 Grounds of Defence ---
-4.1 [[PENDING_AI: Issue 1 — partial/new, written in Stage 3]]
+4.1 The Noticee denies that it has profiteered within the meaning of Section 171 of the CGST Act, 2017. The notice alleges that the base selling price of television units was increased simultaneously with the reduction of the GST rate on smart televisions from 28% to 18% effective 15-11-2017, keeping the MRP unchanged. Section 171(1) requires that a reduction in the rate of tax be passed on by way of a commensurate reduction in prices; it does not bar price revisions made for independent commercial reasons.
+4.2 The notice is issued for Financial Year 2022-23, whereas the rate reduction relied upon took effect on 15-11-2017. The notice does not state the period over which the profiteered amount of Rs 15,00,000 was computed, nor the method of computation. The Noticee requests a copy of the DGAP investigation report and the computation, to the extent not already supplied.
+4.3 The reasons for the revision of base prices and the supporting cost data are [[MISSING: reasons_and_cost_data_for_base_price_revision]].
 
 
 ================================================================================
 SECTION 5: 05 Para-wise Reply
 ================================================================================
 Point-by-point reply to the paragraphs of the notice:
-  * Para 1: Matter of record; no comments.
-  * Para 2: Denied. Please refer to the reply to Issue #1 at para 4.1.
-  * Para 3: Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.
-  * Para 4: Denied, for the reasons stated in reply to Issues #1 and #2 at paras 4.1 and para [ref].
-  * Para 5: Matter of record; no comments.
-  * Para 6: Matter of record; no comments.
+  * Para 1: Denied. The Noticee denies that it failed to pass on the benefit of the GST rate reduction on television sets.
+  * Para 2: Matter of record; no comments.
+  * Para 3: Denied. An increase in base price is not by itself profiteering; the reasons for the revision are set out in the reply.
+  * Para 4: The requirement of Section 171 is a matter of law. Its application to the Noticee on the facts alleged is denied.
+  * Para 5: Denied. The profiteered amount of Rs 15,00,000 is not established, interest is not leviable, and penalty under Section 171(3A) cannot be imposed for any period before that sub-section came into force.
+  * Para 6: Noted. This reply is submitted in compliance with the direction.
 
 
 ================================================================================
@@ -44,7 +48,9 @@ SECTION 6: 06 Legal Submissions
 ================================================================================
 
 --- Legal Submissions for Issue #1 ---
-6.1 [[PENDING_AI: Issue 1 — partial/new, written in Stage 3]]
+6.1 Section 171(1) of the CGST Act, 2017 obliges a supplier to pass on the benefit of a reduction in the rate of tax by a commensurate reduction in prices. The burden of establishing the amount not passed on, and the period and method of its computation, lies on the authority proposing recovery.
+6.2 The Hon'ble Delhi High Court in Reckitt Benckiser India Pvt Ltd v. Union of India upheld the constitutional validity of Section 171; the computation of any profiteered amount must nonetheless be established on the facts of each case.
+6.3 Section 171(3A), which provides for penalty, was inserted with effect from 01-01-2020. Penalty cannot be imposed under it for any profiteering alleged in respect of a period before that date.
 
 
 ================================================================================
@@ -69,8 +75,10 @@ Not applicable.
 SECTION 10: 10 Documents Enclosed
 ================================================================================
 The following documents are enclosed in support of the reply:
-  * Copy of GSTR-3B and GSTR-1 returns for the relevant periods.
-  * Reconciliation Statement of Input Tax Credit.
+  * Price lists for the television models before and after 15-11-2017
+  * Cost data supporting the revision of base prices
+  * Sales invoices for the period examined by the DGAP
+  * Copy of the DGAP investigation report, if received
 
 
 ================================================================================
@@ -78,14 +86,16 @@ SECTION 11: 11 Annexure Index
 ================================================================================
 Annexure Index:
 Annexure | Document Description
-Annexure A-1 | Form GSTR-3B Return Acknowledgments
-Annexure A-2 | GSTR-2B Statement & Reconciliation
+Annexure A-1 | Price lists for the television models before and after 15-11-2017
+Annexure A-2 | Cost data supporting the revision of base prices
+Annexure A-3 | Sales invoices for the period examined by the DGAP
+Annexure A-4 | Copy of the DGAP investigation report, if received
 
 
 ================================================================================
 SECTION 12: 12 Prayer
 ================================================================================
-[DEV - not CA reviewed] PRAYER: It is humbly prayed that the Show Cause Notice issued under Section 73 be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.
+[DEV - not CA reviewed] PRAYER: It is humbly prayed that the proceedings initiated by notice NAPA/ND/2023-24/1010 dated 05-06-2023 under Section 171 be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.
 
 
 ================================================================================
@@ -93,26 +103,30 @@ SECTION 13: 13 Internal Partner Note
 ================================================================================
 
 --- Internal Partner Review Note ---
-Notice ID: SCN/MH/2023-24/1010
+Notice: NAPA/ND/2023-24/1010 | Stage template: scn_73 | Section: Section 171
 Matched Issues & Templates:
-  * Issue #1: Match Status=none, Cards=[], Template=NONE (v0)
+  * Issue #1: Match Status=none, Cards=[], Template=NONE (v0), Written by=AI new_issue
 Procedural Objection Options (Partner to Select):
-  * Check opportunity of hearing under Section 75(4).
-  * Verify statutory limitation period under Section 73(10).
+  * Check whether an opportunity of personal hearing has been offered (Section 75(4)).
+Stage 3 Notes:
+  * Citation Reckitt Benckiser India Pvt Ltd v. Union of India (Delhi High Court, 2024): VERIFIED - Matched IndianKanoon judgment: Reckitt Benckiser India Private Limited vs Union Of India on 29 January, 2024
+  * Issue #1 strength note: Defence rests on (i) the absence of a stated computation period and method, (ii) the gap between the 2017 rate change and FY 2022-23, and (iii) the prospective operation of Section 171(3A). Cost data justifying the base price revision is the critical evidence; without it the defence is weak on merits. Partner to verify jurisdiction: anti-profiteering functions were transferred to the Competition Commission of India from 01-12-2022, while this notice is issued in the name of the National Anti-Profiteering Authority on 05-06-2023.
 Code Quality Check Results & Flags:
 Check Name | Status | Severity | Details
 CHECK_ALL_SECTIONS_PRESENT | PASS | block | {missing_sections=[], total_sections=15}
-CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {unanswered_issues=[], total_issues=1}
-CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, record, issue]}
+CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=1, unanswered_issues=[]}
+CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
 CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
-CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {unresolved_placeholders=[]}
-CHECK_MARKERS_LIST | FAIL | block | {missing_count=1, missing_markers=[date_of_receipt], pending_ai_count=2, pending_ai_markers=[Issue 1 — partial/new, written in Stage 3, Issue 1 — partial/new, written in Stage 3]}
-CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {unique_rendered_blocks=0, total_rendered_blocks=0}
+CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
+CHECK_MARKERS_LIST | FAIL | block | {missing_count=2, missing_markers=[reasons_and_cost_data_for_base_price_revision, date_of_receipt], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=6, unique_rendered_blocks=6}
+CHECK_PROCEEDING_CONSISTENT | FAIL | block | {notice_section=Section 171, problems=[stage template 'scn_73' does not match the notice provision Section 171; review Sections 12 and 15], stage=scn_73}
+CHECK_AI_CITATIONS_VERIFIED | PASS | block | {total=1, unverified=[]}
+CHECK_AI_CITATIONS_REMOVED | PASS | warn | {removed=[]}
 Missing Data Markers:
+  * reasons_and_cost_data_for_base_price_revision (severity: block)
   * date_of_receipt (severity: block)
-Pending AI Markers:
-  * PENDING_AI: Issue 1 (severity: block)
-  * PENDING_AI: Issue 1 (severity: block)
+Pending AI Markers: None
 
 
 ================================================================================
@@ -120,13 +134,15 @@ SECTION 14: 14 Client Summary
 ================================================================================
 
 --- Client Summary ---
-Notice Type: Show Cause Notice under Section 73
-Total Amount Demanded: Rs 5,00,000
-Reply Due Date: Within 30 days of receipt (date of receipt: [[MISSING: date_of_receipt]])
+Notice Type: Notice under Section 171
+Notice Reference: NAPA/ND/2023-24/1010 dated 05-06-2023
+Total Amount Demanded: Rs 15,00,000
+Reply Due Date: Within 21 days from receipt (date of receipt: [[MISSING: date_of_receipt]])
 Documents Required from Client:
-  * Copy of Tax Invoices and Purchase Register for FY 2022-23.
-  * Form GSTR-3B return filing acknowledgments and GSTR-2B reconciliation statement.
-  * Electronic Cash Ledger statement / Bank payment proof of tax deposited.
+  * Price lists for the television models before and after 15-11-2017
+  * Cost data supporting the revision of base prices
+  * Sales invoices for the period examined by the DGAP
+  * Copy of the DGAP investigation report, if received
 
 
 ================================================================================

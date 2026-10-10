@@ -11,6 +11,8 @@ public class AppProperties {
 
     private String environment = "development";
     private String logLevel = "INFO";
+    /** Directory holding private (non-committed) seed data; empty = private seeding skipped. */
+    private String privateSeedDir = "";
 
     private Auth auth = new Auth();
     private Llm llm = new Llm();
@@ -187,7 +189,7 @@ public class AppProperties {
         public static class HighStakes {
             private Boolean section74 = true;
             private Boolean appealStage = true;
-            private String demandThreshold = "5000000";
+            private String demandThreshold;  // empty/null = demand threshold check disabled
         }
     }
 
@@ -196,6 +198,7 @@ public class AppProperties {
         private String provider = "stub";
         private String indiankanoonApiToken;
         private int maxCallsPerDraft = 15;
+        private int cacheTtlDays = 30;
     }
 
     @Data

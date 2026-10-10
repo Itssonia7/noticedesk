@@ -32,9 +32,9 @@ class Stage3AgentsTest {
         properties = new AppProperties();
 
         AppProperties.Llm llm = new AppProperties.Llm();
-        llm.setModelPartialDrafting("claude-sonnet-5-5");
-        llm.setModelNewIssue("claude-opus-4-7");
-        llm.setModelHighStakes("claude-opus-4-7");
+        llm.setModelPartialDrafting("test-model-partial");
+        llm.setModelNewIssue("test-model-new-issue");
+        llm.setModelHighStakes("test-model-high-stakes");
         llm.setProviderPrimary("stub");
         properties.setLlm(llm);
 

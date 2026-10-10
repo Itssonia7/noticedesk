@@ -81,7 +81,7 @@ public class TemplateFillService {
             log.warn("Issue #{} missing tax period in facts. Marking [[MISSING: period]]", issue.issueNo());
             return new FilledTemplateResult(
                     "MISSING_PERIOD", 1, getCardId(issue),
-                    "[[MISSING: period]] - Tax period missing for issue #" + issue.issueNo(),
+                    "[[MISSING: period]]",
                     List.of(), List.of(),
                     List.of("period"), List.of("missing_period"),
                     List.of(), List.of(), true
@@ -161,7 +161,7 @@ public class TemplateFillService {
     private FilledTemplateResult createNoTemplateResult(String cardId, String reason) {
         return new FilledTemplateResult(
                 "NONE", 0, cardId,
-                "No template available for card " + cardId,
+                null,  // internal reason goes to Section 13 via the flag, never to the client-facing summary
                 List.of(), List.of(),
                 List.of(), List.of("no_template_available"),
                 List.of(), List.of(), false

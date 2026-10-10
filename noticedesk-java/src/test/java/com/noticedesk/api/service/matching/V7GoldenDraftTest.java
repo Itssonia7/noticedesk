@@ -90,8 +90,8 @@ class V7GoldenDraftTest {
     @Test
     void testGoldenDraftAssemblyForNotice06() throws IOException {
         MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("SCN/MH/2023-24/606", "DIN-2023-0606", "18-09-2023", "Within 30 days", "2022-23", "2022-23", 155918.0, "State Tax Officer");
-        MatchedIssue issue1 = new MatchedIssue(1, "full", List.of("CARD-006"), "GSTR-3B vs 2B mismatch", List.of(), Map.of("period", "2022-23", "amount", 150000.0), List.of(), List.of());
-        MatchedIssue issue2 = new MatchedIssue(2, "full", List.of("CARD-011"), "Section 50 interest on gross tax liability", List.of(), Map.of("period", "2022-23", "amount", 5918.0), List.of(), List.of());
+        MatchedIssue issue1 = new MatchedIssue(1, "full", List.of("CARD-006"), "GSTR-3B vs 2B mismatch", List.of(), Map.of("period", "2022-23", "amount", 150000.0), List.of("2"), List.of());
+        MatchedIssue issue2 = new MatchedIssue(2, "full", List.of("CARD-011"), "Section 50 interest on gross tax liability", List.of(), Map.of("period", "2022-23", "amount", 5918.0), List.of("3"), List.of());
 
         MatchingResult matchingResult = new MatchingResult(
                 noticeInfo, List.of(issue1, issue2),

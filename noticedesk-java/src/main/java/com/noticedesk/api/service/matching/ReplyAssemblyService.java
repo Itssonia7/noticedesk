@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -23,10 +24,20 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * v7 Stage 2/3: assembles the 15-section reply from filled templates (code) and, for partial / unmatched
+ * issues, the sanitised AI output. Internal information (card IDs, match status, template IDs, errors,
+ * strength notes) is written to Section 13 only.
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class ReplyAssemblyService {
+
+    private static final Pattern PARA_LI = Pattern.compile(
+            "<li>\\s*(?:<(?:strong|b)>)?\\s*Para(?:graph)?\\s*(\\d+)\\s*[:.]?\\s*(?:</(?:strong|b)>)?\\s*[:.\\-–—]?\\s*(.*?)</li>",
+            Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern STAGE_PLACEHOLDER = Pattern.compile("\\{\\{\\s*([a-z_.]+)\\s*\\}\\}");
 
     private final JdbcTemplate jdbcTemplate;
     private final AppProperties properties;
@@ -53,17 +64,65 @@ public class ReplyAssemblyService {
             List<String> pendingAiMarkers
     ) {}
 
+    /** One piece of sanitised AI HTML for section 4, 5 or 6, optionally anchored after a template block. */
+    public record AiFragment(int section, String afterBlock, String html) {}
+
+    /** Stage 3 output for one issue. {@code writer} is "partial" or "new_issue" (internal only). */
+    public record AiIssueContent(
+            int issueNo,
+            String writer,
+            List<AiFragment> fragments,
+            List<String> documents,
+            String summaryLine
+    ) {}
+
+    /** High-stakes narrative for sections 01 and 03 (printed after the code-built fact paragraphs). */
+    public record HighStakesContent(String section01Html, String section03Html) {}
+
+    private enum IssueMode { TEMPLATE, MISSING_PERIOD, AI }
+
+    /** Stage 2 only (no AI content): partial / unmatched issues get [[PENDING_AI]] markers. */
     public AssembledReplyResult assembleReply(
             MatchingResult matchingResult,
             List<FilledTemplateResult> filledTemplates,
             DraftingAgent.DraftingInput input,
             String stageName
     ) {
+        return assembleReply(matchingResult, filledTemplates, input, stageName, Map.of(), null, List.of());
+    }
+
+    /**
+     * True when an issue cannot be written from its template by code and needs a Stage 3 writer:
+     * partial / unmatched issues, and "full" matches whose card has no usable template for the period.
+     */
+    public static boolean needsAiWriter(MatchedIssue issue, FilledTemplateResult ft) {
+        return modeFor(issue, ft) == IssueMode.AI;
+    }
+
+    private static IssueMode modeFor(MatchedIssue issue, FilledTemplateResult ft) {
+        if ("full".equalsIgnoreCase(issue.status())) {
+            if (ft != null && ft.periodMissing()) return IssueMode.MISSING_PERIOD;
+            if (ft != null && ft.blocks() != null && !ft.blocks().isEmpty()) return IssueMode.TEMPLATE;
+        }
+        return IssueMode.AI;
+    }
+
+    public AssembledReplyResult assembleReply(
+            MatchingResult matchingResult,
+            List<FilledTemplateResult> filledTemplates,
+            DraftingAgent.DraftingInput input,
+            String stageName,
+            Map<Integer, AiIssueContent> aiContent,
+            HighStakesContent highStakes,
+            List<String> internalNotes
+    ) {
         List<AssembledSection> rawSections = new ArrayList<>();
         List<SourceMapEntry> finalSourceMap = new ArrayList<>();
         List<String> assemblyFlags = new ArrayList<>();
         List<String> missingMarkers = new ArrayList<>();
         List<String> pendingAiMarkers = new ArrayList<>();
+        List<String> notes = new ArrayList<>(internalNotes != null ? internalNotes : List.of());
+        Map<Integer, AiIssueContent> ai = aiContent != null ? aiContent : Map.of();
 
         MatchedNoticeInfo noticeInfo = matchingResult != null ? matchingResult.notice() : null;
         List<MatchedIssue> matchedIssues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
@@ -71,7 +130,6 @@ public class ReplyAssemblyService {
         String normalizedStage = stageName != null ? stageName.toLowerCase().trim() : "scn_73";
         StageTemplate stageTpl = loadStageTemplate(normalizedStage);
 
-        // Map issue_no -> FilledTemplateResult
         Map<Integer, FilledTemplateResult> templateMap = new HashMap<>();
         if (filledTemplates != null) {
             for (int i = 0; i < filledTemplates.size(); i++) {
@@ -80,264 +138,578 @@ public class ReplyAssemblyService {
             }
         }
 
-        // Section 01: Executive Summary (No match status or card IDs)
-        StringBuilder sec01 = new StringBuilder();
-        sec01.append("<p><strong>Executive Summary:</strong> Reply to Notice Ref ");
-        sec01.append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]");
-        sec01.append(" dated ").append(noticeInfo != null && noticeInfo.issueDate() != null ? formatDateStr(noticeInfo.issueDate()) : "[[MISSING: issue_date]]");
-        sec01.append(" for GSTIN ").append(input != null && input.registrationIdentifier() != null ? input.registrationIdentifier() : "[[MISSING: client_gstin]]");
-        sec01.append(". Total Demand Amount: ").append(noticeInfo != null && noticeInfo.totalDemandAmount() != null ? TemplateFillService.formatIndianCurrency(java.math.BigDecimal.valueOf(noticeInfo.totalDemandAmount())) : "[[MISSING: total_demand]]");
-        sec01.append(".</p>");
+        String noticeSec = noticeSection(input);
+        if (noticeSec.startsWith("[[MISSING")) {
+            addOnce(missingMarkers, "notice_section");
+        }
+        String noticeRef = noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]";
+        String noticeDate = noticeInfo != null && noticeInfo.issueDate() != null ? formatDateStr(noticeInfo.issueDate()) : "[[MISSING: issue_date]]";
+        String clientName = formatClientName(input != null ? input.clientLegalName() : null);
+        String gstin = input != null && input.registrationIdentifier() != null ? input.registrationIdentifier() : "[[MISSING: client_gstin]]";
+        String fy = input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]";
+        String totalDemand = noticeInfo != null && noticeInfo.totalDemandAmount() != null
+                ? TemplateFillService.formatIndianCurrency(BigDecimal.valueOf(noticeInfo.totalDemandAmount()))
+                : "[[MISSING: total_demand]]";
 
+        // Anchored template blocks per AI issue (partial matches render only the blocks the writer anchored to)
+        Map<Integer, Set<String>> anchoredBlocks = new HashMap<>();
+        for (MatchedIssue issue : matchedIssues) {
+            AiIssueContent c = ai.get(issue.issueNo());
+            Set<String> anchors = new HashSet<>();
+            if (c != null && c.fragments() != null) {
+                for (AiFragment f : c.fragments()) {
+                    if (f.afterBlock() != null) anchors.add(f.afterBlock());
+                }
+            }
+            anchoredBlocks.put(issue.issueNo(), anchors);
+        }
+
+        // ---------------------------------------------------------------- Section 04 (built first: its para numbers are referenced by 01/05)
+        StringBuilder sec04 = new StringBuilder();
+        Map<String, String> blockIdToRefTag = new HashMap<>();
+        Map<Integer, String> issueNoToRefTag = new HashMap<>();
+        int[] globalParaNo = {1};
+        int[] sec04Sub = {1};
+
+        for (MatchedIssue issue : matchedIssues) {
+            sec04.append("<h3>Issue #").append(issue.issueNo()).append(" Grounds of Defence</h3>");
+            FilledTemplateResult ft = templateMap.get(issue.issueNo());
+            issueNoToRefTag.put(issue.issueNo(), "4." + sec04Sub[0]);
+            appendIssueBody(sec04, 4, issue, ft, ai.get(issue.issueNo()), anchoredBlocks.get(issue.issueNo()),
+                    sec04Sub, globalParaNo, blockIdToRefTag, finalSourceMap, pendingAiMarkers, missingMarkers, assemblyFlags, notes);
+        }
+
+        // ---------------------------------------------------------------- Section 01
+        StringBuilder sec01 = new StringBuilder();
+        sec01.append("<p><strong>Executive Summary:</strong> Reply to Notice Ref ").append(noticeRef)
+             .append(" dated ").append(noticeDate)
+             .append(" issued under ").append(noticeSec)
+             .append(" for GSTIN ").append(gstin)
+             .append(". Total Demand Amount: ").append(totalDemand).append(".</p>");
+        if (highStakes != null && highStakes.section01Html() != null && !highStakes.section01Html().isBlank()) {
+            sec01.append(highStakes.section01Html());
+        }
         sec01.append("<ul>");
         for (MatchedIssue issue : matchedIssues) {
             FilledTemplateResult ft = templateMap.get(issue.issueNo());
-            sec01.append("<li><strong>Issue #").append(issue.issueNo()).append(":</strong> ");
-            if (ft != null && ft.summaryLine() != null && !ft.summaryLine().isBlank()) {
-                sec01.append(ft.summaryLine());
-            } else if ("full".equalsIgnoreCase(issue.status())) {
-                sec01.append("Full match defence grounds applied.");
-            } else {
-                sec01.append("[[PENDING_AI: Issue ").append(issue.issueNo()).append(" — partial/new, written in Stage 3]]");
-                pendingAiMarkers.add("PENDING_AI: Issue " + issue.issueNo());
-                assemblyFlags.add("pending_ai_writer");
+            AiIssueContent c = ai.get(issue.issueNo());
+            sec01.append("<li><strong>Issue #").append(issue.issueNo()).append("</strong>");
+            String factsLabel = issueFactsLabel(issue);
+            if (!factsLabel.isEmpty()) sec01.append(" (").append(factsLabel).append(")");
+            sec01.append(": ");
+            switch (modeFor(issue, ft)) {
+                case TEMPLATE -> sec01.append(nonBlank(ft.summaryLine(), "Grounds of defence are set out at para {{ref:ISSUE-" + issue.issueNo() + "}}."));
+                case MISSING_PERIOD -> {
+                    sec01.append("[[MISSING: period]]");
+                    addOnce(missingMarkers, "period");
+                }
+                case AI -> {
+                    if (c == null || c.fragments() == null || c.fragments().isEmpty()) {
+                        sec01.append(pendingMarker(issue.issueNo()));
+                        addOnce(pendingAiMarkers, "PENDING_AI: Issue " + issue.issueNo());
+                        addOnce(assemblyFlags, "pending_ai_writer");
+                    } else if (c.summaryLine() != null && !c.summaryLine().isBlank()) {
+                        sec01.append(c.summaryLine());
+                    } else {
+                        sec01.append("Grounds of defence are set out at para {{ref:ISSUE-").append(issue.issueNo()).append("}}.");
+                    }
+                }
             }
             sec01.append("</li>");
         }
         sec01.append("</ul>");
         rawSections.add(new AssembledSection(1, "01 Executive Summary", sec01.toString()));
 
-        // Section 02: Notice Understanding (Uses actual notice section from input/matching, never "73/74")
-        String noticeSec = (input != null && input.notice() != null && input.notice().get("section") != null) ?
-                input.notice().get("section").toString() :
-                ("scn_74".equalsIgnoreCase(normalizedStage) ? "Section 74" : ("scn_73".equalsIgnoreCase(normalizedStage) ? "Section 73" : "[[MISSING: notice_section]]"));
-
+        // ---------------------------------------------------------------- Section 02
         StringBuilder sec02 = new StringBuilder();
-        sec02.append("<p>The taxpayer ").append(formatClientName(input != null ? input.clientLegalName() : null));
-        sec02.append(" has received notice reference ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]");
-        sec02.append(" issued under ").append(noticeSec).append(" of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year ");
-        sec02.append(input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]").append(".</p>");
+        sec02.append("<p>The taxpayer ").append(clientName)
+             .append(" has received notice reference ").append(noticeRef)
+             .append(" dated ").append(noticeDate);
+        if (noticeInfo != null && noticeInfo.authority() != null && !noticeInfo.authority().isBlank()) {
+            sec02.append(", issued by the ").append(noticeInfo.authority()).append(",");
+        }
+        sec02.append(" under ").append(noticeSec).append(" of the ").append(lawName(input))
+             .append(", for Financial Year ").append(fy).append(".</p>");
+        sec02.append("<p>The notice raises ").append(matchedIssues.size()).append(matchedIssues.size() == 1 ? " issue" : " issues")
+             .append(", each answered in Section 04 and paragraph-wise in Section 05.</p>");
         rawSections.add(new AssembledSection(2, "02 Notice Understanding", sec02.toString()));
 
-        // Section 03: Factual Background (Strictly facts from DB/notice; no invented facts)
+        // ---------------------------------------------------------------- Section 03
         StringBuilder sec03 = new StringBuilder();
-        sec03.append("<p>").append(formatClientName(input != null ? input.clientLegalName() : null));
-        sec03.append(" (GSTIN: ").append(input != null && input.registrationIdentifier() != null ? input.registrationIdentifier() : "[[MISSING: client_gstin]]");
-        sec03.append(") is a registered taxable person under the jurisdiction of ").append(input != null && input.registrationStateName() != null ? input.registrationStateName() : "State GST Authority");
-        sec03.append(". Notice reference ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]");
-        sec03.append(" dated ").append(noticeInfo != null && noticeInfo.issueDate() != null ? formatDateStr(noticeInfo.issueDate()) : "[[MISSING: issue_date]]");
-        sec03.append(" pertains to Financial Year ").append(input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]").append(".</p>");
+        String state = input != null && input.registrationStateName() != null && !input.registrationStateName().isBlank()
+                ? input.registrationStateName() : "[[MISSING: registration_state]]";
+        if (state.startsWith("[[MISSING")) addOnce(missingMarkers, "registration_state");
+        sec03.append("<p>").append(clientName).append(" (GSTIN: ").append(gstin)
+             .append(") is registered under the GST law in the State of ").append(state).append(".</p>");
+        sec03.append("<p>Notice reference ").append(noticeRef).append(" dated ").append(noticeDate)
+             .append(" pertains to Financial Year ").append(fy).append(".</p>");
+        if (highStakes != null && highStakes.section03Html() != null && !highStakes.section03Html().isBlank()) {
+            sec03.append(highStakes.section03Html());
+        }
         rawSections.add(new AssembledSection(3, "03 Factual Background", sec03.toString()));
 
-        // Section 04: Issue-wise Response
-        StringBuilder sec04 = new StringBuilder();
-        Map<String, String> blockIdToRefTag = new HashMap<>();
-        Map<Integer, String> issueNoToRefTag = new HashMap<>();
-
-        int globalParaNo = 1;
-        int sec04SubPara = 1;
-
-        for (MatchedIssue issue : matchedIssues) {
-            sec04.append("<h3>Issue #").append(issue.issueNo()).append(" Grounds of Defence</h3>");
-            FilledTemplateResult ft = templateMap.get(issue.issueNo());
-            String pNumStr = "4." + sec04SubPara;
-            issueNoToRefTag.put(issue.issueNo(), pNumStr);
-
-            if ("full".equalsIgnoreCase(issue.status()) && ft != null && !ft.blocks().isEmpty()) {
-                for (FilledBlock fb : ft.blocks()) {
-                    if (fb.section() == 4) {
-                        blockIdToRefTag.put(fb.blockId(), pNumStr);
-                        String bodyText = fb.filledHtml().replaceAll("^<p>|</p>$", "");
-                        sec04.append("<p>").append(pNumStr).append(" ").append(bodyText).append("</p>");
-                        finalSourceMap.add(new SourceMapEntry(globalParaNo++, 4, ft.templateId(), ft.templateVersion(), fb.blockId()));
-                        sec04SubPara++;
-                    }
-                }
-            } else {
-                sec04.append("<p>").append(pNumStr).append(" [[PENDING_AI: Issue ").append(issue.issueNo()).append(" — partial/new, written in Stage 3]]</p>");
-                pendingAiMarkers.add("PENDING_AI: Issue " + issue.issueNo());
-                assemblyFlags.add("pending_ai_writer");
-                globalParaNo++;
-                sec04SubPara++;
-            }
-        }
         rawSections.add(new AssembledSection(4, "04 Issue-wise Response", sec04.toString()));
 
-        // Section 05: Para-wise Reply (1 entry per notice paragraph; cross-ref to Section 04 actual para)
-        StringBuilder sec05 = new StringBuilder();
-        sec05.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
+        // ---------------------------------------------------------------- Section 05
+        rawSections.add(new AssembledSection(5, "05 Para-wise Reply",
+                buildParaWiseReply(matchingResult, input, matchedIssues, ai, missingMarkers, notes)));
+
+        // ---------------------------------------------------------------- Section 06
+        StringBuilder sec06 = new StringBuilder();
+        int[] sec06Sub = {1};
+        for (MatchedIssue issue : matchedIssues) {
+            sec06.append("<h3>Legal Submissions for Issue #").append(issue.issueNo()).append("</h3>");
+            appendIssueBody(sec06, 6, issue, templateMap.get(issue.issueNo()), ai.get(issue.issueNo()), anchoredBlocks.get(issue.issueNo()),
+                    sec06Sub, globalParaNo, blockIdToRefTag, finalSourceMap, pendingAiMarkers, missingMarkers, assemblyFlags, notes);
+        }
+        rawSections.add(new AssembledSection(6, "06 Legal Submissions", sec06.toString()));
+
+        // ---------------------------------------------------------------- Section 07
+        rawSections.add(new AssembledSection(7, "07 Procedural Objections", "<p>[[PARTNER: add procedural objections after checklist review]]</p>"));
+
+        // ---------------------------------------------------------------- Section 08
+        boolean reliesOnThirdParty = input != null && input.notice() != null && Boolean.TRUE.equals(input.notice().get("relies_on_third_party_material"));
+        String sec08;
+        if (reliesOnThirdParty) {
+            String sec08Tpl = (stageTpl != null && stageTpl.sections() != null) ? stageTpl.sections().get("08") : null;
+            sec08 = (sec08Tpl != null && !sec08Tpl.isBlank()) ? sec08Tpl
+                    : "<p>Request for cross-examination of third-party witnesses and inspection of underlying statements relied upon by the department.</p>";
+        } else {
+            sec08 = "<p>Not applicable.</p>";
+        }
+        rawSections.add(new AssembledSection(8, "08 Cross-Examination Request", sec08));
+
+        // ---------------------------------------------------------------- Section 09
+        rawSections.add(new AssembledSection(9, "09 Related Context from Other Registrations", "<p>Not applicable.</p>"));
+
+        // ---------------------------------------------------------------- Documents (10 / 11 / 14)
+        List<String> documents = collectDocuments(matchedIssues, templateMap, ai, anchoredBlocks);
+
+        StringBuilder sec10 = new StringBuilder();
+        if (documents.isEmpty()) {
+            sec10.append("<p>[[PARTNER: list the documents to be enclosed]]</p>");
+        } else {
+            sec10.append("<p>The following documents are enclosed in support of the reply:</p><ol>");
+            for (String d : documents) sec10.append("<li>").append(d).append("</li>");
+            sec10.append("</ol>");
+        }
+        rawSections.add(new AssembledSection(10, "10 Documents Enclosed", sec10.toString()));
+
+        StringBuilder sec11 = new StringBuilder();
+        if (documents.isEmpty()) {
+            sec11.append("<p>[[PARTNER: prepare the annexure index once documents are listed]]</p>");
+        } else {
+            sec11.append("<p><strong>Annexure Index:</strong></p><table><tr><th>Annexure</th><th>Document Description</th></tr>");
+            for (int i = 0; i < documents.size(); i++) {
+                sec11.append("<tr><td>Annexure A-").append(i + 1).append("</td><td>").append(documents.get(i)).append("</td></tr>");
+            }
+            sec11.append("</table>");
+        }
+        rawSections.add(new AssembledSection(11, "11 Annexure Index", sec11.toString()));
+
+        // ---------------------------------------------------------------- Section 12
+        Map<String, String> stageVars = new HashMap<>();
+        stageVars.put("notice.section", noticeSec);
+        stageVars.put("notice.type", formatFullNoticeType(noticeSec));
+        stageVars.put("notice.reference", noticeRef);
+        stageVars.put("notice.notice_number", noticeRef);
+        stageVars.put("notice.issue_date", noticeDate);
+        stageVars.put("client.legal_name", clientName);
+        String sec12Body = fillStagePlaceholders(
+                getStageSectionOrMissing(stageTpl, "12", normalizedStage, missingMarkers, assemblyFlags), stageVars, missingMarkers);
+        rawSections.add(new AssembledSection(12, "12 Prayer", sec12Body));
+
+        // ---------------------------------------------------------------- Section 13 (internal)
+        StringBuilder sec13 = new StringBuilder();
+        sec13.append("<h3>Internal Partner Review Note</h3>");
+        sec13.append("<p><strong>Notice:</strong> ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "N/A")
+             .append(" | Stage template: ").append(normalizedStage).append(" | Section: ").append(noticeSec).append("</p>");
+        sec13.append("<p><strong>Matched Issues & Templates:</strong></p><ul>");
+        for (MatchedIssue issue : matchedIssues) {
+            FilledTemplateResult ft = templateMap.get(issue.issueNo());
+            AiIssueContent c = ai.get(issue.issueNo());
+            IssueMode mode = modeFor(issue, ft);
+            sec13.append("<li>Issue #").append(issue.issueNo())
+                  .append(": Match Status=").append(issue.status())
+                  .append(", Cards=").append(issue.cardIds())
+                  .append(", Template=").append(ft != null ? ft.templateId() : "N/A")
+                  .append(" (v").append(ft != null ? ft.templateVersion() : 0).append(")")
+                  .append(", Written by=").append(mode == IssueMode.TEMPLATE ? "template (code)"
+                          : mode == IssueMode.MISSING_PERIOD ? "nothing (period missing)"
+                          : (c != null ? "AI " + c.writer() : "AI writer pending"));
+            if (mode == IssueMode.AI && c != null && ft != null && ft.blocks() != null && !ft.blocks().isEmpty()) {
+                Set<String> used = anchoredBlocks.getOrDefault(issue.issueNo(), Set.of());
+                sec13.append(", Template blocks used=").append(used.isEmpty() ? "none" : new TreeSet<>(used));
+            }
+            if (ft != null && ft.cardId() != null && ft.flags() != null && ft.flags().contains("no_template_available")) {
+                sec13.append(", Note=No template available for card ").append(ft.cardId());
+            }
+            sec13.append("</li>");
+        }
+        sec13.append("</ul>");
+
+        sec13.append("<p><strong>Procedural Objection Options (Partner to Select):</strong></p><ul>");
+        Set<String> procOptions = new LinkedHashSet<>();
+        for (FilledTemplateResult ft : templateMap.values()) {
+            if (ft != null && ft.proceduralObjectionOptions() != null) procOptions.addAll(ft.proceduralObjectionOptions());
+        }
+        procOptions.add("Check whether an opportunity of personal hearing has been offered (Section 75(4)).");
+        if (noticeSec.matches(".*\\b73\\b.*")) {
+            procOptions.add("Verify the limitation period under Section 73(10).");
+        } else if (noticeSec.matches(".*\\b74A?\\b.*")) {
+            procOptions.add("Verify the limitation period under Section 74(10).");
+        }
+        for (String o : procOptions) sec13.append("<li>").append(o).append("</li>");
+        sec13.append("</ul>");
+
+        if (!notes.isEmpty()) {
+            sec13.append("<p><strong>Stage 3 Notes:</strong></p><ul>");
+            for (String n : notes) sec13.append("<li>").append(n).append("</li>");
+            sec13.append("</ul>");
+        }
+        sec13.append("<!-- CHECK_RESULTS_PLACEHOLDER -->");
+        rawSections.add(new AssembledSection(13, "13 Internal Partner Note", sec13.toString()));
+
+        // ---------------------------------------------------------------- Section 14
+        String formattedDueDate = formatDueDateStr(noticeInfo != null ? noticeInfo.replyDueDate() : null, missingMarkers);
+        StringBuilder sec14 = new StringBuilder();
+        sec14.append("<h3>Client Summary</h3>");
+        sec14.append("<p><strong>Notice Type:</strong> ").append(formatFullNoticeType(noticeSec)).append("</p>");
+        sec14.append("<p><strong>Notice Reference:</strong> ").append(noticeRef).append(" dated ").append(noticeDate).append("</p>");
+        sec14.append("<p><strong>Total Amount Demanded:</strong> ").append(totalDemand).append("</p>");
+        sec14.append("<p><strong>Reply Due Date:</strong> ").append(formattedDueDate).append("</p>");
+        sec14.append("<p><strong>Documents Required from Client:</strong></p>");
+        if (documents.isEmpty()) {
+            sec14.append("<p>[[PARTNER: list the documents required from the client]]</p>");
+        } else {
+            sec14.append("<ol>");
+            for (String d : documents) sec14.append("<li>").append(d).append("</li>");
+            sec14.append("</ol>");
+        }
+        rawSections.add(new AssembledSection(14, "14 Client Summary", sec14.toString()));
+
+        // ---------------------------------------------------------------- Section 15
+        String sec15Body = fillStagePlaceholders(
+                getStageSectionOrMissing(stageTpl, "15", normalizedStage, missingMarkers, assemblyFlags), stageVars, missingMarkers);
+        rawSections.add(new AssembledSection(15, "15 Filing Checklist", sec15Body));
+
+        // ---------------------------------------------------------------- Cross-refs + continuous paragraph numbering
+        List<AssembledSection> finalSections = new ArrayList<>();
+        int pNumber = 1;
+        for (AssembledSection sec : rawSections) {
+            String resolvedHtml = resolveCrossReferences(sec.bodyHtml(), blockIdToRefTag, issueNoToRefTag);
+            StringBuilder numHtml = new StringBuilder();
+            for (String part : resolvedHtml.split("(?=<p>|<li>|<h3>|<ol>|<ul>|<table>)")) {
+                if (part.startsWith("<p>") || part.startsWith("<li>")) {
+                    numHtml.append("<!-- para:").append(pNumber++).append(" -->");
+                }
+                numHtml.append(part);
+            }
+            finalSections.add(new AssembledSection(sec.num(), sec.title(), numHtml.toString()));
+        }
+
+        return new AssembledReplyResult(finalSections, finalSourceMap, assemblyFlags, missingMarkers, pendingAiMarkers);
+    }
+
+    // ------------------------------------------------------------------ Section 04 / 06 issue bodies
+
+    private void appendIssueBody(
+            StringBuilder sb, int secNum, MatchedIssue issue, FilledTemplateResult ft, AiIssueContent c,
+            Set<String> anchors, int[] sub, int[] globalParaNo, Map<String, String> blockIdToRefTag,
+            List<SourceMapEntry> sourceMap, List<String> pendingAiMarkers, List<String> missingMarkers,
+            List<String> flags, List<String> notes
+    ) {
+        switch (modeFor(issue, ft)) {
+            case TEMPLATE -> {
+                for (FilledBlock fb : ft.blocks()) {
+                    if (fb.section() == secNum) {
+                        appendTemplateBlock(sb, secNum, fb, ft, sub, globalParaNo, blockIdToRefTag, sourceMap);
+                    }
+                }
+            }
+            case MISSING_PERIOD -> {
+                sb.append("<p>").append(secNum).append('.').append(sub[0]++).append(" [[MISSING: period]]</p>");
+                addOnce(missingMarkers, "period");
+                globalParaNo[0]++;
+            }
+            case AI -> {
+                List<AiFragment> frags = new ArrayList<>();
+                if (c != null && c.fragments() != null) {
+                    for (AiFragment f : c.fragments()) {
+                        if (f.section() == secNum && f.html() != null && !f.html().isBlank()) frags.add(f);
+                    }
+                }
+                if (frags.isEmpty()) {
+                    // Section 06 may legitimately have nothing extra when 04 was written; 04 never may.
+                    if (secNum == 4 || c == null || c.fragments() == null || c.fragments().isEmpty()) {
+                        sb.append("<p>").append(secNum).append('.').append(sub[0]++).append(' ').append(pendingMarker(issue.issueNo())).append("</p>");
+                        addOnce(pendingAiMarkers, "PENDING_AI: Issue " + issue.issueNo());
+                        addOnce(flags, "pending_ai_writer");
+                        globalParaNo[0]++;
+                    } else {
+                        sb.append("<p>").append(secNum).append('.').append(sub[0]++)
+                          .append(" The legal submissions on this issue are set out with the grounds in Section 04.</p>");
+                        globalParaNo[0]++;
+                    }
+                    return;
+                }
+
+                List<FilledBlock> blocks = new ArrayList<>();
+                if (ft != null && ft.blocks() != null) {
+                    for (FilledBlock fb : ft.blocks()) if (fb.section() == secNum) blocks.add(fb);
+                }
+                Set<String> blockIds = new HashSet<>();
+                blocks.forEach(b -> blockIds.add(b.blockId()));
+
+                List<AiFragment> unanchored = new ArrayList<>();
+                for (AiFragment f : frags) {
+                    if (f.afterBlock() == null || !blockIds.contains(f.afterBlock())) {
+                        if (f.afterBlock() != null) {
+                            notes.add("Issue #" + issue.issueNo() + ": AI text anchored to unknown block " + f.afterBlock()
+                                    + " for section " + secNum + "; placed at the end of the issue.");
+                        }
+                        unanchored.add(f);
+                    }
+                }
+                for (FilledBlock fb : blocks) {
+                    if (anchors != null && anchors.contains(fb.blockId())) {
+                        appendTemplateBlock(sb, secNum, fb, ft, sub, globalParaNo, blockIdToRefTag, sourceMap);
+                        for (AiFragment f : frags) {
+                            if (fb.blockId().equals(f.afterBlock())) {
+                                appendAiHtml(sb, secNum, f.html(), issue.issueNo(), c.writer(), sub, globalParaNo, sourceMap);
+                            }
+                        }
+                    }
+                }
+                for (AiFragment f : unanchored) {
+                    appendAiHtml(sb, secNum, f.html(), issue.issueNo(), c.writer(), sub, globalParaNo, sourceMap);
+                }
+            }
+        }
+    }
+
+    private void appendTemplateBlock(StringBuilder sb, int secNum, FilledBlock fb, FilledTemplateResult ft, int[] sub,
+                                     int[] globalParaNo, Map<String, String> blockIdToRefTag, List<SourceMapEntry> sourceMap) {
+        String pNum = secNum + "." + sub[0]++;
+        blockIdToRefTag.put(fb.blockId(), pNum);
+        String bodyText = fb.filledHtml().replaceAll("^<p>|</p>$", "");
+        sb.append("<p>").append(pNum).append(' ').append(bodyText).append("</p>");
+        sourceMap.add(new SourceMapEntry(globalParaNo[0]++, secNum, ft.templateId(), ft.templateVersion(), fb.blockId()));
+    }
+
+    /** Numbers every top-level &lt;p&gt; of the AI fragment (4.n / 6.n) and records it in the source map. */
+    private void appendAiHtml(StringBuilder sb, int secNum, String html, int issueNo, String writer, int[] sub,
+                              int[] globalParaNo, List<SourceMapEntry> sourceMap) {
+        String body = html.trim();
+        if (!body.contains("<p>")) {
+            body = "<p>" + body + "</p>";
+        }
+        Matcher m = Pattern.compile("<p>").matcher(body);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            int k = sub[0]++;
+            m.appendReplacement(out, "<p>" + secNum + "." + k + " ");
+            sourceMap.add(new SourceMapEntry(globalParaNo[0]++, secNum, "AI:" + writer, 0,
+                    "AI-ISSUE-" + issueNo + "-S" + secNum + "-P" + k));
+        }
+        m.appendTail(out);
+        sb.append(out);
+    }
+
+    // ------------------------------------------------------------------ Section 05
+
+    private String buildParaWiseReply(MatchingResult matchingResult, DraftingAgent.DraftingInput input,
+                                      List<MatchedIssue> issues, Map<Integer, AiIssueContent> ai,
+                                      List<String> missingMarkers, List<String> notes) {
         Map<String, List<Integer>> paraMap = matchingResult != null && matchingResult.paraMap() != null ? matchingResult.paraMap() : Map.of();
+
+        int paraCount = 0;
+        for (List<Integer> list : paraMap.values()) {
+            for (Integer v : list) if (v != null && v > paraCount) paraCount = v;
+        }
+        if (paraCount == 0) {
+            addOnce(missingMarkers, "para_map");
+            return "<p>[[MISSING: para_map]]</p>";
+        }
+
+        // AI para replies, keyed by notice paragraph number (only paragraphs that exist in THIS notice)
+        Map<Integer, List<String>> aiParaReplies = new TreeMap<>();
+        for (MatchedIssue issue : issues) {
+            AiIssueContent c = ai.get(issue.issueNo());
+            if (c == null || c.fragments() == null) continue;
+            for (AiFragment f : c.fragments()) {
+                if (f.section() != 5 || f.html() == null) continue;
+                Matcher m = PARA_LI.matcher(f.html());
+                boolean any = false;
+                while (m.find()) {
+                    any = true;
+                    int p = Integer.parseInt(m.group(1));
+                    String text = m.group(2).trim();
+                    if (p < 1 || p > paraCount) {
+                        notes.add("Issue #" + issue.issueNo() + ": AI para-wise reply for Para " + p
+                                + " ignored (the notice has " + paraCount + " paragraphs).");
+                    } else if (!text.isEmpty()) {
+                        aiParaReplies.computeIfAbsent(p, k -> new ArrayList<>()).add(text);
+                    }
+                }
+                if (!any) {
+                    notes.add("Issue #" + issue.issueNo() + ": AI para-wise text was not in 'Para N' form and was not used.");
+                }
+            }
+        }
 
         List<Integer> recordParas = paraMap.getOrDefault("record", List.of());
         List<Integer> issueParas = paraMap.getOrDefault("issue", List.of());
         List<Integer> demandParas = paraMap.getOrDefault("demand", List.of());
         List<Integer> directionParas = paraMap.getOrDefault("directions", List.of());
 
-        int maxParaNo = 0;
-        for (List<Integer> list : paraMap.values()) {
-            for (Integer val : list) {
-                if (val > maxParaNo) maxParaNo = val;
-            }
-        }
-        int totalNoticeParas = Math.max(6, maxParaNo);
-
-        for (int p = 1; p <= totalNoticeParas; p++) {
-            sec05.append("<li><strong>Para ").append(p).append(":</strong> ");
-            if (issueParas.contains(p)) {
-                int matchedIssueNo = (p == 2 || p == 1) ? 1 : 2;
-                sec05.append("Denied. Please refer to the reply to Issue #").append(matchedIssueNo)
-                      .append(" at para {{ref:ISSUE-").append(matchedIssueNo).append("}}.");
-            } else if (p == 4) {
-                sec05.append("Denied, for the reasons stated in reply to Issues #1 and #2 at paras {{ref:ISSUE-1}} and {{ref:ISSUE-2}}.");
+        StringBuilder sb = new StringBuilder();
+        sb.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
+        for (int p = 1; p <= paraCount; p++) {
+            sb.append("<li><strong>Para ").append(p).append(":</strong> ");
+            if (aiParaReplies.containsKey(p)) {
+                sb.append(String.join(" ", aiParaReplies.get(p)));
+            } else if (issueParas.contains(p)) {
+                sb.append(denialWithRefs(issuesForPara(p, issues)));
             } else if (demandParas.contains(p)) {
-                sec05.append("Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.");
+                sb.append("Denied. The proposals in this paragraph are not sustainable for the reasons set out in Sections 04 and 06.");
             } else if (directionParas.contains(p)) {
-                sec05.append("Matter of procedural direction; necessary compliance is being submitted herewith.");
-            } else if (p == 1) {
-                sec05.append("Matter of record; no comments.");
+                sb.append("Noted. This reply is submitted in compliance with the direction.");
+            } else if (recordParas.contains(p)) {
+                sb.append("Matter of record; no comments.");
             } else {
-                sec05.append("Matter of record; no comments.");
+                sb.append("[[PARTNER: reply to Para ").append(p).append(" (paragraph not classified)]]");
             }
-            sec05.append("</li>");
+            sb.append("</li>");
         }
-        sec05.append("</ol>");
-        rawSections.add(new AssembledSection(5, "05 Para-wise Reply", sec05.toString()));
+        sb.append("</ol>");
+        return sb.toString();
+    }
 
-        // Section 06: Legal Submissions
-        StringBuilder sec06 = new StringBuilder();
-        int sec06SubPara = 1;
-        for (MatchedIssue issue : matchedIssues) {
+    /** Issues whose notice paragraphs include {@code p}; all issues when Stage 1 did not link paragraphs. */
+    private static List<MatchedIssue> issuesForPara(int p, List<MatchedIssue> issues) {
+        List<MatchedIssue> hits = new ArrayList<>();
+        for (MatchedIssue issue : issues) {
+            if (issue.noticeParas() != null && issue.noticeParas().stream().anyMatch(ref -> refersToPara(ref, p))) {
+                hits.add(issue);
+            }
+        }
+        return hits.isEmpty() ? issues : hits;
+    }
+
+    private static boolean refersToPara(String ref, int p) {
+        Matcher m = Pattern.compile("\\d+").matcher(ref != null ? ref : "");
+        while (m.find()) {
+            if (Integer.parseInt(m.group()) == p) return true;
+        }
+        return false;
+    }
+
+    private static String denialWithRefs(List<MatchedIssue> issues) {
+        if (issues.isEmpty()) {
+            return "Denied, for the reasons stated in Section 04.";
+        }
+        if (issues.size() == 1) {
+            int n = issues.get(0).issueNo();
+            return "Denied. Please refer to the reply to Issue #" + n + " at para {{ref:ISSUE-" + n + "}}.";
+        }
+        List<String> labels = new ArrayList<>();
+        List<String> refs = new ArrayList<>();
+        for (MatchedIssue i : issues) {
+            labels.add("#" + i.issueNo());
+            refs.add("{{ref:ISSUE-" + i.issueNo() + "}}");
+        }
+        return "Denied, for the reasons stated in reply to Issues " + joinAnd(labels) + " at paras " + joinAnd(refs) + ".";
+    }
+
+    // ------------------------------------------------------------------ Documents
+
+    private static List<String> collectDocuments(List<MatchedIssue> issues, Map<Integer, FilledTemplateResult> templateMap,
+                                                 Map<Integer, AiIssueContent> ai, Map<Integer, Set<String>> anchoredBlocks) {
+        LinkedHashMap<String, String> docs = new LinkedHashMap<>();
+        for (MatchedIssue issue : issues) {
             FilledTemplateResult ft = templateMap.get(issue.issueNo());
-            sec06.append("<h3>Legal Submissions for Issue #").append(issue.issueNo()).append("</h3>");
-            String pNumStr = "6." + sec06SubPara;
-
-            if ("full".equalsIgnoreCase(issue.status()) && ft != null && !ft.blocks().isEmpty()) {
-                for (FilledBlock fb : ft.blocks()) {
-                    if (fb.section() == 6) {
-                        blockIdToRefTag.put(fb.blockId(), pNumStr);
-                        String bodyText = fb.filledHtml().replaceAll("^<p>|</p>$", "");
-                        sec06.append("<p>").append(pNumStr).append(" ").append(bodyText).append("</p>");
-                        finalSourceMap.add(new SourceMapEntry(globalParaNo++, 6, ft.templateId(), ft.templateVersion(), fb.blockId()));
-                        sec06SubPara++;
-                    }
-                }
-            } else {
-                sec06.append("<p>").append(pNumStr).append(" [[PENDING_AI: Issue ").append(issue.issueNo()).append(" — partial/new, written in Stage 3]]</p>");
-                pendingAiMarkers.add("PENDING_AI: Issue " + issue.issueNo());
-                assemblyFlags.add("pending_ai_writer");
-                globalParaNo++;
-                sec06SubPara++;
+            AiIssueContent c = ai.get(issue.issueNo());
+            IssueMode mode = modeFor(issue, ft);
+            boolean templateUsed = mode == IssueMode.TEMPLATE
+                    || (mode == IssueMode.AI && !anchoredBlocks.getOrDefault(issue.issueNo(), Set.of()).isEmpty());
+            if (templateUsed && ft != null && ft.documents() != null) {
+                for (String d : ft.documents()) docs.putIfAbsent(d.trim().toLowerCase(), d.trim());
+            }
+            if (mode == IssueMode.AI && c != null && c.documents() != null) {
+                for (String d : c.documents()) docs.putIfAbsent(d.trim().toLowerCase(), d.trim());
             }
         }
-        rawSections.add(new AssembledSection(6, "06 Legal Submissions", sec06.toString()));
+        return new ArrayList<>(docs.values());
+    }
 
-        // Section 07: Procedural Objections (No automatic objections. Strictly partner directive placeholder)
-        rawSections.add(new AssembledSection(7, "07 Procedural Objections", "<p>[[PARTNER: add procedural objections after checklist review]]</p>"));
+    // ------------------------------------------------------------------ Helpers
 
-        // Section 08: Cross-Examination Request (Rule 2: Always present; when not applicable body = "Not applicable.")
-        boolean reliesOnThirdParty = input != null && input.notice() != null && Boolean.TRUE.equals(input.notice().get("relies_on_third_party_material"));
-        StringBuilder sec08 = new StringBuilder();
-        if (reliesOnThirdParty) {
-            String sec08Tpl = (stageTpl != null && stageTpl.sections() != null) ? stageTpl.sections().get("08") : null;
-            if (sec08Tpl != null && !sec08Tpl.isBlank()) {
-                sec08.append(sec08Tpl);
-            } else {
-                sec08.append("<p>Request for cross-examination of third-party witnesses and inspection of underlying statements relied upon by the department.</p>");
+    /** The provision the notice is issued under, from the notice record; never a stage default. */
+    public static String noticeSection(DraftingAgent.DraftingInput input) {
+        Object sec = input != null && input.notice() != null ? input.notice().get("section") : null;
+        if (sec == null || sec.toString().isBlank()) {
+            return "[[MISSING: notice_section]]";
+        }
+        String s = sec.toString().trim();
+        return s.matches("\\d+[A-Z]?(\\(.*)?") ? "Section " + s : s;
+    }
+
+    private static String lawName(DraftingAgent.DraftingInput input) {
+        String law = input != null ? input.law() : null;
+        if (law == null || law.isBlank()) return "CGST Act, 2017";
+        return law.matches(".*\\b(19|20)\\d{2}\\b.*") ? law.trim() : law.trim() + ", 2017";
+    }
+
+    private static String issueFactsLabel(MatchedIssue issue) {
+        if (issue.facts() == null) return "";
+        List<String> parts = new ArrayList<>();
+        Object legal = issue.facts().get("legal_section");
+        if (legal != null && !legal.toString().isBlank()) parts.add(legal.toString().trim());
+        Object amt = issue.facts().get("amount");
+        if (amt != null) {
+            try {
+                parts.add("amount involved: " + TemplateFillService.formatIndianCurrency(new BigDecimal(amt.toString())));
+            } catch (NumberFormatException ignored) {
+                // non-numeric amount from extraction: leave it out rather than print raw text
             }
-        } else {
-            sec08.append("<p>Not applicable.</p>");
         }
-        rawSections.add(new AssembledSection(8, "08 Cross-Examination Request", sec08.toString()));
+        return String.join("; ", parts);
+    }
 
-        // Section 09: Related Context from Other Registrations (Rule 2: Always present; when not applicable body = "Not applicable.")
-        StringBuilder sec09 = new StringBuilder();
-        sec09.append("<p>Not applicable.</p>");
-        rawSections.add(new AssembledSection(9, "09 Related Context from Other Registrations", sec09.toString()));
+    private static String pendingMarker(int issueNo) {
+        return "[[PENDING_AI: Issue " + issueNo + " — partial/new, written in Stage 3]]";
+    }
 
-        // Section 10: Documents Enclosed
-        StringBuilder sec10 = new StringBuilder();
-        sec10.append("<p>The following documents are enclosed in support of the reply:</p><ol>");
-        sec10.append("<li>Copy of GSTR-3B and GSTR-1 returns for the relevant periods.</li>");
-        sec10.append("<li>Reconciliation Statement of Input Tax Credit.</li>");
-        sec10.append("</ol>");
-        rawSections.add(new AssembledSection(10, "10 Documents Enclosed", sec10.toString()));
+    private static String nonBlank(String s, String fallback) {
+        return s != null && !s.isBlank() ? s : fallback;
+    }
 
-        // Section 11: Annexure Index
-        StringBuilder sec11 = new StringBuilder();
-        sec11.append("<p><strong>Annexure Index:</strong></p><table><tr><th>Annexure</th><th>Document Description</th></tr>");
-        sec11.append("<tr><td>Annexure A-1</td><td>Form GSTR-3B Return Acknowledgments</td></tr>");
-        sec11.append("<tr><td>Annexure A-2</td><td>GSTR-2B Statement & Reconciliation</td></tr>");
-        sec11.append("</table>");
-        rawSections.add(new AssembledSection(11, "11 Annexure Index", sec11.toString()));
+    private static void addOnce(List<String> list, String v) {
+        if (!list.contains(v)) list.add(v);
+    }
 
-        // Section 12: Prayer (Rule 6: If stage template missing -> [[MISSING: stage template for <stage>]])
-        String sec12Body = getStageSectionOrMissing(stageTpl, "12", normalizedStage, missingMarkers, assemblyFlags);
-        rawSections.add(new AssembledSection(12, "12 Prayer", sec12Body));
+    private static String joinAnd(List<String> items) {
+        if (items.size() <= 1) return String.join("", items);
+        return String.join(", ", items.subList(0, items.size() - 1)) + " and " + items.get(items.size() - 1);
+    }
 
-        // Section 13: Internal Partner Note (Cards, status, versions, procedural options, check results & markers)
-        StringBuilder sec13 = new StringBuilder();
-        sec13.append("<h3>Internal Partner Review Note</h3>");
-        sec13.append("<p><strong>Notice ID:</strong> ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "N/A").append("</p>");
-        sec13.append("<p><strong>Matched Issues & Templates:</strong></p><ul>");
-        for (MatchedIssue issue : matchedIssues) {
-            FilledTemplateResult ft = templateMap.get(issue.issueNo());
-            sec13.append("<li>Issue #").append(issue.issueNo())
-                  .append(": Match Status=").append(issue.status())
-                  .append(", Cards=").append(issue.cardIds())
-                  .append(", Template=").append(ft != null ? ft.templateId() : "N/A")
-                  .append(" (v").append(ft != null ? ft.templateVersion() : 0).append(")</li>");
-        }
-        sec13.append("</ul>");
-
-        sec13.append("<p><strong>Procedural Objection Options (Partner to Select):</strong></p>");
-        sec13.append("<ul><li>Check opportunity of hearing under Section 75(4).</li><li>Verify statutory limitation period under Section 73(10).</li></ul>");
-        sec13.append("<!-- CHECK_RESULTS_PLACEHOLDER -->");
-        rawSections.add(new AssembledSection(13, "13 Internal Partner Note", sec13.toString()));
-
-        // Section 14: Client Summary (Notice type, amount, due date, required documents)
-        String fullNoticeType = formatFullNoticeType(noticeSec);
-        String formattedDueDate = formatDueDateStr(noticeInfo != null ? noticeInfo.replyDueDate() : null, missingMarkers);
-
-        StringBuilder sec14 = new StringBuilder();
-        sec14.append("<h3>Client Summary</h3>");
-        sec14.append("<p><strong>Notice Type:</strong> ").append(fullNoticeType).append("</p>");
-        sec14.append("<p><strong>Total Amount Demanded:</strong> ").append(noticeInfo != null && noticeInfo.totalDemandAmount() != null ? TemplateFillService.formatIndianCurrency(java.math.BigDecimal.valueOf(noticeInfo.totalDemandAmount())) : "[[MISSING: total_demand]]").append("</p>");
-        sec14.append("<p><strong>Reply Due Date:</strong> ").append(formattedDueDate).append("</p>");
-        sec14.append("<p><strong>Documents Required from Client:</strong></p><ol>");
-        sec14.append("<li>Copy of Tax Invoices and Purchase Register for FY ").append(input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]").append(".</li>");
-        sec14.append("<li>Form GSTR-3B return filing acknowledgments and GSTR-2B reconciliation statement.</li>");
-        sec14.append("<li>Electronic Cash Ledger statement / Bank payment proof of tax deposited.</li>");
-        sec14.append("</ol>");
-        rawSections.add(new AssembledSection(14, "14 Client Summary", sec14.toString()));
-
-        // Section 15: Filing Checklist (Rule 6: If stage template missing -> [[MISSING: stage template for <stage>]])
-        String sec15Body = getStageSectionOrMissing(stageTpl, "15", normalizedStage, missingMarkers, assemblyFlags);
-        rawSections.add(new AssembledSection(15, "15 Filing Checklist", sec15Body));
-
-        // Continuous Paragraph Numbering & Cross-Ref Resolution
-        List<AssembledSection> finalSections = new ArrayList<>();
-        int pNumber = 1;
-
-        for (AssembledSection sec : rawSections) {
-            String resolvedHtml = resolveCrossReferences(sec.bodyHtml(), blockIdToRefTag, issueNoToRefTag);
-
-            // Extract all <p> and <li> to assign continuous paragraph numbers
-            StringBuilder numHtml = new StringBuilder();
-            String[] paragraphs = resolvedHtml.split("(?=<p>|<li>|<h3>|<ol>|<ul>|<table>)");
-
-            for (String part : paragraphs) {
-                if (part.startsWith("<p>") || part.startsWith("<li>")) {
-                    // Prepend paragraph number tag
-                    numHtml.append("<!-- para:").append(pNumber++).append(" -->").append(part);
-                } else {
-                    numHtml.append(part);
-                }
+    /** Fills {{notice.section}}-style placeholders in stage templates; unknown names become [[MISSING: name]]. */
+    private static String fillStagePlaceholders(String html, Map<String, String> vars, List<String> missingMarkers) {
+        if (html == null) return "";
+        Matcher m = STAGE_PLACEHOLDER.matcher(html);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            String key = m.group(1);
+            String val = vars.get(key);
+            if (val == null || val.isBlank()) {
+                addOnce(missingMarkers, key);
+                val = "[[MISSING: " + key + "]]";
             }
-
-            finalSections.add(new AssembledSection(sec.num(), sec.title(), numHtml.toString()));
+            m.appendReplacement(sb, Matcher.quoteReplacement(val));
         }
-
-        return new AssembledReplyResult(finalSections, finalSourceMap, assemblyFlags, missingMarkers, pendingAiMarkers);
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     private String getStageSectionOrMissing(
@@ -354,8 +726,8 @@ public class ReplyAssemblyService {
             }
         }
         String missingText = "[[MISSING: stage template for " + stage + "]]";
-        missingMarkers.add(missingText);
-        flags.add("missing_stage_template_" + stage);
+        addOnce(missingMarkers, missingText);
+        addOnce(flags, "missing_stage_template_" + stage);
         return "<p>" + missingText + "</p>";
     }
 
@@ -375,14 +747,14 @@ public class ReplyAssemblyService {
             String refValue = "para [ref]";
 
             if (blockIdToRef.containsKey(refKey)) {
-                refValue = blockIdToRef.get(refKey).replace("para-", "para ");
+                refValue = blockIdToRef.get(refKey);
             } else if (refKey.startsWith("ISSUE-")) {
                 try {
                     int issueNo = Integer.parseInt(refKey.substring(6));
                     if (issueNoToRef.containsKey(issueNo)) {
-                        refValue = issueNoToRef.get(issueNo).replace("para-", "para ");
+                        refValue = issueNoToRef.get(issueNo);
                     }
-                } catch (Exception ignored) {}
+                } catch (NumberFormatException ignored) {}
             }
 
             matcher.appendReplacement(sb, Matcher.quoteReplacement(refValue));
@@ -429,18 +801,15 @@ public class ReplyAssemblyService {
         return null;
     }
 
-    private String formatFullNoticeType(String noticeSec) {
+    static String formatFullNoticeType(String noticeSec) {
         if (noticeSec == null || noticeSec.isBlank()) return "[[MISSING: notice_section]]";
-        if (noticeSec.startsWith("Show Cause Notice") || noticeSec.startsWith("Intimation of Discrepancy")) {
+        if (noticeSec.startsWith("[[") || noticeSec.startsWith("Show Cause Notice") || noticeSec.startsWith("Intimation of Discrepancy")) {
             return noticeSec;
         }
-        if (noticeSec.contains("Section 73") || noticeSec.contains("Section 74") || noticeSec.contains("73") || noticeSec.contains("74")) {
-            if (!noticeSec.startsWith("Section")) {
-                return "Show Cause Notice under Section " + noticeSec;
-            }
-            return "Show Cause Notice under " + noticeSec;
+        if (noticeSec.matches(".*\\b7[34]A?\\b.*")) {
+            return "Show Cause Notice under " + (noticeSec.startsWith("Section") ? noticeSec : "Section " + noticeSec);
         }
-        if (noticeSec.contains("ASMT-10") || noticeSec.contains("ASMT")) {
+        if (noticeSec.contains("ASMT")) {
             return "Intimation of Discrepancy under " + noticeSec;
         }
         return "Notice under " + noticeSec;
@@ -448,32 +817,31 @@ public class ReplyAssemblyService {
 
     private String formatDueDateStr(String dateStr, List<String> missingMarkers) {
         if (dateStr == null || dateStr.isBlank()) {
-            if (missingMarkers != null) missingMarkers.add("[[MISSING: reply_due_date]]");
+            addOnce(missingMarkers, "reply_due_date");
             return "[[MISSING: reply_due_date]]";
         }
         String trimmed = dateStr.trim();
         if (trimmed.matches("\\d{4}-\\d{2}-\\d{2}.*") || trimmed.matches("\\d{2}-\\d{2}-\\d{4}")) {
             return formatDateStr(trimmed);
         }
-        if (trimmed.toLowerCase().contains("30") || trimmed.toLowerCase().contains("within") || trimmed.toLowerCase().contains("day")) {
-            if (missingMarkers != null && !missingMarkers.contains("date_of_receipt")) {
-                missingMarkers.add("date_of_receipt");
-            }
-            return "Within 30 days of receipt (date of receipt: [[MISSING: date_of_receipt]])";
+        // Keep the notice's own trigger event ("from service", "from receipt"); default to receipt
+        Matcher days = Pattern.compile("(?i)(\\d+)\\s*days?(?:\\s+(?:from|of)\\s+(?:the\\s+)?(?:date\\s+of\\s+)?(service|receipt|issue))?").matcher(trimmed);
+        if (days.find()) {
+            String event = days.group(2) != null ? days.group(2).toLowerCase() : "receipt";
+            addOnce(missingMarkers, "date_of_" + event);
+            return "Within " + days.group(1) + " days from " + event + " (date of " + event + ": [[MISSING: date_of_" + event + "]])";
         }
-        if (missingMarkers != null && !missingMarkers.contains("reply_due_date")) {
-            missingMarkers.add("reply_due_date");
-        }
+        addOnce(missingMarkers, "reply_due_date");
         return "[[MISSING: reply_due_date]]";
     }
 
-    private String formatClientName(String name) {
+    private static String formatClientName(String name) {
         if (name == null || name.isBlank()) return "[[MISSING: client_legal_name]]";
         if (name.startsWith("M/s ") || name.startsWith("M/S ")) return name;
         return "M/s " + name;
     }
 
-    private String formatDateStr(String dateStr) {
+    private static String formatDateStr(String dateStr) {
         if (dateStr == null || dateStr.isBlank()) return "[[MISSING: issue_date]]";
         if (dateStr.matches("\\d{4}-\\d{2}-\\d{2}.*")) {
             try {
@@ -495,4 +863,3 @@ public class ReplyAssemblyService {
         }
     }
 }
-

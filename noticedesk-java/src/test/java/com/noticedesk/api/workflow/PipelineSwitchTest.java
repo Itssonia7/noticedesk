@@ -134,7 +134,7 @@ class PipelineSwitchTest {
         propsV7.getDrafting().setPipeline("v7");
         DraftingPipelineService ragServiceV7 = Mockito.mock(DraftingPipelineService.class);
         V7DraftingPipelineService v7Service = Mockito.mock(V7DraftingPipelineService.class);
-        Mockito.when(v7Service.runPipeline(mockInput)).thenReturn(dummyResult);
+        Mockito.when(v7Service.runPipeline(mockInput, tenantId, noticeId)).thenReturn(dummyResult);
 
         DraftingWorkflow workflowV7 = new DraftingWorkflow(
                 mockJdbc, mockAgent, Mockito.mock(CitationVerificationAgent.class),
@@ -144,7 +144,7 @@ class PipelineSwitchTest {
         );
 
         workflowV7.runGenerateDraft(job);
-        Mockito.verify(v7Service, Mockito.times(1)).runPipeline(mockInput);
+        Mockito.verify(v7Service, Mockito.times(1)).runPipeline(mockInput, tenantId, noticeId);
         Mockito.verifyNoInteractions(ragServiceV7);
     }
 }

@@ -103,7 +103,7 @@ public class DraftingWorkflow {
         String pipeline = (properties != null && properties.getDrafting() != null) ? properties.getDrafting().getPipeline() : "rag";
         DraftingPipelineResult pipelineResult;
         if ("v7".equalsIgnoreCase(pipeline != null ? pipeline.trim() : "")) {
-            pipelineResult = v7DraftingPipelineService.runPipeline(input);
+            pipelineResult = v7DraftingPipelineService.runPipeline(input, job.tenantId(), job.noticeId());
         } else if ("rag".equalsIgnoreCase(pipeline != null ? pipeline.trim() : "")) {
             pipelineResult = draftingPipelineService.runPipeline(input);
         } else {
@@ -176,6 +176,11 @@ public class DraftingWorkflow {
         // 8b. Rule 3: Insert draft_flags in the same transaction after draft row creation
         if (pipelineResult.checkResults() != null && !pipelineResult.checkResults().isEmpty() && draftCheckService != null) {
             draftCheckService.persistDraftFlags(job.tenantId(), job.noticeId(), draftId, pipelineResult.checkResults());
+        }
+
+        // 8c. v7 Stage 3: AI issue sections, saved after the draft row insert in the same transaction
+        if (pipelineResult.aiIssueSections() != null && !pipelineResult.aiIssueSections().isEmpty()) {
+            v7DraftingPipelineService.persistAiIssueSections(job.tenantId(), job.noticeId(), draftId, pipelineResult.aiIssueSections());
         }
 
         // 9. INSERT one row per verified citation (including stripped)
