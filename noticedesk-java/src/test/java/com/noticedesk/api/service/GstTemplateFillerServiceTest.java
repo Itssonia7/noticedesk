@@ -115,4 +115,30 @@ class GstTemplateFillerServiceTest {
 
         assertFalse(populated.contains("___"), "Must not contain leftover 3+ consecutive underscores");
     }
+
+    @Test
+    void testReplyDueDatePlaceholderSubstitution() {
+        // Case 1: reply_due_date present
+        DraftingInput inputWithDueDate = new DraftingInput(
+                UUID.randomUUID(), "formal", "None",
+                "Test Corp", "ABCDE1234F", "PVT", "GST", "27ABCDE1234F1Z5", "MH", "GST", "2023-24", "2024-25",
+                Map.of("notice_number", "SCN-101", "reply_due_date", "15 October 2026"),
+                Map.of(), "Excerpt", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null, null
+        );
+
+        String populatedWithDueDate = templateFillerService.extractAndPopulateTemplate(Paths.get("dummy.docx"), inputWithDueDate);
+        assertTrue(populatedWithDueDate.contains("15 October 2026"), "Must contain provided reply_due_date");
+
+        // Case 2: reply_due_date missing
+        DraftingInput inputWithoutDueDate = new DraftingInput(
+                UUID.randomUUID(), "formal", "None",
+                "Test Corp", "ABCDE1234F", "PVT", "GST", "27ABCDE1234F1Z5", "MH", "GST", "2023-24", "2024-25",
+                Map.of("notice_number", "SCN-101"),
+                Map.of(), "Excerpt", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null, null
+        );
+
+        String populatedWithoutDueDate = templateFillerService.extractAndPopulateTemplate(Paths.get("dummy.docx"), inputWithoutDueDate);
+        assertTrue(populatedWithoutDueDate.contains("[[MISSING: reply_due_date]]"), "Must contain missing reply_due_date placeholder");
+        assertFalse(populatedWithoutDueDate.contains("30 Days"), "Must not contain hardcoded 30 Days fallback");
+    }
 }

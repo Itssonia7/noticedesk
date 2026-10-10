@@ -15,8 +15,4 @@ public class V7DraftingPipelineService {
     public DraftingPipelineResult runPipeline(DraftingInput input) {
         throw new UnsupportedOperationException("v7 pipeline not built yet");
     }
-
-    public DraftingPipelineResult runPipeline(DraftingInput input, boolean enableDiskCache) {
-        return runPipeline(input);
-    }
 }

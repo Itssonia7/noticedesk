@@ -26,8 +26,9 @@ import java.util.*;
 public class GstTemplateFillerService {
 
     /**
-     * Fills a corpus template `.docx` with client details and constructs a 15-section GeneratedDraft.
+     * @deprecated Contains fixed legal assertions; do not use. Replaced in v7 Stage 2.
      */
+    @Deprecated
     public GeneratedDraft fillTemplate(DraftingInput input, Path templatePath, String noticeKind) {
         log.info("Fast-Tracking draft generation using template at {}", templatePath);
 
@@ -80,6 +81,13 @@ public class GstTemplateFillerService {
         String din = getNoticeVal(input, "din_or_rfn", "din_or_rfn");
         String authority = getNoticeVal(input, "authority", "authority");
         String issueDate = getNoticeVal(input, "issue_date", "issue_date");
+        String replyDueDate = getNoticeVal(input, "reply_due_date", "reply_due_date");
+        if ("[[MISSING: reply_due_date]]".equals(replyDueDate)) {
+            String altDueDate = getNoticeVal(input, "due_date", "reply_due_date");
+            if (!"[[MISSING: reply_due_date]]".equals(altDueDate)) {
+                replyDueDate = altDueDate;
+            }
+        }
 
         replacements.put("[TAX_PAYER_NAME]", clientName);
         replacements.put("[CLIENT_NAME]", clientName);
@@ -91,7 +99,7 @@ public class GstTemplateFillerService {
         replacements.put("[NOTICE_NUMBER]", noticeNo);
         replacements.put("[DIN]", din);
         replacements.put("[AUTHORITY]", authority);
-        replacements.put("[DUE_DATE]", "30 Days");
+        replacements.put("[DUE_DATE]", replyDueDate);
 
         String populated = templateText;
         for (Map.Entry<String, String> entry : replacements.entrySet()) {
@@ -121,6 +129,10 @@ public class GstTemplateFillerService {
         return "[[MISSING: " + fieldName + "]]";
     }
 
+    /**
+     * @deprecated Contains fixed legal assertions; do not use. Replaced in v7 Stage 2.
+     */
+    @Deprecated
     private List<DraftSection> build15Sections(String populatedText, DraftingInput input) {
         List<DraftSection> sections = new ArrayList<>();
 
@@ -227,7 +239,7 @@ public class GstTemplateFillerService {
         return "REPLY ON BEHALF OF " + safe(input.clientLegalName(), "client_legal_name") + "\n\n" +
                "GSTIN: " + safe(input.registrationIdentifier(), "gstin") + "\n\n" +
                "Respected Sir/Madam,\n\n" +
-               "With reference to the notice/intimation issued under GST Law for FY " + safe(input.financialYear(), "financial_year") + ", " +
+               "With reference to the notice/intimation issued under GST Law for FY " + safe(input.financialYear(), "financial_year") + " (Reply Due Date: [DUE_DATE]), " +
                "we submit that all tax liabilities have been duly discharged in accordance with law. " +
                "It is requested that the proposed proceedings be dropped and closure issued.\n\n" +
                "Thanking you,\n" + safe(input.clientLegalName(), "client_legal_name");

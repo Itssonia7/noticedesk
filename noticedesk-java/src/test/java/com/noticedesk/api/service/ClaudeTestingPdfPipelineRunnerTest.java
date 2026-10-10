@@ -253,7 +253,7 @@ public class ClaudeTestingPdfPipelineRunnerTest {
 
         // Step 5: Drafting Pipeline Service Execution (Pass 1 - RAG Store Empty)
         long draftStartTime1 = System.currentTimeMillis();
-        DraftingPipelineResult pass1 = draftingPipelineService.runPipeline(draftingInput, false);
+        DraftingPipelineResult pass1 = draftingPipelineService.runPipeline(draftingInput);
         long draftDuration1 = System.currentTimeMillis() - draftStartTime1;
 
         GeneratedDraft draft1 = pass1.draft();
@@ -270,7 +270,7 @@ public class ClaudeTestingPdfPipelineRunnerTest {
 
         // Step 6: Drafting Pipeline Service Execution (Pass 2 - RAG Store Populated)
         long draftStartTime2 = System.currentTimeMillis();
-        DraftingPipelineResult pass2 = draftingPipelineService.runPipeline(draftingInput, false);
+        DraftingPipelineResult pass2 = draftingPipelineService.runPipeline(draftingInput);
         long draftDuration2 = System.currentTimeMillis() - draftStartTime2;
 
         System.out.println("5. Drafting Pipeline Service Pass 2 Completed");

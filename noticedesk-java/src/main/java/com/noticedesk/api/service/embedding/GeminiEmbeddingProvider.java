@@ -21,7 +21,6 @@ import java.util.Map;
 @Slf4j
 public class GeminiEmbeddingProvider implements EmbeddingProvider {
 
-    private static final String DEFAULT_MODEL = "gemini-embedding-001";
     private static final int DEFAULT_DIMENSIONALITY = 1536;
 
     private final String apiKey;
@@ -31,12 +30,16 @@ public class GeminiEmbeddingProvider implements EmbeddingProvider {
     private final ObjectMapper objectMapper;
 
     public GeminiEmbeddingProvider(String apiKey) {
-        this(apiKey, DEFAULT_MODEL, DEFAULT_DIMENSIONALITY);
+        this(apiKey, null, DEFAULT_DIMENSIONALITY);
     }
 
     public GeminiEmbeddingProvider(String apiKey, String model, int outputDimensionality) {
         this.apiKey = resolveApiKey(apiKey);
-        this.model = (model != null && !model.isBlank()) ? model.trim() : DEFAULT_MODEL;
+        String resolvedModel = (model != null && !model.isBlank()) ? model.trim() : System.getenv("EMBEDDING_MODEL");
+        if (resolvedModel == null || resolvedModel.isBlank()) {
+            throw new IllegalArgumentException("Gemini embedding model is empty. Specify noticedesk.embedding.model or EMBEDDING_MODEL environment variable.");
+        }
+        this.model = resolvedModel.trim();
         this.outputDimensionality = outputDimensionality > 0 ? outputDimensionality : DEFAULT_DIMENSIONALITY;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))

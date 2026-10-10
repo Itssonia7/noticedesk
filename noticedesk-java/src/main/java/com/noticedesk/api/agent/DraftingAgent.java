@@ -93,7 +93,7 @@ public class DraftingAgent {
             Integer outputTokens,
             String model) {
         public ExtractionResult(ExtractedNoticeInfo noticeInfo, List<ExtractedIssue> issues) {
-            this(noticeInfo, issues, 0, 0, "claude-haiku-4-5-20251001");
+            this(noticeInfo, issues, 0, 0, null);
         }
     }
 

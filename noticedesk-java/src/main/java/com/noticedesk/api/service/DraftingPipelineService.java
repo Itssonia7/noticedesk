@@ -38,10 +38,6 @@ public class DraftingPipelineService {
     private final ObjectMapper objectMapper;
 
     public DraftingPipelineResult runPipeline(DraftingInput input) {
-        return runPipeline(input, false);
-    }
-
-    public DraftingPipelineResult runPipeline(DraftingInput input, boolean enableDiskCache) {
         log.info("DraftingPipelineService starting 5-step pipeline execution");
 
         int totalInputTokens = 0;
@@ -59,7 +55,6 @@ public class DraftingPipelineService {
         Set<String> uniqueChunkContents = new LinkedHashSet<>();
 
         int ragHitCount = 0;
-        int diskCacheHitCount = 0;
         int opusCallCount = 0;
 
         String citationProvider = resolveCitationProvider();
@@ -143,7 +138,7 @@ public class DraftingPipelineService {
                 allVerifiedCitations,
                 citationResult.summary(),
                 ragHitCount,
-                diskCacheHitCount,
+                0,
                 opusCallCount,
                 totalInputTokens,
                 totalOutputTokens,
