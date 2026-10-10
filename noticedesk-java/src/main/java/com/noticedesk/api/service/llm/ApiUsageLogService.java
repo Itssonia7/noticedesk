@@ -9,7 +9,10 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 @Service
 public class ApiUsageLogService {
@@ -18,9 +21,70 @@ public class ApiUsageLogService {
     private final NamedParameterJdbcTemplate jdbcTemplate;
     private final AppProperties properties;
 
+    private final List<Consumer<UsageCall>> callListeners = new CopyOnWriteArrayList<>();
+
     public ApiUsageLogService(NamedParameterJdbcTemplate jdbcTemplate, AppProperties properties) {
         this.jdbcTemplate = jdbcTemplate;
         this.properties = properties;
+    }
+
+    /**
+     * One billed model call, success or not. {@code costInr}/{@code costUsd} are null when the model has
+     * no configured price. Carries no prompt or response text.
+     */
+    public record UsageCall(
+            String step,
+            int attempt,
+            String provider,
+            String model,
+            String stopReason,
+            String failureReason,
+            int inputTokens,
+            int cacheReadTokens,
+            int cacheWriteTokens,
+            int outputTokens,
+            BigDecimal costUsd,
+            BigDecimal costInr
+    ) {}
+
+    /** Registers a listener told about every call logged through {@link #logCall}. Used by eval/live runners. */
+    public void addCallListener(Consumer<UsageCall> listener) {
+        callListeners.add(listener);
+    }
+
+    /**
+     * Logs the usage of one model call from its response, whether or not the output was usable: the
+     * call is billed either way. Output tokens include thinking tokens as reported by the API.
+     */
+    public void logCall(LlmResponse response, String fallbackModel, String step, int attempt, UUID tenantId, UUID noticeId) {
+        if (response == null) return;
+        String model = response.model() != null && !response.model().isBlank() ? response.model() : fallbackModel;
+        String provider = response.providerName() != null ? response.providerName() : "anthropic";
+        int in = response.inputTokensOrZero();
+        int out = response.outputTokensOrZero();
+        int cRead = response.cacheReadTokensOrZero();
+        int cWrite = response.cacheWriteTokensOrZero();
+
+        logUsage(provider, model, in, out, cRead, cWrite, step, tenantId, noticeId);
+
+        BigDecimal usd = null;
+        BigDecimal inr = null;
+        try {
+            BigDecimal[] costs = calculateCost(model, in, out, cRead, cWrite);
+            usd = costs[0];
+            inr = costs[1];
+        } catch (Exception e) {
+            log.warn("No price configured for model {}; call cost not computed", model);
+        }
+        UsageCall call = new UsageCall(step, attempt, provider, model, response.stopReason(), response.failureReason(),
+                in, cRead, cWrite, out, usd, inr);
+        for (Consumer<UsageCall> l : callListeners) {
+            try {
+                l.accept(call);
+            } catch (Exception e) {
+                log.warn("usage call listener failed: {}", e.getMessage());
+            }
+        }
     }
 
     public void logUsage(String provider, String model, int inputTokens, int outputTokens) {

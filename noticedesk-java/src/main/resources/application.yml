@@ -128,11 +128,13 @@ noticedesk:
   pricing:
     inr-per-usd: 88.0
     models:
+      # output-per-million applies to all output tokens, thinking included.
+      # cache-write = 5-minute ephemeral cache write = 1.25x input.
       "claude-sonnet-5-5":
-        input-per-million: 3.0
-        output-per-million: 15.0
-        cache-read-per-million: 0.30
-        cache-write-per-million: 3.75
+        input-per-million: 2.00
+        output-per-million: 10.00
+        cache-read-per-million: 0.20
+        cache-write-per-million: 2.50
       "claude-3-5-sonnet-20241022":
         input-per-million: 3.0
         output-per-million: 15.0
@@ -154,10 +156,10 @@ noticedesk:
         cache-read-per-million: 1.50
         cache-write-per-million: 18.75
       "claude-opus-5-5":
-        input-per-million: 15.0
-        output-per-million: 75.0
-        cache-read-per-million: 1.50
-        cache-write-per-million: 18.75
+        input-per-million: 4.00
+        output-per-million: 20.00
+        cache-read-per-million: 0.20
+        cache-write-per-million: 5.00
       "claude-3-opus-20240229":
         input-per-million: 15.0
         output-per-million: 75.0
