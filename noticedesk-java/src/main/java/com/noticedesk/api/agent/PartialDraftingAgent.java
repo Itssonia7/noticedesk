@@ -8,7 +8,6 @@ import com.noticedesk.api.model.matching.ReplyTemplate;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.llm.LlmProvider;
-import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -117,30 +116,16 @@ public class PartialDraftingAgent {
 
         try {
             LlmProvider llmProvider = llmFactory.getLlmForAgent(agentKey);
-            for (int attempt = 1; attempt <= 2; attempt++) {
-                String prompt = attempt == 1 ? userPrompt : userPrompt + "\n\nCRITICAL: Output valid JSON only.";
-                LlmResponse response = llmProvider.generateText(systemPrompt, prompt, 4096, 0.0);
-                logUsage(response, model, agentKey, noticeId);
-                PartialDraftingResult parsed = parseAndSanitize(response.content(),
-                        response.model() != null ? response.model() : model);
-                if (parsed != null) {
-                    return parsed;
-                }
-                log.warn("PartialDraftingAgent JSON parse failed on attempt {} for issue {}", attempt, issue.issueNo());
+            PartialDraftingResult result = WriterCall.run(llmProvider, apiUsageLogService, properties, agentKey, model,
+                    systemPrompt, userPrompt, noticeId, true, "\n\nCRITICAL: Output valid JSON only.",
+                    response -> parseAndSanitize(response.content(), response.model() != null ? response.model() : model));
+            if (result == null) {
+                log.warn("PartialDraftingAgent produced no usable output for issue {}", issue.issueNo());
             }
-            return null;
+            return result;
         } catch (Exception e) {
             log.error("PartialDraftingAgent execution failed for issue {}: {}", issue.issueNo(), e.getMessage());
             return null;
-        }
-    }
-
-    private void logUsage(LlmResponse response, String model, String agentKey, UUID noticeId) {
-        if (apiUsageLogService != null) {
-            apiUsageLogService.logUsage("anthropic", response.model() != null ? response.model() : model,
-                    response.inputTokens() != null ? response.inputTokens() : 0,
-                    response.outputTokens() != null ? response.outputTokens() : 0,
-                    agentKey, null, noticeId);
         }
     }
 

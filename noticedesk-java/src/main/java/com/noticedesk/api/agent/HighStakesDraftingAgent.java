@@ -7,7 +7,6 @@ import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.llm.LlmProvider;
-import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -115,14 +114,10 @@ public class HighStakesDraftingAgent {
         try {
             String userPrompt = objectMapper.writeValueAsString(payload);
             LlmProvider llmProvider = llmFactory.getLlmForAgent("high_stakes");
-            LlmResponse response = llmProvider.generateText(loadPrompt(), userPrompt, 4096, 0.0);
-            if (apiUsageLogService != null) {
-                apiUsageLogService.logUsage("anthropic", response.model() != null ? response.model() : model,
-                        response.inputTokens() != null ? response.inputTokens() : 0,
-                        response.outputTokens() != null ? response.outputTokens() : 0,
-                        "high_stakes", null, noticeId);
-            }
-            return parseAndSanitize(response.content(), response.model() != null ? response.model() : model);
+            // retried only after a max_tokens stop; unparseable output keeps the code-built sections
+            return WriterCall.run(llmProvider, apiUsageLogService, properties, "high_stakes", model,
+                    loadPrompt(), userPrompt, noticeId, false, null,
+                    response -> parseAndSanitize(response.content(), response.model() != null ? response.model() : model));
         } catch (Exception e) {
             log.error("HighStakesDraftingAgent failed: {}", e.getMessage());
             return null;

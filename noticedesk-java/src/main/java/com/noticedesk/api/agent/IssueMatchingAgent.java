@@ -112,7 +112,8 @@ public class IssueMatchingAgent {
         String systemPrompt = promptTemplate + "\n\n" + compactCatalogueText;
         String userPrompt = "NOTICE TYPE FROM TRIAGE: " + noticeType + "\n\nFULL NOTICE OCR TEXT:\n" + fullOcrText;
 
-        int maxTokens = 4096;
+        String effort = properties.getLlm().effortForAgent("matching");
+        boolean raiseCap = false;
         int totalInTokens = 0;
         int totalOutTokens = 0;
         int totalCacheReadTokens = 0;
@@ -124,31 +125,38 @@ public class IssueMatchingAgent {
 
         for (int attempt = 1; attempt <= 2; attempt++) {
             String activeUserPrompt = userPrompt;
-            if (attempt == 2 && validationError != null) {
+            if (attempt == 2 && validationError != null && !raiseCap) {
                 activeUserPrompt += "\n\nCRITICAL FIX REQUIRED: Previous attempt failed validation with error: "
                         + validationError + ". Ensure you output STRICT JSON with all required fields.";
-                maxTokens = 8192; // Increase max_tokens on retry per requirement 8
             }
+            int maxTokens = properties.getLlm().maxTokensForAgent("matching", raiseCap);
+            jsonNode = null;
 
             try {
-                response = llm.generateWithPromptCaching(systemPrompt, activeUserPrompt, modelName, maxTokens, 0.0, true);
+                response = llm.generateWithEffort(systemPrompt, activeUserPrompt, modelName, maxTokens, effort, true);
 
-                totalInTokens += (response.inputTokens() != null ? response.inputTokens() : 0);
-                totalOutTokens += (response.outputTokens() != null ? response.outputTokens() : 0);
-                totalCacheReadTokens += (response.cacheReadInputTokens() != null ? response.cacheReadInputTokens() : 0);
-                totalCacheWriteTokens += (response.cacheCreationInputTokens() != null ? response.cacheCreationInputTokens() : 0);
+                // usage is billed whether or not the output is usable
+                totalInTokens += response.inputTokensOrZero();
+                totalOutTokens += response.outputTokensOrZero();
+                totalCacheReadTokens += response.cacheReadTokensOrZero();
+                totalCacheWriteTokens += response.cacheWriteTokensOrZero();
+                apiUsageLogService.logCall(response, modelName, "matching", attempt, tenantId, noticeId);
 
-                apiUsageLogService.logUsage("anthropic", response.model(),
-                        response.inputTokens() != null ? response.inputTokens() : 0,
-                        response.outputTokens() != null ? response.outputTokens() : 0,
-                        response.cacheReadInputTokens() != null ? response.cacheReadInputTokens() : 0,
-                        response.cacheCreationInputTokens() != null ? response.cacheCreationInputTokens() : 0,
-                        "matching", tenantId, noticeId);
-
-                // Requirement 8: If stop_reason is max_tokens, treat as failed attempt and retry
-                if ("max_tokens".equalsIgnoreCase(response.stopReason())) {
-                    log.warn("matching_attempt_truncated stop_reason=max_tokens attempt={}", attempt);
+                if (response.refused()) {
+                    log.warn("matching_refused stop_reason={} attempt={}", response.stopReason(), attempt);
+                    validationError = "Model declined the request (stop_reason=refusal)";
+                    break;   // the same prompt will be refused again
+                }
+                if (response.truncated()) {
+                    log.warn("matching_attempt_truncated stop_reason=max_tokens attempt={} max_tokens={}", attempt, maxTokens);
                     validationError = "Output was truncated due to max_tokens limit.";
+                    raiseCap = true;
+                    continue;
+                }
+                if (response.failed()) {
+                    log.warn("matching_attempt_unusable failure={} stop_reason={} attempt={}",
+                            response.failureReason(), response.stopReason(), attempt);
+                    validationError = "Model returned no usable text output (" + response.failureReason() + ")";
                     continue;
                 }
 
