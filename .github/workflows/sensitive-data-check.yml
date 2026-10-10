@@ -1,0 +1,42 @@
+name: sensitive-data-check
+
+# Rejects real-looking GSTINs / PANs on added lines and new .pdf/.docx/.xlsx files.
+# Same script as the committed pre-commit hook: scripts/check_sensitive_data.sh
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan the commits in this push / pull request
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            range="$(git merge-base "$PR_BASE" "$PR_HEAD")..$PR_HEAD"
+          elif [ -n "$PUSH_BEFORE" ] && ! printf '%s' "$PUSH_BEFORE" | grep -q '^0*$' \
+               && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+            range="$PUSH_BEFORE..$PUSH_AFTER"
+          else
+            # new branch (or force-push to an unknown base): commits not on the default branch
+            git fetch --no-tags origin "$DEFAULT_BRANCH"
+            range="$(git merge-base "origin/$DEFAULT_BRANCH" "$PUSH_AFTER")..$PUSH_AFTER"
+          fi
+          echo "Scanning $range"
+          bash scripts/check_sensitive_data.sh --commits "$range"

@@ -2,6 +2,10 @@
 
 Litigation-first tax operating system for Indian CA firms. Sprint 1: foundation scaffold (PAN-centric data model, auth, API, frontend skeleton).
 
+> **Public repository: never commit real client data.** Real notices, GSTINs/PANs and the firm's
+> catalogue live outside the repo in `$PRIVATE_SEED_DIR`. After cloning, enable the privacy hook with
+> `git config core.hooksPath .githooks`. See [`docs/PRIVATE_DATA.md`](docs/PRIVATE_DATA.md).
+
 ## Repository layout
 
 ```

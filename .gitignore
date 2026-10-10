@@ -69,3 +69,11 @@ private/
 noticedesk-private/
 
 
+
+# Private / real client data: never committed (see docs/PRIVATE_DATA.md)
+private/
+noticedesk-private/
+*.real.json
+*.real.sql
+*.real.docx
+*.real.pdf

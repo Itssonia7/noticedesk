@@ -38,7 +38,8 @@ class MatchingEvalRunnerTest {
         String apiKey = System.getenv("ANTHROPIC_API_KEY");
         String matchingModel = System.getenv("LLM_MODEL_MATCHING");
         if (matchingModel == null || matchingModel.isBlank()) {
-            matchingModel = "claude-sonnet-5-5";
+            System.out.println("Skipping MatchingEvalRunnerTest (LLM_MODEL_MATCHING not set)");
+            return;
         }
 
         if (apiKey == null || apiKey.isBlank()) {
@@ -64,28 +65,69 @@ class MatchingEvalRunnerTest {
         p1.setOutputPerMillion(15.0);
         p1.setCacheReadPerMillion(0.30);
         p1.setCacheWritePerMillion(3.75);
-        pricing.getModels().put("claude-sonnet-5-5", p1);
-        pricing.getModels().put("claude-3-5-sonnet-20241022", p1);
+        pricing.getModels().put(matchingModel, p1);  // rates from the pricing table for the matching model
 
         LlmFactory llmFactory = new LlmFactory(props);
         CatalogueService catalogueService = new CatalogueService(null, props, objectMapper);
         ApiUsageLogService usageLogService = new ApiUsageLogService(null, props);
         IssueMatchingAgent agent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, null, objectMapper);
 
+        // Dummy set: the committed testbench (fake data). Private set: $PRIVATE_SEED_DIR/notices/*.json
+        // (real data kept outside the repo). They are evaluated and reported separately.
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-        Resource[] resources = resolver.getResources("classpath*:testbench/notices/*.json");
-
-        if (resources == null || resources.length == 0) {
-            System.out.println("No testbench notice files found in classpath:testbench/notices/*.json");
-            return;
-        }
-
-        // Deduplicate resources by filename so each notice file is counted exactly once
         Map<String, Resource> uniqueResources = new TreeMap<>();
-        for (Resource res : resources) {
+        for (Resource res : resolver.getResources("classpath*:testbench/notices/*.json")) {
             uniqueResources.putIfAbsent(res.getFilename(), res);
         }
-        List<Resource> noticeList = new ArrayList<>(uniqueResources.values());
+        List<Resource> dummyNotices = new ArrayList<>(uniqueResources.values());
+
+        List<Resource> privateNotices = new ArrayList<>();
+        String privateSeedDir = System.getenv("PRIVATE_SEED_DIR");
+        if (privateSeedDir != null && !privateSeedDir.isBlank()) {
+            File dir = new File(privateSeedDir, "notices");
+            File[] files = dir.listFiles((d, name) -> name.endsWith(".json"));
+            if (files != null) {
+                Arrays.sort(files);
+                for (File f : files) privateNotices.add(new org.springframework.core.io.FileSystemResource(f));
+            }
+            System.out.println("Private notice set: " + privateNotices.size() + " file(s)");
+        } else {
+            System.out.println("Private notice set skipped (PRIVATE_SEED_DIR not set)");
+        }
+
+        BigDecimal[] spentInr = {BigDecimal.ZERO};
+        ObjectNode dummySummary = evaluateSet("dummy", dummyNotices, false, agent, usageLogService, matchingModel, spentInr);
+        ObjectNode privateSummary = privateNotices.isEmpty() ? null
+                : evaluateSet("private", privateNotices, true, agent, usageLogService, matchingModel, spentInr);
+
+        // Write timestamped JSON report to repo root testbench/results/
+        File resultsDir = new File("../testbench/results");
+        if (!resultsDir.exists() && !resultsDir.mkdirs()) {
+            resultsDir = new File("testbench/results");
+            resultsDir.mkdirs();
+        }
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        File reportFile = new File(resultsDir, "eval_matching_" + timestamp + ".json");
+
+        ObjectNode summaryReport = objectMapper.createObjectNode();
+        summaryReport.put("timestamp", timestamp);
+        summaryReport.put("model", matchingModel);
+        summaryReport.set("dummy", dummySummary);
+        if (privateSummary != null) {
+            summaryReport.set("private", privateSummary);   // notice IDs + metrics only
+        }
+
+        objectMapper.writerWithDefaultPrettyPrinter().writeValue(reportFile, summaryReport);
+        System.out.println("Evaluation report written to: " + reportFile.getAbsolutePath());
+    }
+
+    /**
+     * Evaluates one notice set. The returned JSON holds only notice IDs and metrics; for the private
+     * set nothing from the notice text or the model's explanation is printed or stored.
+     */
+    private ObjectNode evaluateSet(String setName, List<Resource> noticeList, boolean isPrivate,
+                                   IssueMatchingAgent agent, ApiUsageLogService usageLogService,
+                                   String matchingModel, BigDecimal[] spentInr) throws Exception {
 
         int totalNotices = 0;
         int errorCallsCount = 0;
@@ -105,7 +147,8 @@ class MatchingEvalRunnerTest {
         int cacheHitCalls = 0;
         int totalCacheReadTokensCall2Plus = 0;
 
-        BigDecimal totalCostInr = BigDecimal.ZERO;
+        BigDecimal startInr = spentInr[0];      // the INR cap applies across both sets
+        BigDecimal totalCostInr = startInr;
         final BigDecimal INR_CAP = new BigDecimal("200.00");
 
         List<ObjectNode> noticeEvalResults = new ArrayList<>();
@@ -140,7 +183,9 @@ class MatchingEvalRunnerTest {
             if (flagStr.contains("credit balance") || flagStr.contains("400") || flagStr.contains("401") || flagStr.contains("403")
                     || missingStr.contains("credit balance") || missingStr.contains("400") || missingStr.contains("401") || missingStr.contains("403")
                     || whyStr.contains("credit balance") || whyStr.contains("400") || whyStr.contains("401") || whyStr.contains("403")) {
-                String errDetail = "flags=" + result.flags() + " missing=" + result.missingOrDoubtful() + " why=" + whyStr;
+                // private notices: never print model text (it can quote the notice)
+                String errDetail = isPrivate ? "flags=" + result.flags()
+                        : "flags=" + result.flags() + " missing=" + result.missingOrDoubtful() + " why=" + whyStr;
                 System.err.println("FATAL BILLING / AUTH ERROR DETECTED for notice " + noticeId + ": " + errDetail);
                 throw new IllegalStateException("Halting evaluation runner due to API billing/auth error: " + errDetail);
             }
@@ -148,7 +193,8 @@ class MatchingEvalRunnerTest {
             // Requirement 1: Failed/fallback match counted as an ERROR, never as correct "none"
             if (result.flags().contains("matching_failed") || result.flags().contains("matching_parse_failed")) {
                 errorCallsCount++;
-                wrongMatches.add(new WrongMatchInfo(noticeId, "Successful Match", "ERROR", "Call failed or returned fallback result: " + result.flags() + " | detail: " + whyStr));
+                wrongMatches.add(new WrongMatchInfo(noticeId, "Successful Match", "ERROR",
+                        "Call failed or returned fallback result: " + result.flags() + (isPrivate ? "" : " | detail: " + whyStr)));
                 continue;
             }
 
@@ -182,7 +228,7 @@ class MatchingEvalRunnerTest {
                             wrongFullMatchCount++;
                             String gotStatus = result.issues().isEmpty() ? "none" : result.issues().get(0).status();
                             String gotCardId = result.issues().isEmpty() ? "none" : result.issues().get(0).cardIds().toString();
-                            String why = result.issues().isEmpty() ? "No issue returned" : result.issues().get(0).why();
+                            String why = result.issues().isEmpty() ? "No issue returned" : (isPrivate ? "(withheld: private notice)" : result.issues().get(0).why());
                             wrongMatches.add(new WrongMatchInfo(noticeId, "full (" + expCardId + ")", gotStatus + " (" + gotCardId + ")", why));
                         }
                     } else {
@@ -193,7 +239,7 @@ class MatchingEvalRunnerTest {
                         } else {
                             String gotStatus = result.issues().isEmpty() ? "none" : result.issues().get(0).status();
                             String gotCardId = result.issues().isEmpty() ? "none" : result.issues().get(0).cardIds().toString();
-                            String why = result.issues().isEmpty() ? "No issue returned" : result.issues().get(0).why();
+                            String why = result.issues().isEmpty() ? "No issue returned" : (isPrivate ? "(withheld: private notice)" : result.issues().get(0).why());
                             wrongMatches.add(new WrongMatchInfo(noticeId, expStatus + " (" + expCardId + ")", gotStatus + " (" + gotCardId + ")", why));
                         }
                     }
@@ -229,7 +275,7 @@ class MatchingEvalRunnerTest {
         double paraCoveragePct = totalExpectedParas > 0 ? (double) coveredParasCount / totalExpectedParas * 100.0 : 100.0;
         double cacheHitRatePct = successfulCalls > 1 ? (double) cacheHitCalls / (successfulCalls - 1) * 100.0 : 0.0;
 
-        System.out.println("=== MATCHING EVALUATION BENCHMARK METRICS ===");
+        System.out.println("=== MATCHING EVALUATION BENCHMARK METRICS: " + setName.toUpperCase() + " SET ===");
         System.out.printf("Total Notices Evaluated: %d (Files Count: %d)%n", totalNotices, noticeList.size());
         System.out.printf("Successful Calls: %d | Errors/Failures: %d%n", successfulCalls, errorCallsCount);
         System.out.printf("Multi-Issue Full Matches (multi_full): %d%n", multiFullMatchCount);
@@ -239,7 +285,7 @@ class MatchingEvalRunnerTest {
         System.out.printf("Para Coverage: %.2f%%%n", paraCoveragePct);
         System.out.printf("Cache Hit Rate (Call 2+): %.2f%%%n", cacheHitRatePct);
         System.out.printf("Cache Read Tokens (Calls 2+): %d%n", totalCacheReadTokensCall2Plus);
-        System.out.printf("Total Benchmark Cost: %.4f INR%n", totalCostInr.doubleValue());
+        System.out.printf("Total Benchmark Cost: %.4f INR%n", totalCostInr.subtract(startInr).doubleValue());
 
         if (wrongMatches.isEmpty()) {
             System.out.println("\nNo wrong matches! 100% agreement with answer keys.");
@@ -250,18 +296,8 @@ class MatchingEvalRunnerTest {
             }
         }
 
-        // Write timestamped JSON report to repo root testbench/results/
-        File resultsDir = new File("../testbench/results");
-        if (!resultsDir.exists() && !resultsDir.mkdirs()) {
-            resultsDir = new File("testbench/results");
-            resultsDir.mkdirs();
-        }
-        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        File reportFile = new File(resultsDir, "eval_matching_" + timestamp + ".json");
-
         ObjectNode summaryReport = objectMapper.createObjectNode();
-        summaryReport.put("timestamp", timestamp);
-        summaryReport.put("model", matchingModel);
+        summaryReport.put("set", setName);
         summaryReport.put("total_notices", totalNotices);
         summaryReport.put("successful_calls", successfulCalls);
         summaryReport.put("error_calls", errorCallsCount);
@@ -272,11 +308,10 @@ class MatchingEvalRunnerTest {
         summaryReport.put("para_coverage_pct", paraCoveragePct);
         summaryReport.put("cache_hit_rate_pct", cacheHitRatePct);
         summaryReport.put("cache_read_tokens_calls_2_plus", totalCacheReadTokensCall2Plus);
-        summaryReport.put("total_cost_inr", totalCostInr.doubleValue());
+        summaryReport.put("total_cost_inr", totalCostInr.subtract(startInr).doubleValue());
         summaryReport.set("notices", objectMapper.valueToTree(noticeEvalResults));
 
-        objectMapper.writerWithDefaultPrettyPrinter().writeValue(reportFile, summaryReport);
-        System.out.println("Evaluation report written to: " + reportFile.getAbsolutePath());
+        spentInr[0] = totalCostInr;
+        return summaryReport;
     }
 }
-

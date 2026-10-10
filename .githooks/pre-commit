@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Committed pre-commit hook. Activate once per clone:
+#     git config core.hooksPath .githooks
+# See docs/PRIVATE_DATA.md.
+exec "$(git rev-parse --show-toplevel)/scripts/check_sensitive_data.sh" --staged
