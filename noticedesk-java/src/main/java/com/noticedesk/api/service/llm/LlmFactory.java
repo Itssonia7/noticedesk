@@ -101,24 +101,36 @@ public class LlmFactory {
                 AppProperties.Llm.Anthropic cfg = properties.getLlm().getAnthropic();
                 if (cfg.getApiKey() == null || cfg.getApiKey().isBlank()) {
                     throw new LlmException(
-                            "noticedesk.llm.anthropic.api-key must be set for anthropic provider");
+                            "noticedesk.llm.anthropic.api-key must be set for anthropic provider (set ANTHROPIC_API_KEY)");
                 }
                 String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
+                if (resolvedModel == null || resolvedModel.isBlank()) {
+                    throw new LlmException(
+                            "Anthropic model name must not be empty. Please set ANTHROPIC_MODEL or LLM_MODEL_* env var");
+                }
                 yield new AnthropicLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds(), cfg.getWorkspaceId());
             }
             case "openai" -> {
                 AppProperties.Llm.OpenAi cfg = properties.getLlm().getOpenai();
                 if (cfg.getApiKey() == null || cfg.getApiKey().isBlank()) {
                     throw new LlmException(
-                            "noticedesk.llm.openai.api-key must be set for openai provider");
+                            "noticedesk.llm.openai.api-key must be set for openai provider (set OPENAI_API_KEY)");
                 }
                 String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
+                if (resolvedModel == null || resolvedModel.isBlank()) {
+                    throw new LlmException(
+                            "OpenAI model name must not be empty. Please set OPENAI_MODEL env var");
+                }
                 yield new OpenAiLlmProvider(cfg.getApiKey(), resolvedModel,
                         cfg.getTimeoutSeconds(), cfg.getBaseUrl());
             }
             case "gemini" -> {
                 AppProperties.Llm.Gemini cfg = properties.getLlm().getGemini();
                 String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
+                if (resolvedModel == null || resolvedModel.isBlank()) {
+                    throw new LlmException(
+                            "Gemini model name must not be empty. Please set GEMINI_MODEL env var");
+                }
                 yield new GeminiLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds());
             }
             case "stub" -> new StubLlmProvider(properties.getLlm().getStubDefaultCanned());

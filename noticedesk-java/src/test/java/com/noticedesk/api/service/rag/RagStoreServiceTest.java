@@ -133,6 +133,16 @@ class RagStoreServiceTest {
         assertNull(actChunk.expiresAt(), "Statutory Act chunks must be exempt from expiry (expiresAt = null)");
         assertFalse(actChunk.isExpired());
 
+        LegalChunk courtChunk = ragStoreService.indexLegalChunk(
+                "Supreme Court of India",
+                "Ratio Decidendi",
+                "Suncraft Energy Precedent",
+                "Judicial precedent text"
+        );
+        assertNotNull(courtChunk.savedAt());
+        assertNull(courtChunk.expiresAt(), "Court judgment chunks must be exempt from expiry (expiresAt = null)");
+        assertFalse(courtChunk.isExpired());
+
         LegalChunk tempChunk = ragStoreService.saveNewChunk(
                 "Novel Issue Ground",
                 "Issue Description",

@@ -88,7 +88,14 @@ public class DraftingAgent {
 
     public record ExtractionResult(
             ExtractedNoticeInfo noticeInfo,
-            List<ExtractedIssue> issues) {}
+            List<ExtractedIssue> issues,
+            Integer inputTokens,
+            Integer outputTokens,
+            String model) {
+        public ExtractionResult(ExtractedNoticeInfo noticeInfo, List<ExtractedIssue> issues) {
+            this(noticeInfo, issues, 0, 0, "claude-haiku-4-5-20251001");
+        }
+    }
 
     public record DraftingInput(
             UUID                      matterId,
@@ -370,8 +377,8 @@ public class DraftingAgent {
                             infoMap.get("total_demand_amount") instanceof Number n ? n.doubleValue() : null
                     );
 
-                    log.info("extract_issues_success attempt={} issuesCount={}", attempt, issues.size());
-                    return new ExtractionResult(info, issues);
+                    log.info("extract_issues_success attempt={} issuesCount={} inputTokens={} outputTokens={} model={}", attempt, issues.size(), resp.inputTokens(), resp.outputTokens(), resp.model());
+                    return new ExtractionResult(info, issues, resp.inputTokens(), resp.outputTokens(), resp.model());
                 }
                 log.warn("extract_issues_attempt_invalid_json attempt={} raw={}", attempt, raw);
             } catch (Exception e) {
@@ -383,11 +390,17 @@ public class DraftingAgent {
         throw new JsonSchemaValidationException("Notice issue extraction failed: returned invalid JSON after retry");
     }
 
+    public record OpusTemplateResult(
+            String content,
+            Integer inputTokens,
+            Integer outputTokens,
+            String model) {}
+
     /**
      * Step 3: Unmatched Issue Template Generation via Claude Opus.
      * Generates a statutory rebuttal template for ONLY a single unmatched issue.
      */
-    public String generateOpusTemplateForUnmatchedIssue(ExtractedIssue issue, DraftingInput input) {
+    public OpusTemplateResult generateOpusTemplateResultForUnmatchedIssue(ExtractedIssue issue, DraftingInput input) {
         log.info("Generating Opus template chunk for unmatched issue: {}", issue.title());
         String system = """
                 You are a Senior GST Advocate. Generate a comprehensive legal rebuttal argument template for ONLY the single unmatched issue specified.
@@ -409,7 +422,12 @@ public class DraftingAgent {
             apiUsageLogService.logUsage(resp.providerName(), resp.model(), resp.inputTokens(), resp.outputTokens());
         }
 
-        return resp.content().strip();
+        log.info("generate_opus_template_success issue='{}' inputTokens={} outputTokens={} model={}", issue.title(), resp.inputTokens(), resp.outputTokens(), resp.model());
+        return new OpusTemplateResult(resp.content().strip(), resp.inputTokens(), resp.outputTokens(), resp.model());
+    }
+
+    public String generateOpusTemplateForUnmatchedIssue(ExtractedIssue issue, DraftingInput input) {
+        return generateOpusTemplateResultForUnmatchedIssue(issue, input).content();
     }
 
     /**

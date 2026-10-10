@@ -70,24 +70,17 @@ public class GstTemplateFillerService {
 
         // Perform Placeholder Substitution
         Map<String, String> replacements = new LinkedHashMap<>();
-        String clientName = safe(input.clientLegalName());
-        String gstin = safe(input.registrationIdentifier());
-        String pan = safe(input.clientPan());
-        String state = safe(input.registrationStateName());
-        String fy = safe(input.financialYear());
-        String ay = safe(input.assessmentYear());
-        String noticeNo = safe(String.valueOf(input.notice().getOrDefault("notice_number", "SCN/2026/001")));
-        String din = safe(String.valueOf(input.notice().getOrDefault("din_or_rfn", "DIN-2026-GST-001")));
-        String authority = safe(String.valueOf(input.notice().getOrDefault("authority", "Proper Officer, Ward 10")));
-        String issueDate = safe(String.valueOf(input.notice().getOrDefault("issue_date", "14 September 2026")));
-        String demandStr = input.notice().get("demand_amount") instanceof Number n ? "₹" + String.format("%.2f", n.doubleValue()) : "₹[____]";
+        String clientName = safe(input.clientLegalName(), "client_legal_name");
+        String gstin = safe(input.registrationIdentifier(), "gstin");
+        String pan = safe(input.clientPan(), "pan");
+        String state = safe(input.registrationStateName(), "state");
+        String fy = safe(input.financialYear(), "financial_year");
+        String ay = safe(input.assessmentYear(), "assessment_year");
+        String noticeNo = getNoticeVal(input, "notice_number", "notice_number");
+        String din = getNoticeVal(input, "din_or_rfn", "din_or_rfn");
+        String authority = getNoticeVal(input, "authority", "authority");
+        String issueDate = getNoticeVal(input, "issue_date", "issue_date");
 
-        replacements.put("____________________", gstin);
-        replacements.put("____________", noticeNo);
-        replacements.put("dated __________", "dated " + issueDate);
-        replacements.put("M/s Notice Desk Private Limited", clientName);
-        replacements.put("Nasik", state);
-        replacements.put("[____]", clientName);
         replacements.put("[TAX_PAYER_NAME]", clientName);
         replacements.put("[CLIENT_NAME]", clientName);
         replacements.put("[GSTIN]", gstin);
@@ -105,29 +98,43 @@ public class GstTemplateFillerService {
             populated = populated.replace(entry.getKey(), entry.getValue());
         }
 
+        // Replace any leftover underscore blanks (3+ consecutive underscores) with [[MISSING: field]]
+        populated = populated.replaceAll("_{3,}", "[[MISSING: field]]");
+
         // Strip remaining notes / headers if present
         populated = populated.replace("Drafting note (remove before filing).", "").strip();
 
         return populated;
     }
 
-    private String safe(String val) {
-        return (val != null && !val.isBlank()) ? val : "[N/A]";
+    private String safe(String val, String fieldName) {
+        return (val != null && !val.isBlank()) ? val : "[[MISSING: " + fieldName + "]]";
+    }
+
+    private String getNoticeVal(DraftingInput input, String key, String fieldName) {
+        if (input != null && input.notice() != null && input.notice().get(key) != null) {
+            String v = String.valueOf(input.notice().get(key)).trim();
+            if (!v.isBlank()) {
+                return v;
+            }
+        }
+        return "[[MISSING: " + fieldName + "]]";
     }
 
     private List<DraftSection> build15Sections(String populatedText, DraftingInput input) {
         List<DraftSection> sections = new ArrayList<>();
 
-        String clientName = safe(input.clientLegalName());
-        String gstin = safe(input.registrationIdentifier());
-        String pan = safe(input.clientPan());
-        String state = safe(input.registrationStateName());
-        String fy = safe(input.financialYear());
-        String noticeNo = safe(String.valueOf(input.notice().getOrDefault("notice_number", "SCN/2026/001")));
-        String din = safe(String.valueOf(input.notice().getOrDefault("din_or_rfn", "DIN-2026-GST-001")));
-        String authority = safe(String.valueOf(input.notice().getOrDefault("authority", "Proper Officer, Ward 10")));
-        String issueDate = safe(String.valueOf(input.notice().getOrDefault("issue_date", "14 September 2026")));
-        String demandStr = input.notice().get("demand_amount") instanceof Number n ? "₹" + String.format("%.2f", n.doubleValue()) : "as specified in SCN";
+        String clientName = safe(input.clientLegalName(), "client_legal_name");
+        String gstin = safe(input.registrationIdentifier(), "gstin");
+        String pan = safe(input.clientPan(), "pan");
+        String state = safe(input.registrationStateName(), "state");
+        String fy = safe(input.financialYear(), "financial_year");
+        String noticeNo = getNoticeVal(input, "notice_number", "notice_number");
+        String din = getNoticeVal(input, "din_or_rfn", "din_or_rfn");
+        String authority = getNoticeVal(input, "authority", "authority");
+        String issueDate = getNoticeVal(input, "issue_date", "issue_date");
+        String demandStr = (input != null && input.notice() != null && input.notice().get("demand_amount") instanceof Number n)
+                ? "₹" + String.format("%.2f", n.doubleValue()) : "[[MISSING: demand_amount]]";
 
         // Section 1: Addressee and Reference Block
         sections.add(new DraftSection(1, "Addressee and Reference Block",
@@ -209,7 +216,6 @@ public class GstTemplateFillerService {
         sections.add(new DraftSection(15, "Declaration and Signature Block",
                 "<p>I, Authorized Signatory for M/s " + clientName + ", do hereby verify and declare that the contents of Sections 1 to 14 above are true and correct to the best of my knowledge, information, and legal advice.<br><br>" +
                 "<b>For M/s " + clientName + "</b><br><br>" +
-                "____________________________________<br>" +
                 "Authorized Signatory / Director<br>" +
                 "Place: " + state + "<br>" +
                 "Date: " + issueDate + "</p>"));
@@ -218,12 +224,12 @@ public class GstTemplateFillerService {
     }
 
     private String getDefaultFallbackTemplate(DraftingInput input) {
-        return "REPLY ON BEHALF OF " + safe(input.clientLegalName()) + "\n\n" +
-               "GSTIN: " + safe(input.registrationIdentifier()) + "\n\n" +
+        return "REPLY ON BEHALF OF " + safe(input.clientLegalName(), "client_legal_name") + "\n\n" +
+               "GSTIN: " + safe(input.registrationIdentifier(), "gstin") + "\n\n" +
                "Respected Sir/Madam,\n\n" +
-               "With reference to the notice/intimation issued under GST Law for FY " + safe(input.financialYear()) + ", " +
+               "With reference to the notice/intimation issued under GST Law for FY " + safe(input.financialYear(), "financial_year") + ", " +
                "we submit that all tax liabilities have been duly discharged in accordance with law. " +
                "It is requested that the proposed proceedings be dropped and closure issued.\n\n" +
-               "Thanking you,\n" + safe(input.clientLegalName());
+               "Thanking you,\n" + safe(input.clientLegalName(), "client_legal_name");
     }
 }

@@ -23,6 +23,7 @@ public class RagStoreService {
     private final EmbeddingProvider         embeddingProvider;
     private final AppProperties              properties;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public RagStoreService(NamedParameterJdbcTemplate jdbc, EmbeddingService embeddingService, EmbeddingProvider embeddingProvider, AppProperties properties) {
         this.jdbc = jdbc;
         this.embeddingService = embeddingService;

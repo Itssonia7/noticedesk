@@ -115,10 +115,29 @@ public class ClaudeTestingPdfPipelineRunnerTest {
         EmbeddingService embeddingService = new EmbeddingService();
         EmbeddingProvider embeddingProvider = new EmbeddingFactory(properties).embeddingProvider();
 
-        ragStoreService = new RagStoreService(null, embeddingService, embeddingProvider);
-        if (!"gemini".equalsIgnoreCase(properties.getEmbedding().getProvider())) {
-            CorpusRagSeederService seederService = new CorpusRagSeederService(properties, objectMapper, ragStoreService);
-            seederService.seedCorpusToRag();
+        if (enableE2e) {
+            try {
+                org.springframework.jdbc.datasource.DriverManagerDataSource dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource();
+                dataSource.setDriverClassName("org.postgresql.Driver");
+                dataSource.setUrl("jdbc:postgresql://127.0.0.1:5432/noticedesk_dev");
+                dataSource.setUsername("noticedesk_app");
+                dataSource.setPassword("noticedesk_app");
+                org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate jdbc = new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(dataSource);
+
+                Integer count = jdbc.queryForObject("SELECT count(*) FROM legal_chunks", new java.util.HashMap<>(), Integer.class);
+                System.out.println("=== RAG PRE-FLIGHT CHECK ===");
+                System.out.println("Database URL: jdbc:postgresql://127.0.0.1:5432/noticedesk_dev");
+                System.out.println("RagStoreService backed by real JDBC Template: " + (jdbc != null));
+                System.out.println("legal_chunks Table Row Count: " + count);
+                System.out.println("=============================");
+
+                ragStoreService = new RagStoreService(jdbc, embeddingService, embeddingProvider);
+            } catch (Exception e) {
+                System.out.println("PostgreSQL not reachable for E2E runner: " + e.getMessage());
+                ragStoreService = new RagStoreService(null, embeddingService, embeddingProvider);
+            }
+        } else {
+            ragStoreService = new RagStoreService(null, embeddingService, embeddingProvider);
         }
 
         draftingAgent = new DraftingAgent(llmFactory, objectMapper, ragStoreService, org.mockito.Mockito.mock(com.noticedesk.api.service.llm.ApiUsageLogService.class));
@@ -129,10 +148,16 @@ public class ClaudeTestingPdfPipelineRunnerTest {
 
     @Test
     void runPipelineForClaudeTestingPdf() throws Exception {
-        String pdfPathStr = "../claude testing /Sunrise_Polymers_SCN_Multi_Issue_Notice.pdf";
+        boolean enableE2e = "true".equalsIgnoreCase(System.getProperty("enable.e2e.tests"))
+                || System.getenv("ENABLE_E2E_TESTS") != null;
+        if (!enableE2e) {
+            System.out.println("Skipping E2E PDF Pipeline Runner test (ENABLE_E2E_TESTS not set)");
+            return;
+        }
+        String pdfPathStr = "../Meridian_Fabtech_SCN_Hybrid_Test.pdf";
         File pdfFile = new File(pdfPathStr);
         if (!pdfFile.exists()) {
-            pdfPathStr = "../claude testing /SCN_Test_Sample_ITC_Mismatch.pdf";
+            pdfPathStr = "../claude testing /Sunrise_Polymers_SCN_Multi_Issue_Notice.pdf";
             pdfFile = new File(pdfPathStr);
         }
 
@@ -286,10 +311,10 @@ public class ClaudeTestingPdfPipelineRunnerTest {
                 "NoticeDesk Java 21 Pipeline — Verification Status: CITATIONS VERIFIED"
         );
 
-        String docxPath = "../output/Sunrise_Polymers_SCN_Reply_Draft_Run1.docx";
+        String docxPath = "../output/Meridian_Fabtech_SCN_Reply_Draft_Run1.docx";
         Files.write(Paths.get(docxPath), docxBytes);
 
-        String txtPath = "../output/Sunrise_Polymers_SCN_Reply_Draft_Run1.txt";
+        String txtPath = "../output/Meridian_Fabtech_SCN_Reply_Draft_Run1.txt";
         writeTxtDraft(txtPath, clientName, gstin, draft1);
 
         double totalCost = parseCost + draftCost1;

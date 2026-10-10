@@ -8,6 +8,6 @@ public record ConfidenceAssessment(
         String draftingModel
 ) {
     public ConfidenceAssessment(double confidenceScore, boolean isHighConfidence, String matchTier, String guidedTemplate) {
-        this(confidenceScore, isHighConfidence, matchTier, guidedTemplate, "claude-opus-4-7");
+        this(confidenceScore, isHighConfidence, matchTier, guidedTemplate, null);
     }
 }

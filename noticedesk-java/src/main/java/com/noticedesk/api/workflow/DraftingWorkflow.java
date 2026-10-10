@@ -28,8 +28,10 @@ import java.util.*;
  * single database transaction.
  */
 import com.noticedesk.api.service.DraftingPipelineService;
+import com.noticedesk.api.service.V7DraftingPipelineService;
 import com.noticedesk.api.service.DraftingPipelineResult;
 import com.noticedesk.api.service.rag.RagStoreService;
+import jakarta.annotation.PostConstruct;
 
 @Service
 @RequiredArgsConstructor
@@ -46,6 +48,17 @@ public class DraftingWorkflow {
     private final GstTemplateFillerService     templateFillerService;
     private final RagStoreService             ragStoreService;
     private final DraftingPipelineService     draftingPipelineService;
+    private final V7DraftingPipelineService   v7DraftingPipelineService;
+
+    @PostConstruct
+    public void validatePipelineConfig() {
+        String pipeline = (properties != null && properties.getDrafting() != null) ? properties.getDrafting().getPipeline() : "rag";
+        if (pipeline == null || (!"rag".equalsIgnoreCase(pipeline.trim()) && !"v7".equalsIgnoreCase(pipeline.trim()))) {
+            throw new IllegalStateException(
+                    "Invalid DRAFTING_PIPELINE value '" + pipeline + "'. Allowed values are 'rag' or 'v7'."
+            );
+        }
+    }
 
     // ---- Public data types -----------------------------------------------
 
@@ -84,9 +97,19 @@ public class DraftingWorkflow {
                 job.partnerInstructions(),
                 job.includeCrossRegistration());
 
-        // 3. Required 5-Step Pipeline (delegated to DraftingPipelineService)
-        boolean enableDiskCache = properties.getDrafting().isOpusDiskCacheEnabled();
-        DraftingPipelineResult pipelineResult = draftingPipelineService.runPipeline(input, enableDiskCache);
+        // 3. Pipeline Switch Execution (rag | v7)
+        String pipeline = (properties != null && properties.getDrafting() != null) ? properties.getDrafting().getPipeline() : "rag";
+        DraftingPipelineResult pipelineResult;
+        if ("v7".equalsIgnoreCase(pipeline != null ? pipeline.trim() : "")) {
+            pipelineResult = v7DraftingPipelineService.runPipeline(input);
+        } else if ("rag".equalsIgnoreCase(pipeline != null ? pipeline.trim() : "")) {
+            pipelineResult = draftingPipelineService.runPipeline(input);
+        } else {
+            throw new IllegalStateException(
+                    "Invalid DRAFTING_PIPELINE value '" + pipeline + "'. Allowed values are 'rag' or 'v7'."
+            );
+        }
+
         GeneratedDraft generated = pipelineResult.draft();
         List<VerifiedCitation> citations = pipelineResult.citations();
         Map<String, Object> citationSummary = pipelineResult.citationSummary();
@@ -231,31 +254,6 @@ public class DraftingWorkflow {
         p.put("ipn",      generated.internalPartnerNote());
         p.put("uid",      job.userId().toString());
         return p;
-    }
-
-    private void cacheNovelDraft(DraftingInput input, GeneratedDraft generated) {
-        try {
-            String issue = input.notice().get("issue") != null ? input.notice().get("issue").toString() : "Novel Notice Allegation";
-            String title = "Reply for " + input.clientLegalName() + " - " + issue;
-            String fullContent = generated.sections().stream()
-                    .map(s -> s.title() + ": " + s.bodyHtml())
-                    .reduce("", (a, b) -> a + "\n" + b);
-            ragStoreService.cacheNovelDraft(issue, title, fullContent);
-        } catch (Exception e) {
-            log.warn("Failed to auto-cache novel draft into RAG: {}", e.getMessage());
-        }
-    }
-
-    private void savePartialMatchNewChunk(DraftingInput input, GeneratedDraft generated) {
-        try {
-            String issue = input.notice().get("issue") != null ? input.notice().get("issue").toString() : "Partial Match New Ground";
-            String newChunkContent = generated.sections().stream()
-                    .map(s -> s.title() + ": " + s.bodyHtml())
-                    .reduce("", (a, b) -> a + "\n" + b);
-            ragStoreService.saveNewChunk(issue, newChunkContent);
-        } catch (Exception e) {
-            log.warn("Failed to save partial match new chunk into RAG: {}", e.getMessage());
-        }
     }
 
     /**

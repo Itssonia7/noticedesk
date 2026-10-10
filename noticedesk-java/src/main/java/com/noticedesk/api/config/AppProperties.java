@@ -43,26 +43,26 @@ public class AppProperties {
         private OpenAi openai = new OpenAi();
         private Gemini gemini = new Gemini();
         // Per-agent model overrides
-        private String modelExtraction = "claude-haiku-4-5-20251001";
-        private String modelFormatting = "claude-haiku-4-5-20251001";
-        private String modelOpus = "claude-opus-4-7";
-        private String modelDrafting = "claude-haiku-4-5-20251001";
-        private String modelTriage = "claude-haiku-4-5-20251001";
-        private String modelParsing = "claude-haiku-4-5-20251001";
+        private String modelExtraction = "";
+        private String modelFormatting = "";
+        private String modelOpus = "";
+        private String modelDrafting = "";
+        private String modelTriage = "";
+        private String modelParsing = "";
         private String stubDefaultCanned;
 
         @Data
         public static class Anthropic {
             private String apiKey;
             private String workspaceId;
-            private String model = "claude-opus-4-7";
+            private String model = "";
             private double timeoutSeconds = 180.0;
         }
 
         @Data
         public static class OpenAi {
             private String apiKey;
-            private String model = "gpt-4o";
+            private String model = "";
             private double timeoutSeconds = 180.0;
             private String baseUrl = "";
         }
@@ -70,7 +70,7 @@ public class AppProperties {
         @Data
         public static class Gemini {
             private String apiKey;
-            private String model = "gemini-3.6-flash";
+            private String model = "";
             private double timeoutSeconds = 180.0;
         }
     }
@@ -144,6 +144,7 @@ public class AppProperties {
 
     @Data
     public static class Drafting {
+        private String pipeline = "rag";
         private int ocrExcerptChars = 20000;
         private int maxOutputTokens = 16000;
         private int supportingDocExcerptChars = 5000;
@@ -151,7 +152,6 @@ public class AppProperties {
         private double similarityThreshold = 0.70;
         private String demoFirmNameOverride;
         private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
-        private boolean opusDiskCacheEnabled = false;
         private int chunkTtlDays = 365;
         private String expiredChunkPolicy = "FLAG_AND_USE"; // FLAG_AND_USE | EXCLUDE
         private String citationFailPolicy = "FLAG_AND_CONTINUE"; // FLAG_AND_CONTINUE | FALL_THROUGH_TO_OPUS
@@ -160,7 +160,7 @@ public class AppProperties {
     @Data
     public static class Embedding {
         private String provider = "stub";
-        private String model = "gemini-embedding-001";
+        private String model = "";
         private double similarityThreshold = 0.70;
         private int outputDimensionality = 1536;
     }

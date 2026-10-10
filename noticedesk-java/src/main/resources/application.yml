@@ -139,6 +139,7 @@ noticedesk:
     citation-provider: ${CITATION_PROVIDER:stub}
     indiankanoon-api-token: ${INDIANKANOON_API_TOKEN:}
   drafting:
+    pipeline: ${DRAFTING_PIPELINE:rag}
     ocr-excerpt-chars: ${DRAFTING_OCR_EXCERPT_CHARS:20000}
     max-output-tokens: ${DRAFTING_MAX_OUTPUT_TOKENS:16000}
     supporting-doc-excerpt-chars: ${DRAFTING_SUPPORTING_DOC_EXCERPT_CHARS:5000}

@@ -320,7 +320,7 @@ def build_pdf(filename):
         [
             Paragraph("<b>Hardcoded Anthropic Workspace ID Header</b>", table_cell_bold),
             Paragraph("AnthropicLlmProvider.java:46<br/>anthropic.py:32<br/>benchmark_sonnet_vs_opus.py", table_cell_style),
-            Paragraph("Hardcoded `anthropic-workspace-id: wrkspc_014N4cnyTQiXVFyARaUjgt45` header as a fallback if env var is missing. <b>Flag:</b> Hardcoded credential/ID.", badge_orange)
+            Paragraph("Hardcoded `anthropic-workspace-id: <REDACTED_WORKSPACE_ID>` header as a fallback if env var is missing. <b>Flag:</b> Hardcoded credential/ID.", badge_orange)
         ],
         [
             Paragraph("<b>Default Model Config Shift to Claude Opus</b>", table_cell_bold),
@@ -369,7 +369,7 @@ def build_pdf(filename):
         [
             Paragraph("<b>Hardcoded Credential / ID</b>", badge_red),
             Paragraph("AnthropicLlmProvider.java:48<br/>apps/api/app/services/llm/anthropic.py:34", table_cell_style),
-            Paragraph("Hardcoded Anthropic Workspace ID (`wrkspc_014N4cnyTQiXVFyARaUjgt45`). Should be strictly read from environment variables.", table_cell_style)
+            Paragraph("Hardcoded Anthropic Workspace ID (`<REDACTED_WORKSPACE_ID>`). Should be strictly read from environment variables.", table_cell_style)
         ],
         [
             Paragraph("<b>Canned Stub LLM Provider</b>", badge_orange),
@@ -496,7 +496,7 @@ def build_pdf(filename):
             ],
             "details": "1. Hardcoded Triage to use Gemini (`NoticeTriageAgent.java` -> `llmFactory.getGeminiProviderForAgent(\"triage\")`).<br/>"
                        "2. Added `getGeminiProviderForAgent()` in `LlmFactory.java`.<br/>"
-                       "3. Added hardcoded Anthropic workspace ID header (`wrkspc_014N4cnyTQiXVFyARaUjgt45`) in Anthropic Java/Python clients.<br/>"
+                       "3. Added hardcoded Anthropic workspace ID header (`<REDACTED_WORKSPACE_ID>`) in Anthropic Java/Python clients.<br/>"
                        "4. Updated default LLM models in `application.yml` to `claude-opus-4-7`.<br/>"
                        "5. Created `ApiUsageLogService.java` and `V21__api_usage_logs.sql` migration for DB token telemetry.",
             "why": "User explicit request: 'set it in the code such that for our triage step, it always get directed to gemini only no matter what'. Plus internal workspace ID fixes.",
