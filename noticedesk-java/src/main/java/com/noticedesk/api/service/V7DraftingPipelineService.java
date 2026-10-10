@@ -107,10 +107,45 @@ public class V7DraftingPipelineService {
         // 4. Stage 2: Deterministic Code Checks
         List<DraftCheckResult> checkResults = draftCheckService.runAllChecks(matchingResult, assemblyResult);
 
-        // 5. Construct GeneratedDraft DTO
+        // 5. Construct GeneratedDraft DTO with enriched Section 13
+        StringBuilder checkSb = new StringBuilder();
+        checkSb.append("<p><strong>Code Quality Check Results & Flags:</strong></p><table>");
+        checkSb.append("<tr><th>Check Name</th><th>Status</th><th>Severity</th><th>Details</th></tr>");
+        for (DraftCheckResult cr : checkResults) {
+            checkSb.append("<tr><td>").append(cr.checkName())
+                   .append("</td><td>").append(cr.passed() ? "PASS" : "FAIL")
+                   .append("</td><td>").append(cr.severity())
+                   .append("</td><td>").append(cr.details() != null ? cr.details().toString() : "").append("</td></tr>");
+        }
+        checkSb.append("</table>");
+
+        if (assemblyResult.missingMarkers() != null && !assemblyResult.missingMarkers().isEmpty()) {
+            checkSb.append("<p><strong>Missing Data Markers:</strong></p><ul>");
+            for (String m : assemblyResult.missingMarkers()) {
+                checkSb.append("<li>").append(m).append(" (severity: block)</li>");
+            }
+            checkSb.append("</ul>");
+        } else {
+            checkSb.append("<p><strong>Missing Data Markers:</strong> None</p>");
+        }
+
+        if (assemblyResult.pendingAiMarkers() != null && !assemblyResult.pendingAiMarkers().isEmpty()) {
+            checkSb.append("<p><strong>Pending AI Markers:</strong></p><ul>");
+            for (String p : assemblyResult.pendingAiMarkers()) {
+                checkSb.append("<li>").append(p).append(" (severity: block)</li>");
+            }
+            checkSb.append("</ul>");
+        } else {
+            checkSb.append("<p><strong>Pending AI Markers:</strong> None</p>");
+        }
+
         List<DraftSection> draftSections = new ArrayList<>();
         for (AssembledSection s : assemblyResult.sections()) {
-            draftSections.add(new DraftSection(s.num(), s.title(), s.bodyHtml()));
+            String bodyHtml = s.bodyHtml();
+            if (s.num() == 13 && bodyHtml.contains("<!-- CHECK_RESULTS_PLACEHOLDER -->")) {
+                bodyHtml = bodyHtml.replace("<!-- CHECK_RESULTS_PLACEHOLDER -->", checkSb.toString());
+            }
+            draftSections.add(new DraftSection(s.num(), s.title(), bodyHtml));
         }
 
         GeneratedDraft generatedDraft = new GeneratedDraft(

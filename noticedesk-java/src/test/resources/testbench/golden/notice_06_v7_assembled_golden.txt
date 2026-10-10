@@ -3,21 +3,21 @@
 ================================================================================
 SECTION 1: 01 Executive Summary
 ================================================================================
-Executive Summary: Reply to Notice Ref SCN/MH/2023/0606 dated 15-10-2023 for GSTIN 27AAACA1234A1Z5. Total Demand Amount: Rs 6,80,000.
-  * Issue #1 (Status: full): Input Tax Credit disallowance under Section 16(2)(aa) of Rs 5,00,000.
-  * Issue #2 (Status: full): Interest demand under Section 50 of Rs 1,80,000 on gross tax liability.
+Executive Summary: Reply to Notice Ref SCN/MH/2023-24/606 dated 18-09-2023 for GSTIN 27IIIJJ1234I1Z9. Total Demand Amount: Rs 1,80,000.
+  * Issue #1: Input Tax Credit disallowance under Section 16(2)(aa) of Rs 1,50,000.
+  * Issue #2: Interest demand under Section 50 of Rs 30,000 on gross tax liability.
 
 
 ================================================================================
 SECTION 2: 02 Notice Understanding
 ================================================================================
-The taxpayer M/s Apex Manufacturing Ltd has received notice reference SCN/MH/2023/0606 issued under Section 73/74 of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year 2022-23.
+The taxpayer M/s Vantage Logistics Pvt Ltd has received notice reference SCN/MH/2023-24/606 issued under Section 73 of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year 2022-23.
 
 
 ================================================================================
 SECTION 3: 03 Factual Background
 ================================================================================
-M/s Apex Manufacturing Ltd (GSTIN: 27AAACA1234A1Z5) is a registered taxable person under the jurisdiction of Maharashtra. The taxpayer has maintained audited books of accounts and filed regular GST returns in Form GSTR-1 and GSTR-3B.
+M/s Vantage Logistics Pvt Ltd (GSTIN: 27IIIJJ1234I1Z9) is a registered taxable person under the jurisdiction of Maharashtra. Notice reference SCN/MH/2023-24/606 dated 18-09-2023 pertains to Financial Year 2022-23.
 
 
 ================================================================================
@@ -25,11 +25,11 @@ SECTION 4: 04 Issue-wise Response
 ================================================================================
 
 --- Issue #1 Grounds of Defence ---
-[DEV - not CA reviewed] It is submitted that the discrepancy of Rs 5,00,000 in GSTR-2B was due to vendor delay in reporting, and all conditions of Section 16(2) were duly satisfied by M/s Apex Manufacturing Ltd.
+[DEV - not CA reviewed] It is submitted that the discrepancy of Rs 1,50,000 in GSTR-2B was due to vendor delay in reporting in GSTR-1, and all conditions of Section 16(2) were duly satisfied by M/s Vantage Logistics Pvt Ltd.
 
 
 --- Issue #2 Grounds of Defence ---
-[DEV - not CA reviewed] The interest demand of Rs 1,80,000 under Section 50 has been computed on gross turnover instead of net cash liability. As per proviso to Section 50(1), interest is payable only on cash ledger debit.
+[DEV - not CA reviewed] The interest demand of Rs 30,000 under Section 50 has been computed on gross tax liability instead of net cash liability. As per proviso to Section 50(1), interest is payable only on cash ledger debit.
 
 
 
@@ -38,10 +38,11 @@ SECTION 5: 05 Para-wise Reply
 ================================================================================
 Point-by-point reply to the paragraphs of the notice:
   * Para 1: Matter of record; no comments.
-  * Para 2: Matter of record; no comments.
-  * Para 3: Denied. Please refer to the reply to Issue #1 at para para 1.
-  * Para 4: Denied. Please refer to the reply to Issue #1 at para para 1.
+  * Para 2: Denied. Please refer to the reply to Issue #1 at para para 1.
+  * Para 3: Denied. Please refer to the reply to Issue #2 at para para 2.
+  * Para 4: Matter of record; contents denied save and except what is specifically admitted herein.
   * Para 5: Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.
+  * Para 6: Matter of procedural direction; necessary compliance is being submitted herewith.
 
 
 ================================================================================
@@ -60,9 +61,7 @@ SECTION 6: 06 Legal Submissions
 ================================================================================
 SECTION 7: 07 Procedural Objections
 ================================================================================
-Standard procedural objections:
-  * Notice issued without providing mandatory opportunity of hearing under Section 75(4).
-  * [[PARTNER: add procedural objections after checklist review]]
+[[PARTNER: add procedural objections after checklist review]]
 
 
 ================================================================================
@@ -94,7 +93,7 @@ AnnexureDocument DescriptionAnnexure A-1Form GSTR-3B Return AcknowledgmentsAnnex
 ================================================================================
 SECTION 12: 12 Prayer
 ================================================================================
-[DEV - not CA reviewed] PRAYER: It is humbly prayed that the Show Cause Notice issued under Section 73 be dropped in full and no penalty or interest be levied.
+[DEV - not CA reviewed] PRAYER: It is humbly prayed that the Show Cause Notice issued under Section 73 be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.
 
 
 ================================================================================
@@ -102,17 +101,30 @@ SECTION 13: 13 Internal Partner Note
 ================================================================================
 
 --- Internal Partner Review Note ---
-Notice ID: SCN/MH/2023/0606
-Matched Issues: 2
-  * Issue #1: Status=full, Cards=[CARD-006]
-  * Issue #2: Status=full, Cards=[CARD-011]
-Procedural Objection Options: Check opportunity of hearing under Section 75(4).
+Notice ID: SCN/MH/2023-24/606
+Matched Issues & Templates:
+  * Issue #1: Match Status=full, Cards=[CARD-006], Template=TPL-006 (v1)
+  * Issue #2: Match Status=full, Cards=[CARD-011], Template=TPL-011 (v1)
+Procedural Objection Options (Partner to Select):
+  * Check opportunity of hearing under Section 75(4).
+  * Verify statutory limitation period under Section 73(10).
+Code Quality Check Results & Flags:
+Check NameStatusSeverityDetailsCHECK_ALL_SECTIONS_PRESENTPASSblock{missing_sections=[], total_sections=15}CHECK_EVERY_ISSUE_ANSWEREDPASSblock{unanswered_issues=[], total_issues=2}CHECK_PARA_MAP_ANSWEREDPASSwarn{para_map_categories=[record, directions, demand, issue]}CHECK_FIGURE_CONSISTENCYPASSblock{mismatches=[]}CHECK_NO_UNRESOLVED_PLACEHOLDERSPASSblock{unresolved_placeholders=[]}CHECK_MARKERS_LISTPASSblock{pending_ai_count=0, missing_markers=[], missing_count=0, pending_ai_markers=[]}CHECK_NO_DUPLICATE_BLOCKSPASSwarn{unique_rendered_blocks=4, total_rendered_blocks=4}Missing Data Markers: None
+Pending AI Markers: None
 
 
 ================================================================================
 SECTION 14: 14 Client Summary
 ================================================================================
-[DEV - not CA reviewed] CLIENT SUMMARY: Show Cause Notice under Section 73 demanding tax, interest, and penalty. Reply required before due date.
+
+--- Client Summary ---
+Notice Type: Section 73
+Total Amount Demanded: Rs 1,80,000
+Reply Due Date: 30 Days
+Documents Required from Client:
+  * Copy of Tax Invoices and Purchase Register for FY 2022-23.
+  * Form GSTR-3B return filing acknowledgments and GSTR-2B reconciliation statement.
+  * Electronic Cash Ledger statement / Bank payment proof of tax deposited.
 
 
 ================================================================================

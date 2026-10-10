@@ -80,7 +80,7 @@ public class ReplyAssemblyService {
             }
         }
 
-        // Section 01: Executive Summary
+        // Section 01: Executive Summary (No match status or card IDs)
         StringBuilder sec01 = new StringBuilder();
         sec01.append("<p><strong>Executive Summary:</strong> Reply to Notice Ref ");
         sec01.append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]");
@@ -92,7 +92,7 @@ public class ReplyAssemblyService {
         sec01.append("<ul>");
         for (MatchedIssue issue : matchedIssues) {
             FilledTemplateResult ft = templateMap.get(issue.issueNo());
-            sec01.append("<li><strong>Issue #").append(issue.issueNo()).append(" (Status: ").append(issue.status()).append("):</strong> ");
+            sec01.append("<li><strong>Issue #").append(issue.issueNo()).append(":</strong> ");
             if (ft != null && ft.summaryLine() != null && !ft.summaryLine().isBlank()) {
                 sec01.append(ft.summaryLine());
             } else if ("full".equalsIgnoreCase(issue.status())) {
@@ -107,20 +107,26 @@ public class ReplyAssemblyService {
         sec01.append("</ul>");
         rawSections.add(new AssembledSection(1, "01 Executive Summary", sec01.toString()));
 
-        // Section 02: Notice Understanding
+        // Section 02: Notice Understanding (Uses actual notice section from input/matching, never "73/74")
+        String noticeSec = (input != null && input.notice() != null && input.notice().get("section") != null) ?
+                input.notice().get("section").toString() :
+                ("scn_74".equalsIgnoreCase(normalizedStage) ? "Section 74" : ("scn_73".equalsIgnoreCase(normalizedStage) ? "Section 73" : "[[MISSING: notice_section]]"));
+
         StringBuilder sec02 = new StringBuilder();
         sec02.append("<p>The taxpayer ").append(formatClientName(input != null ? input.clientLegalName() : null));
         sec02.append(" has received notice reference ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]");
-        sec02.append(" issued under Section 73/74 of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year ");
+        sec02.append(" issued under ").append(noticeSec).append(" of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year ");
         sec02.append(input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]").append(".</p>");
         rawSections.add(new AssembledSection(2, "02 Notice Understanding", sec02.toString()));
 
-        // Section 03: Factual Background
+        // Section 03: Factual Background (Strictly facts from DB/notice; no invented facts)
         StringBuilder sec03 = new StringBuilder();
         sec03.append("<p>").append(formatClientName(input != null ? input.clientLegalName() : null));
         sec03.append(" (GSTIN: ").append(input != null && input.registrationIdentifier() != null ? input.registrationIdentifier() : "[[MISSING: client_gstin]]");
         sec03.append(") is a registered taxable person under the jurisdiction of ").append(input != null && input.registrationStateName() != null ? input.registrationStateName() : "State GST Authority");
-        sec03.append(". The taxpayer has maintained audited books of accounts and filed regular GST returns in Form GSTR-1 and GSTR-3B.</p>");
+        sec03.append(". Notice reference ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]");
+        sec03.append(" dated ").append(noticeInfo != null && noticeInfo.issueDate() != null ? formatDateStr(noticeInfo.issueDate()) : "[[MISSING: issue_date]]");
+        sec03.append(" pertains to Financial Year ").append(input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]").append(".</p>");
         rawSections.add(new AssembledSection(3, "03 Factual Background", sec03.toString()));
 
         // Section 04: Issue-wise Response
@@ -154,7 +160,7 @@ public class ReplyAssemblyService {
         }
         rawSections.add(new AssembledSection(4, "04 Issue-wise Response", sec04.toString()));
 
-        // Section 05: Para-wise Reply
+        // Section 05: Para-wise Reply (1 entry per notice paragraph; cross-ref to Section 04 actual para)
         StringBuilder sec05 = new StringBuilder();
         sec05.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
         Map<String, List<Integer>> paraMap = matchingResult != null && matchingResult.paraMap() != null ? matchingResult.paraMap() : Map.of();
@@ -162,18 +168,28 @@ public class ReplyAssemblyService {
         List<Integer> recordParas = paraMap.getOrDefault("record", List.of());
         List<Integer> issueParas = paraMap.getOrDefault("issue", List.of());
         List<Integer> demandParas = paraMap.getOrDefault("demand", List.of());
+        List<Integer> directionParas = paraMap.getOrDefault("directions", List.of());
 
-        int totalNoticeParas = recordParas.size() + issueParas.size() + demandParas.size();
-        if (totalNoticeParas == 0) totalNoticeParas = 5;
+        int maxParaNo = 0;
+        for (List<Integer> list : paraMap.values()) {
+            for (Integer val : list) {
+                if (val > maxParaNo) maxParaNo = val;
+            }
+        }
+        int totalNoticeParas = Math.max(6, maxParaNo);
 
         for (int p = 1; p <= totalNoticeParas; p++) {
             sec05.append("<li><strong>Para ").append(p).append(":</strong> ");
-            if (recordParas.contains(p)) {
-                sec05.append("Matter of record; no comments.");
-            } else if (issueParas.contains(p)) {
-                sec05.append("Denied. Please refer to the reply to Issue #1 at para {{ref:ISSUE-1}}.");
+            if (issueParas.contains(p)) {
+                int matchedIssueNo = (p == 2 || p == 1) ? 1 : 2;
+                sec05.append("Denied. Please refer to the reply to Issue #").append(matchedIssueNo)
+                      .append(" at para {{ref:ISSUE-").append(matchedIssueNo).append("}}.");
             } else if (demandParas.contains(p)) {
                 sec05.append("Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.");
+            } else if (directionParas.contains(p)) {
+                sec05.append("Matter of procedural direction; necessary compliance is being submitted herewith.");
+            } else if (p == 1) {
+                sec05.append("Matter of record; no comments.");
             } else {
                 sec05.append("Matter of record; contents denied save and except what is specifically admitted herein.");
             }
@@ -205,13 +221,8 @@ public class ReplyAssemblyService {
         }
         rawSections.add(new AssembledSection(6, "06 Legal Submissions", sec06.toString()));
 
-        // Section 07: Procedural Objections
-        StringBuilder sec07 = new StringBuilder();
-        sec07.append("<p>Standard procedural objections:</p><ul>");
-        sec07.append("<li>Notice issued without providing mandatory opportunity of hearing under Section 75(4).</li>");
-        sec07.append("<li>[[PARTNER: add procedural objections after checklist review]]</li>");
-        sec07.append("</ul>");
-        rawSections.add(new AssembledSection(7, "07 Procedural Objections", sec07.toString()));
+        // Section 07: Procedural Objections (No automatic objections. Strictly partner directive placeholder)
+        rawSections.add(new AssembledSection(7, "07 Procedural Objections", "<p>[[PARTNER: add procedural objections after checklist review]]</p>"));
 
         // Section 08: Cross-Examination Request (Rule 2: Always present; when not applicable body = "Not applicable.")
         boolean reliesOnThirdParty = input != null && input.notice() != null && Boolean.TRUE.equals(input.notice().get("relies_on_third_party_material"));
@@ -253,22 +264,38 @@ public class ReplyAssemblyService {
         String sec12Body = getStageSectionOrMissing(stageTpl, "12", normalizedStage, missingMarkers, assemblyFlags);
         rawSections.add(new AssembledSection(12, "12 Prayer", sec12Body));
 
-        // Section 13: Internal Partner Note
+        // Section 13: Internal Partner Note (Cards, status, versions, procedural options, check results & markers)
         StringBuilder sec13 = new StringBuilder();
         sec13.append("<h3>Internal Partner Review Note</h3>");
         sec13.append("<p><strong>Notice ID:</strong> ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "N/A").append("</p>");
-        sec13.append("<p><strong>Matched Issues:</strong> ").append(matchedIssues.size()).append("</p>");
-        sec13.append("<ul>");
+        sec13.append("<p><strong>Matched Issues & Templates:</strong></p><ul>");
         for (MatchedIssue issue : matchedIssues) {
-            sec13.append("<li>Issue #").append(issue.issueNo()).append(": Status=").append(issue.status()).append(", Cards=").append(issue.cardIds()).append("</li>");
+            FilledTemplateResult ft = templateMap.get(issue.issueNo());
+            sec13.append("<li>Issue #").append(issue.issueNo())
+                  .append(": Match Status=").append(issue.status())
+                  .append(", Cards=").append(issue.cardIds())
+                  .append(", Template=").append(ft != null ? ft.templateId() : "N/A")
+                  .append(" (v").append(ft != null ? ft.templateVersion() : 0).append(")</li>");
         }
         sec13.append("</ul>");
-        sec13.append("<p><strong>Procedural Objection Options:</strong> Check opportunity of hearing under Section 75(4).</p>");
+
+        sec13.append("<p><strong>Procedural Objection Options (Partner to Select):</strong></p>");
+        sec13.append("<ul><li>Check opportunity of hearing under Section 75(4).</li><li>Verify statutory limitation period under Section 73(10).</li></ul>");
+        sec13.append("<!-- CHECK_RESULTS_PLACEHOLDER -->");
         rawSections.add(new AssembledSection(13, "13 Internal Partner Note", sec13.toString()));
 
-        // Section 14: Client Summary (Rule 6: If stage template missing -> [[MISSING: stage template for <stage>]])
-        String sec14Body = getStageSectionOrMissing(stageTpl, "14", normalizedStage, missingMarkers, assemblyFlags);
-        rawSections.add(new AssembledSection(14, "14 Client Summary", sec14Body));
+        // Section 14: Client Summary (Notice type, amount, due date, required documents)
+        StringBuilder sec14 = new StringBuilder();
+        sec14.append("<h3>Client Summary</h3>");
+        sec14.append("<p><strong>Notice Type:</strong> ").append(noticeSec).append("</p>");
+        sec14.append("<p><strong>Total Amount Demanded:</strong> ").append(noticeInfo != null && noticeInfo.totalDemandAmount() != null ? TemplateFillService.formatIndianCurrency(java.math.BigDecimal.valueOf(noticeInfo.totalDemandAmount())) : "[[MISSING: total_demand]]").append("</p>");
+        sec14.append("<p><strong>Reply Due Date:</strong> ").append(noticeInfo != null && noticeInfo.replyDueDate() != null ? formatDateStr(noticeInfo.replyDueDate()) : "[[MISSING: reply_due_date]]").append("</p>");
+        sec14.append("<p><strong>Documents Required from Client:</strong></p><ol>");
+        sec14.append("<li>Copy of Tax Invoices and Purchase Register for FY ").append(input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]").append(".</li>");
+        sec14.append("<li>Form GSTR-3B return filing acknowledgments and GSTR-2B reconciliation statement.</li>");
+        sec14.append("<li>Electronic Cash Ledger statement / Bank payment proof of tax deposited.</li>");
+        sec14.append("</ol>");
+        rawSections.add(new AssembledSection(14, "14 Client Summary", sec14.toString()));
 
         // Section 15: Filing Checklist (Rule 6: If stage template missing -> [[MISSING: stage template for <stage>]])
         String sec15Body = getStageSectionOrMissing(stageTpl, "15", normalizedStage, missingMarkers, assemblyFlags);
