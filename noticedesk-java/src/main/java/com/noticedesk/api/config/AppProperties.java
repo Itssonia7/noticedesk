@@ -25,6 +25,7 @@ public class AppProperties {
     private List<String> allowedOrigins = List.of("http://localhost:3000");
     private Matching matching = new Matching();
     private Pricing pricing = new Pricing();
+    private Citation citation = new Citation();
 
     public boolean isDevAuthAllowed() {
         return "development".equals(environment) && "dev".equals(auth.getProvider());
@@ -52,6 +53,9 @@ public class AppProperties {
         private String modelTriage = "";
         private String modelParsing = "";
         private String modelMatching = "";
+        private String modelPartialDrafting = "";
+        private String modelNewIssue = "";
+        private String modelHighStakes = "";
         private String stubDefaultCanned;
 
         @Data
@@ -177,6 +181,21 @@ public class AppProperties {
         private int chunkTtlDays = 365;
         private String expiredChunkPolicy = "FLAG_AND_USE"; // FLAG_AND_USE | EXCLUDE
         private String citationFailPolicy = "FLAG_AND_CONTINUE"; // FLAG_AND_CONTINUE | FALL_THROUGH_TO_OPUS
+        private HighStakes highStakes = new HighStakes();
+
+        @Data
+        public static class HighStakes {
+            private Boolean section74 = true;
+            private Boolean appealStage = true;
+            private String demandThreshold = "5000000";
+        }
+    }
+
+    @Data
+    public static class Citation {
+        private String provider = "stub";
+        private String indiankanoonApiToken;
+        private int maxCallsPerDraft = 15;
     }
 
     @Data
@@ -203,6 +222,9 @@ public class AppProperties {
             case "triage"     -> llm.modelTriage;
             case "parsing"    -> llm.modelParsing;
             case "matching"   -> llm.modelMatching;
+            case "partial_drafting" -> llm.modelPartialDrafting;
+            case "new_issue"        -> llm.modelNewIssue;
+            case "high_stakes"      -> llm.modelHighStakes;
             default         -> "";
         };
         return (override != null && !override.isBlank()) ? override : llm.anthropic.model;

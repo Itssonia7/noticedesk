@@ -27,6 +27,10 @@ public class ApiUsageLogService {
         logUsage(provider, model, inputTokens, outputTokens, 0, 0, "general", null, null);
     }
 
+    public void logUsage(String provider, String model, int inputTokens, int outputTokens, String step, UUID tenantId, UUID noticeId) {
+        logUsage(provider, model, inputTokens, outputTokens, 0, 0, step, tenantId, noticeId);
+    }
+
     public void logUsage(
             String provider,
             String model,

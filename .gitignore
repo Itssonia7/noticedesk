@@ -60,3 +60,12 @@ output/*.txt
 scratch/generate_change_audit_pdf.py
 testbench/results/
 
+# Private data protection
+private/
+*.real.json
+*.real.sql
+*.real.docx
+*.real.pdf
+noticedesk-private/
+
+

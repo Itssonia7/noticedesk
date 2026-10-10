@@ -1,13 +1,17 @@
 package com.noticedesk.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.noticedesk.api.agent.CitationVerificationAgent;
 import com.noticedesk.api.agent.DraftingAgent;
 import com.noticedesk.api.agent.DraftingAgent.DraftSection;
 import com.noticedesk.api.agent.DraftingAgent.DraftingInput;
 import com.noticedesk.api.agent.DraftingAgent.GeneratedDraft;
+import com.noticedesk.api.agent.HighStakesDraftingAgent;
 import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
+import com.noticedesk.api.agent.NewIssueDraftingAgent;
+import com.noticedesk.api.agent.PartialDraftingAgent;
 import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
@@ -41,6 +45,20 @@ public class V7DraftingPipelineService {
     private final TemplateFillService templateFillService;
     private final ReplyAssemblyService replyAssemblyService;
     private final DraftCheckService draftCheckService;
+    private final PartialDraftingAgent partialDraftingAgent;
+    private final NewIssueDraftingAgent newIssueDraftingAgent;
+    private final HighStakesDraftingAgent highStakesDraftingAgent;
+    private final CitationVerificationAgent citationVerificationAgent;
+
+    public V7DraftingPipelineService(
+            IssueMatchingAgent issueMatchingAgent,
+            NamedParameterJdbcTemplate jdbc,
+            ObjectMapper objectMapper,
+            TemplateFillService templateFillService,
+            ReplyAssemblyService replyAssemblyService,
+            DraftCheckService draftCheckService) {
+        this(issueMatchingAgent, jdbc, objectMapper, templateFillService, replyAssemblyService, draftCheckService, null, null, null, null);
+    }
 
     public DraftingPipelineResult runPipeline(DraftingInput input) {
         log.info("V7DraftingPipelineService starting Stage 1 issue matching execution");

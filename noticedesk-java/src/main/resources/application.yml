@@ -65,6 +65,7 @@ logging:
     org.flywaydb: INFO
 
 noticedesk:
+  private-seed-dir: ${PRIVATE_SEED_DIR:}
   environment: ${ENVIRONMENT:development}
   log-level: ${LOG_LEVEL:INFO}
   sentry-dsn: ${SENTRY_DSN:}
@@ -84,6 +85,9 @@ noticedesk:
     model-triage: ${LLM_MODEL_TRIAGE:claude-haiku-4-5-20251001}
     model-parsing: ${LLM_MODEL_PARSING:claude-haiku-4-5-20251001}
     model-matching: ${LLM_MODEL_MATCHING:}
+    model-partial-drafting: ${LLM_MODEL_PARTIAL_DRAFTING:}
+    model-new-issue: ${LLM_MODEL_NEW_ISSUE:}
+    model-high-stakes: ${LLM_MODEL_HIGH_STAKES:}
     stub-default-canned: ${STUB_DEFAULT_CANNED:acme_mh_asmt10}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:}
@@ -177,6 +181,15 @@ noticedesk:
     supporting-evidence-max-chars: ${DRAFTING_SUPPORTING_EVIDENCE_MAX_CHARS:40000}
     demo-firm-name-override: ${DEMO_FIRM_NAME_OVERRIDE:}
     gst-corpus-dir: ${GST_CORPUS_DIR:../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired}
+    high-stakes:
+      section-74: true
+      appeal-stage: true
+      demand-threshold: ${HIGH_STAKES_DEMAND_THRESHOLD:}
+  citation:
+    provider: ${CITATION_PROVIDER:stub}
+    indiankanoon-api-token: ${INDIANKANOON_API_TOKEN:}
+    cache-ttl-days: ${CITATION_CACHE_TTL_DAYS:30}
+    max-calls-per-draft: ${IK_MAX_CALLS_PER_DRAFT:15}
   embedding:
     provider: ${EMBEDDING_PROVIDER:stub}
     model: ${EMBEDDING_MODEL:gemini-embedding-001}
