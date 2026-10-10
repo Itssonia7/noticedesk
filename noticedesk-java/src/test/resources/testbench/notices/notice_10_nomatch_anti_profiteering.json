@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-010",
+  "document_type": "scn_73",
+  "full_ocr_text": "NOTICE FROM NATIONAL ANTI-PROFITEERING AUTHORITY UNDER SECTION 171\nNotice Ref: NAPA/ND/2023/1010 Dated 05-06-2023\nGSTIN: 07QQQRR7890Q1Z6 M/s Horizon Electronics\nFY: 2022-23\n\n1. Examination under Section 171 reveals taxpayer failed to pass on benefit of GST rate reduction from 28% to 18% on consumer television units to end consumers by commensurate reduction in prices.\n2. You are directed to show cause why profiteered amount of Rs. 15,00,000/- along with interest should not be deposited into Consumer Welfare Fund.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "none",
+        "card_ids": [],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 1500000.0,
+          "legal_section": "Section 171"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

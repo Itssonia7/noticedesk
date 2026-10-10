@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-004",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/GJ/2023/505 Dated 05-09-2023\nGSTIN: 24EEEFF3456E1Z4 M/s Sterling Chemicals\nFY: 2022-23\n\n1. It is noticed that taxpayer delayed payment of tax liability for October 2022 by 45 days. The tax paid was Rs. 6,00,000/- out of which Rs. 5,00,000/- was available in Electronic Credit Ledger and Rs. 1,00,000/- was paid in cash.\n2. The officer calculated interest under Section 50 on the gross liability of Rs. 6,00,000/- amounting to Rs. 45,00,00/- instead of restricting calculation to net cash liability.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-011"],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 45000.0,
+          "legal_section": "Section 50"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

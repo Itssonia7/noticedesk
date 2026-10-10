@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-007",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/GJ/2023/707 Dated 22-10-2023\nGSTIN: 24KKKLL5678K1Z3 M/s Apex Industrial Heavy Machinery\nFY: 2023-24\n\n1. During audit inspection, officer proposed disallowance of ITC of Rs. 4,00,000/- claimed on capital goods (industrial generator and heavy mobile crane equipment) alleging defective invoice layout and missing manufacturer serial numbers on delivery receipts.\n2. The taxpayer contends the capital equipment was purchased under valid tax invoices and used for business operations.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "partial",
+        "card_ids": ["CARD-001", "CARD-006"],
+        "key_facts": {
+          "period": "2023-24",
+          "amount": 400000.0,
+          "legal_section": "Section 16"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-012",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 143 OF THE CGST ACT 2017\nNotice Ref: SCN/TN/2023/1212 Dated 08-10-2023\nGSTIN: 33UUUVV5678U1Z4 M/s Precision Tooling Works\nFY: 2022-23\n\n1. Examination of Form GST ITC-04 returns reveals capital goods sent to job worker M/s Alloy Casting Co. were not returned within prescribed period of 3 years under Section 143(1)(b).\n2. Show cause why deemed supply tax demand of Rs. 1,80,000/- should not be raised under Section 143(3).",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "none",
+        "card_ids": [],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 180000.0,
+          "legal_section": "Section 143"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

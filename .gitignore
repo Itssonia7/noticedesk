@@ -58,4 +58,5 @@ test_venv/
 output/*.docx
 output/*.txt
 scratch/generate_change_audit_pdf.py
+testbench/results/
 

@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-011",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 27 READ WITH SECTION 129\nNotice Ref: SCN/UP/2023/1111 Dated 19-09-2023\nGSTIN: 09SSSTT1234S1Z0 M/s Heritage Handicrafts Expo\nFY: 2023-24\n\n1. It is observed that entity operated temporary exhibition stalls in Lucknow without obtaining Casual Taxable Person (CTP) registration or depositing estimated advance tax under Section 27.\n2. Notice is issued calling upon to show cause why penalty of Rs. 50,000/- should not be levied under Section 129.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "none",
+        "card_ids": [],
+        "key_facts": {
+          "period": "2023-24",
+          "amount": 50000.0,
+          "legal_section": "Section 27"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

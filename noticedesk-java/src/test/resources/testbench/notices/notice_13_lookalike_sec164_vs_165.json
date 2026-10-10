@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-013",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/MH/2023/1313 Dated 25-10-2023\nGSTIN: 27WWWXX9012W1Z8 M/s Western Auto Components\nFY: 2018-19\n\n1. Officer proposes disallowance of ITC of Rs. 3,20,000/- for FY 2018-19 alleging delayed filing of GSTR-3B after 20th October 2019 under Section 16(4).\n2. Taxpayer points out return GSTR-3B was filed on 15th November 2020 before 30th November 2021 cut-off, which is explicitly protected by retrospective statutory relaxation under Section 16(5).",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-004"],
+        "key_facts": {
+          "period": "2018-19",
+          "amount": 320000.0,
+          "legal_section": "Section 16(5)"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

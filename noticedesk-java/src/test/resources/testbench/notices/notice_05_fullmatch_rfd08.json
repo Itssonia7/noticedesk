@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-005",
+  "document_type": "rfd_08",
+  "full_ocr_text": "FORM GST RFD-08 SHOW CAUSE NOTICE\nNotice Ref: RFD08/TN/2023/808 Dated 12-12-2023\nGSTIN: 33GGGHH7890G1Z1 M/s Global Garments Exports\nFY: 2023-24\n\n1. Reference refund application ARN AA3308230012345 filed for refund of unutilized Input Tax Credit of Rs. 3,50,000/- on account of zero-rated export of goods without payment of tax under LUT.\n2. On examination, it is proposed to reject the refund claim under Section 54 alleging non-submission of Bank Realization Certificate (BRC) / FIRC within statutory period.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-015"],
+        "key_facts": {
+          "period": "2023-24",
+          "amount": 350000.0,
+          "legal_section": "Section 54"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

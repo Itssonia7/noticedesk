@@ -1,18 +1,18 @@
 {
   "notice_id": "notice-bench-003",
   "document_type": "asmt_10",
-  "full_ocr_text": "INTIMATION OF DISCREPANCY IN RETURN AFTER SCRUTINY (FORM GST ASMT-10)\nDIN: 20231127009988\nGSTIN: 27CCCDC9999C1Z9 M/s Apex Infra\nFY: 2019-20\n\n1. Discrepancy observed in ITC claimed in GSTR-3B vs GSTR-2A for FY 2019-20 amounting to Rs. 4,50,000/-.\n2. You are requested to explain the discrepancy within 30 days.",
+  "full_ocr_text": "FORM GST ASMT-10\nNotice Ref: ASMT10/KA/2023/404 Dated 10-08-2023\nGSTIN: 29CCCDD9012C1Z8 M/s Apex Tech Solutions\nFY: 2022-23\n\n1. Discrepancy observed upon scrutiny of returns: Outward taxable turnover reported in GSTR-1 is Rs. 50,00,000/-, whereas turnover reported in GSTR-3B is Rs. 37,50,000/-.\n2. You are requested to explain the discrepancy of Rs. 12,50,000/- in turnover and differential tax payable of Rs. 2,25,000/- within 30 days.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
       {
         "issue_no": 1,
         "status": "full",
-        "card_ids": ["CARD-004", "CARD-005"],
+        "card_ids": ["CARD-010"],
         "key_facts": {
-          "period": "2019-20",
-          "amount": 450000.0,
-          "legal_section": "ASMT-10"
+          "period": "2022-23",
+          "amount": 225000.0,
+          "legal_section": "Rule 99"
         }
       }
     ],

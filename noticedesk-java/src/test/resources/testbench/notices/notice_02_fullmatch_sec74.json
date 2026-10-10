@@ -1,16 +1,16 @@
 {
   "notice_id": "notice-bench-002",
   "document_type": "scn_74",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 74 OF THE CGST ACT 2017\nNotice Ref: SCN/74/2023/202 Dated 20-11-2023\nGSTIN: 27BBBCB5678B1Z2 M/s Zenith Logistics\nFY: 2018-19\n\n1. Whereas during audit for FY 2018-19, it was noticed that taxpayer claimed ITC of Rs. 5,00,000/- in GSTR-3B filed on 10th December 2019.\n2. The Proper Officer alleges that taxpayer suppressed facts with intent to evade tax and invokes extended period under Section 74(1).",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 74 OF THE CGST ACT 2017\nNotice Ref: SCN/DL/2021/740 Dated 20-11-2021\nGSTIN: 07BBBCC5678B1Z2 M/s Zenith Enterprises\nFY: 2020-21\n\n1. It is alleged that the taxpayer suppressed taxable turnover in monthly GSTR-3B returns with intent to evade payment of tax during FY 2020-21.\n2. In view of the deliberate suppression, extended period of limitation under Section 74(1) is invoked proposing demand of tax amounting to Rs. 5,00,000/- along with penalty under Section 74.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
       {
         "issue_no": 1,
         "status": "full",
-        "card_ids": ["CARD-002", "CARD-003"],
+        "card_ids": ["CARD-002"],
         "key_facts": {
-          "period": "2018-19",
+          "period": "2020-21",
           "amount": 500000.0,
           "legal_section": "Section 74"
         }

@@ -21,11 +21,11 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
-import static org.junit.jupiter.api.Assertions.*;
-
 class MatchingEvalRunnerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private record WrongMatchInfo(String noticeId, String expected, String got, String why) {}
 
     @Test
     void runMatchingEvaluationBenchmark() throws Exception {
@@ -49,6 +49,10 @@ class MatchingEvalRunnerTest {
         AppProperties props = new AppProperties();
         props.getLlm().setProviderPrimary("anthropic");
         props.getLlm().getAnthropic().setApiKey(apiKey);
+        String wsId = System.getenv("ANTHROPIC_WORKSPACE_ID");
+        if (wsId != null && !wsId.isBlank()) {
+            props.getLlm().getAnthropic().setWorkspaceId(wsId);
+        }
         props.getLlm().setModelMatching(matchingModel);
         props.getMatching().setAllowDraftCards(true); // Allow dev draft cards for test bench evaluation
 
@@ -76,6 +80,8 @@ class MatchingEvalRunnerTest {
             return;
         }
 
+        Arrays.sort(resources, Comparator.comparing(Resource::getFilename));
+
         int totalNotices = 0;
         int wrongFullMatchCount = 0;
         int expectedFullMatchCount = 0;
@@ -90,11 +96,13 @@ class MatchingEvalRunnerTest {
 
         int totalCalls = 0;
         int cacheHitCalls = 0;
+        int totalCacheReadTokensCall2Plus = 0;
 
         BigDecimal totalCostInr = BigDecimal.ZERO;
         final BigDecimal INR_CAP = new BigDecimal("200.00");
 
         List<ObjectNode> noticeEvalResults = new ArrayList<>();
+        List<WrongMatchInfo> wrongMatches = new ArrayList<>();
 
         for (Resource res : resources) {
             if (totalCostInr.compareTo(INR_CAP) >= 0) {
@@ -118,6 +126,10 @@ class MatchingEvalRunnerTest {
 
             MatchingResult result = agent.matchNoticeWithOcrText(ocrText, docType, UUID.randomUUID(), UUID.randomUUID());
 
+            if (totalCalls > 1) {
+                totalCacheReadTokensCall2Plus += result.cacheReadTokens();
+            }
+
             if (result.cacheReadTokens() > 0) {
                 cacheHitCalls++;
             }
@@ -131,17 +143,27 @@ class MatchingEvalRunnerTest {
             if (expectedIssues.isArray()) {
                 for (JsonNode exp : expectedIssues) {
                     String expStatus = exp.path("status").asText();
+                    String expCardId = exp.path("card_ids").toString();
                     if ("full".equalsIgnoreCase(expStatus)) {
                         expectedFullMatchCount++;
                         boolean matchedFull = result.issues().stream().anyMatch(i -> "full".equalsIgnoreCase(i.status()));
                         if (!matchedFull) {
                             wrongFullMatchCount++;
+                            String gotStatus = result.issues().isEmpty() ? "none" : result.issues().get(0).status();
+                            String gotCardId = result.issues().isEmpty() ? "none" : result.issues().get(0).cardIds().toString();
+                            String why = result.issues().isEmpty() ? "No issue returned" : result.issues().get(0).why();
+                            wrongMatches.add(new WrongMatchInfo(noticeId, "full (" + expCardId + ")", gotStatus + " (" + gotCardId + ")", why));
                         }
                     } else {
                         expectedPartialOrNoneCount++;
                         boolean matchedNonFull = result.issues().stream().anyMatch(i -> expStatus.equalsIgnoreCase(i.status()));
                         if (matchedNonFull) {
                             correctPartialOrNoneCount++;
+                        } else {
+                            String gotStatus = result.issues().isEmpty() ? "none" : result.issues().get(0).status();
+                            String gotCardId = result.issues().isEmpty() ? "none" : result.issues().get(0).cardIds().toString();
+                            String why = result.issues().isEmpty() ? "No issue returned" : result.issues().get(0).why();
+                            wrongMatches.add(new WrongMatchInfo(noticeId, expStatus + " (" + expCardId + ")", gotStatus + " (" + gotCardId + ")", why));
                         }
                     }
 
@@ -182,11 +204,22 @@ class MatchingEvalRunnerTest {
         System.out.printf("Fact Accuracy: %.2f%%%n", factAccuracyPct);
         System.out.printf("Para Coverage: %.2f%%%n", paraCoveragePct);
         System.out.printf("Cache Hit Rate (Call 2+): %.2f%%%n", cacheHitRatePct);
+        System.out.printf("Cache Read Tokens (Calls 2+): %d%n", totalCacheReadTokensCall2Plus);
         System.out.printf("Total Benchmark Cost: %.4f INR%n", totalCostInr.doubleValue());
 
-        // Write timestamped JSON report to testbench/results/
-        File resultsDir = new File("src/test/resources/testbench/results");
-        if (!resultsDir.exists()) {
+        if (wrongMatches.isEmpty()) {
+            System.out.println("\nNo wrong matches! 100% agreement with answer keys.");
+        } else {
+            System.out.println("\n=== WRONG MATCH DETAILS ===");
+            for (WrongMatchInfo wm : wrongMatches) {
+                System.out.printf("- Notice: %s | Expected: %s | Got: %s | Why: %s%n", wm.noticeId(), wm.expected(), wm.got(), wm.why());
+            }
+        }
+
+        // Write timestamped JSON report to repo root testbench/results/
+        File resultsDir = new File("../testbench/results");
+        if (!resultsDir.exists() && !resultsDir.mkdirs()) {
+            resultsDir = new File("testbench/results");
             resultsDir.mkdirs();
         }
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
@@ -201,6 +234,7 @@ class MatchingEvalRunnerTest {
         summaryReport.put("fact_accuracy_pct", factAccuracyPct);
         summaryReport.put("para_coverage_pct", paraCoveragePct);
         summaryReport.put("cache_hit_rate_pct", cacheHitRatePct);
+        summaryReport.put("cache_read_tokens_calls_2_plus", totalCacheReadTokensCall2Plus);
         summaryReport.put("total_cost_inr", totalCostInr.doubleValue());
         summaryReport.set("notices", objectMapper.valueToTree(noticeEvalResults));
 
@@ -208,3 +242,4 @@ class MatchingEvalRunnerTest {
         System.out.println("Evaluation report written to: " + reportFile.getAbsolutePath());
     }
 }
+

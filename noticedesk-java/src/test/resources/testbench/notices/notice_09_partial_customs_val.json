@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-009",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/MH/2023/909 Dated 01-11-2023\nGSTIN: 27OOOPP3456O1Z2 M/s TransWorld Polymers\nFY: 2022-23\n\n1. Proper officer proposes disallowance of IGST credit of Rs. 2,80,000/- on imported raw chemical compounds claiming difference between customs bill of entry valuation and GST ledger reflection.\n2. Taxpayer contends IGST was assessed and cleared at customs port under ICEGATE bill of entry.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "partial",
+        "card_ids": ["CARD-019"],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 280000.0,
+          "legal_section": "Section 16"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

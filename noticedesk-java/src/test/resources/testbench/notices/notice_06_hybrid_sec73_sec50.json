@@ -1,0 +1,31 @@
+{
+  "notice_id": "notice-bench-006",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/MH/2023/606 Dated 18-09-2023\nGSTIN: 27IIIJJ1234I1Z9 M/s Vantage Logistics Pvt Ltd\nFY: 2022-23\n\n1. Issue 1: Scrutiny of GSTR-3B vs GSTR-2B static statement for FY 2022-23 reveals that taxpayer availed ITC of Rs. 1,50,000/- in respect of invoices not reflected in GSTR-2B in violation of Section 16(2)(aa).\n2. Issue 2: Taxpayer delayed filing GSTR-3B for September 2022 by 30 days. Interest under Section 50 amounting to Rs. 30,000/- is demanded on gross tax liability instead of net cash ECL balance.",
+  "answer_key": {
+    "expected_issues": 2,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-006"],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 150000.0,
+          "legal_section": "Section 16(2)(aa)"
+        }
+      },
+      {
+        "issue_no": 2,
+        "status": "full",
+        "card_ids": ["CARD-011"],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 30000.0,
+          "legal_section": "Section 50"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-014",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/KA/2023/1414 Dated 10-11-2023\nGSTIN: 29YYYZZ3456Y1Z2 M/s Silicon Tech Hardware\nFY: 2022-23\n\n1. Disallowance of ITC of Rs. 2,10,000/- for return period May 2022 under Section 16(2)(aa) based on static statement GSTR-2B generated on 14th June 2022.\n2. Invoices were communicated by vendors in subsequent monthly return periods.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-006"],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 210000.0,
+          "legal_section": "Section 16(2)(aa)"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "notice_id": "notice-bench-008",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/KA/2022/808 Dated 14-07-2022\nGSTIN: 29MMMNN9012M1Z7 M/s Southern Infra Projects\nFY: 2021-22\n\n1. Issue 1: Non-payment of reverse charge GST under Section 9(3) amounting to Rs. 75,00,0/- on freight charges paid to Goods Transport Agencies (GTA) where GTA did not pay tax under forward charge.\n2. Issue 2: Taxable turnover of outward supplies reported in GSTR-1 exceeds tax paid in GSTR-3B by Rs. 1,20,000/- due to unadjusted credit notes.",
+  "answer_key": {
+    "expected_issues": 2,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-016"],
+        "key_facts": {
+          "period": "2021-22",
+          "amount": 75000.0,
+          "legal_section": "Section 9(3)"
+        }
+      },
+      {
+        "issue_no": 2,
+        "status": "full",
+        "card_ids": ["CARD-010"],
+        "key_facts": {
+          "period": "2021-22",
+          "amount": 120000.0,
+          "legal_section": "Section 37"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}
