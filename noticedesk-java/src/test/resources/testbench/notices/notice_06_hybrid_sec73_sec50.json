@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-006",
   "document_type": "scn_73",
-  "full_ocr_text": "GOVERNMENT OF MAHARASHTRA\nOFFICE OF THE STATE TAX OFFICER\nCIRCULAR CIRCLE-09, PUNE ZONE\n\nShow Cause Notice under Section 73 of the CGST / MGST Act, 2017\nReference No: SCN/MH/2023-24/606\nDate: 18-09-2023\n\nTo,\nM/s Vantage Logistics Pvt Ltd\nGSTIN: 27IIIJJ1234I1Z9\nFinancial Year: 2022-23\n\n1. WHEREAS, scrutiny of returns filed by you for FY 2022-23 was conducted by the undersigned under Section 61 of the CGST Act 2017.\n\n2. GROUND I - GSTR-3B VS GSTR-2B ITC MISMATCH: Scrutiny reveals that Input Tax Credit of Rs. 1,50,000/- was availed by you in Form GSTR-3B for invoices that do not appear in your static GSTR-2B statement communicated under Section 16(2)(aa). As per Section 16(2)(aa), credit availed without GSTR-2B reflection is ineligible.\n\n3. GROUND II - INTEREST ON DELAYED PAYMENT OF TAX: Taxpayer delayed filing GSTR-3B return for September 2022 by 30 days. The officer computed interest under Section 50 on the gross tax liability of Rs. 4,00,000/-, demanding interest of Rs. 30,000/-.\n\n4. ACCORDINGLY, Ground I proposes disallowance of excess ITC under Section 16(2)(aa), and Ground II proposes interest demand under Section 50.\n\n5. NOW THEREFORE, you are called upon to show cause why:\n(a) Disallowed ITC of Rs. 1,50,000/- under Ground I should not be recovered under Section 73(1);\n(b) Interest of Rs. 30,000/- under Ground II should not be recovered under Section 50;\n(c) Penalty under Section 73(9) should not be levied.\n\n6. You are required to submit your comprehensive reply on the GST portal within 30 days.",
+  "full_ocr_text": "GOVERNMENT OF MAHARASHTRA\nOFFICE OF THE STATE TAX OFFICER\nCIRCULAR CIRCLE-09, PUNE ZONE\n\nShow Cause Notice under Section 73 of the CGST / MGST Act, 2017\nReference No: SCN/MH/2023-24/606\nDate: 18-09-2023\n\nTo,\nM/s Vantage Logistics Pvt Ltd\nGSTIN: 27IIIJJ1234I1Z9\nFinancial Year: 2022-23\n\n1. WHEREAS, scrutiny of returns filed by you for FY 2022-23 was conducted by the undersigned under Section 61 of the CGST Act 2017.\n\n2. GROUND I - GSTR-3B VS GSTR-2B ITC MISMATCH: Scrutiny reveals that Input Tax Credit of Rs. 1,50,000/- was availed by you in Form GSTR-3B for invoices that do not appear in your static GSTR-2B statement communicated under Section 16(2)(aa). As per Section 16(2)(aa), credit availed without GSTR-2B reflection is ineligible.\n\n3. GROUND II - INTEREST ON DELAYED PAYMENT OF TAX: Taxpayer delayed filing GSTR-3B return for September 2022 by 30 days. The officer computed interest under Section 50 on the gross tax liability of Rs. 4,00,000/-, demanding interest of Rs. 5,918/-.\n\n4. ACCORDINGLY, Ground I proposes disallowance of excess ITC under Section 16(2)(aa), and Ground II proposes interest demand under Section 50.\n\n5. NOW THEREFORE, you are called upon to show cause why:\n(a) Disallowed ITC of Rs. 1,50,000/- under Ground I should not be recovered under Section 73(1);\n(b) Interest of Rs. 5,918/- under Ground II should not be recovered under Section 50;\n(c) Penalty under Section 73(9) should not be levied.\n\n6. You are required to submit your comprehensive reply on the GST portal within 30 days.",
   "answer_key": {
     "expected_issues": 2,
     "issues": [
@@ -21,7 +21,7 @@
         "card_ids": ["CARD-011"],
         "key_facts": {
           "period": "2022-23",
-          "amount": 30000.0,
+          "amount": 5918.0,
           "legal_section": "Section 50"
         }
       }

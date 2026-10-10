@@ -53,10 +53,10 @@ class V7GoldenDraftTest {
                 "TPL-006", 1, "CARD-006",
                 LocalDate.of(2017, 7, 1), LocalDate.of(2099, 12, 31), "draft",
                 List.of(
-                        new TemplateBlock("BLK-006-04A", 4, "<p>[DEV - not CA reviewed] It is submitted that the discrepancy of {{issue.amount_tax}} in GSTR-2B was due to {{issue.reason_for_difference}}, and all conditions of Section 16(2) were duly satisfied by {{client.legal_name}}.</p>", List.of("CIT-001"), null),
+                        new TemplateBlock("BLK-006-04A", 4, "<p>[DEV - not CA reviewed] It is submitted that the discrepancy of {{issue.amount_tax}} in GSTR-2B was due to {{issue.reason_for_difference}}, and {{issue.section16_conditions_statement}} by {{client.legal_name}}.</p>", List.of("CIT-001"), null),
                         new TemplateBlock("BLK-006-06A", 6, "<p>[DEV - not CA reviewed] Section 16(2)(aa) cannot be applied retroactively or punitively where genuine tax has been deposited by the supplier into the public exchequer.</p>", List.of("CIT-001"), null)
                 ),
-                List.of("issue.amount_tax", "notice.din", "client.legal_name", "issue.reason_for_difference"),
+                List.of("issue.amount_tax", "notice.din", "client.legal_name", "issue.reason_for_difference", "issue.section16_conditions_statement"),
                 List.of(), "Input Tax Credit disallowance under Section 16(2)(aa) of {{issue.amount_tax}}.", List.of(), null, null, null
         );
 
@@ -89,9 +89,9 @@ class V7GoldenDraftTest {
 
     @Test
     void testGoldenDraftAssemblyForNotice06() throws IOException {
-        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("SCN/MH/2023-24/606", "DIN-2023-0606", "18-09-2023", "30 Days", "2022-23", "2022-23", 180000.0, "State Tax Officer");
-        MatchedIssue issue1 = new MatchedIssue(1, "full", List.of("CARD-006"), "GSTR-3B vs 2B mismatch", List.of(), Map.of("period", "2022-23", "amount", 150000.0, "reason_for_difference", "vendor delay in reporting in GSTR-1"), List.of(), List.of());
-        MatchedIssue issue2 = new MatchedIssue(2, "full", List.of("CARD-011"), "Section 50 interest on gross tax liability", List.of(), Map.of("period", "2022-23", "amount", 30000.0), List.of(), List.of());
+        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("SCN/MH/2023-24/606", "DIN-2023-0606", "18-09-2023", "Within 30 days", "2022-23", "2022-23", 155918.0, "State Tax Officer");
+        MatchedIssue issue1 = new MatchedIssue(1, "full", List.of("CARD-006"), "GSTR-3B vs 2B mismatch", List.of(), Map.of("period", "2022-23", "amount", 150000.0), List.of(), List.of());
+        MatchedIssue issue2 = new MatchedIssue(2, "full", List.of("CARD-011"), "Section 50 interest on gross tax liability", List.of(), Map.of("period", "2022-23", "amount", 5918.0), List.of(), List.of());
 
         MatchingResult matchingResult = new MatchingResult(
                 noticeInfo, List.of(issue1, issue2),
@@ -104,7 +104,7 @@ class V7GoldenDraftTest {
 
         DraftingInput input = new DraftingInput(
                 UUID.randomUUID(), "formal", "Submit strong defence", "M/s Vantage Logistics Pvt Ltd", "IIIJJ1234I", "Company", "Regular", "27IIIJJ1234I1Z9", "Maharashtra", "CGST Act", "2022-23", "2023-24",
-                Map.of("notice_id", "notice-bench-006", "document_type", "scn_73", "notice_number", "SCN/MH/2023-24/606", "issue_date", "18-09-2023", "due_date", "30 Days", "section", "Section 73", "total_demand_amount", 180000.0), Map.of(), "OCR Text", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null, null
+                Map.of("notice_id", "notice-bench-006", "document_type", "scn_73", "notice_number", "SCN/MH/2023-24/606", "issue_date", "18-09-2023", "due_date", "Within 30 days", "section", "Section 73", "total_demand_amount", 155918.0), Map.of(), "OCR Text", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null, null
         );
 
         DraftingPipelineResult result = v7PipelineService.runPipeline(input);
@@ -148,6 +148,15 @@ class V7GoldenDraftTest {
                    .replaceAll("<ul>|</ul>|<ol>|</ol>", "")
                    .replaceAll("<li>", "  * ")
                    .replaceAll("</li>", "\n")
+                   .replaceAll("<table>|</table>|<thead>|<tbody>|</thead>|</tbody>", "")
+                   .replaceAll("<tr>", "")
+                   .replaceAll("</tr>", "\n")
+                   .replaceAll("<th>", "")
+                   .replaceAll("</th>", " | ")
+                   .replaceAll("<td>", "")
+                   .replaceAll("</td>", " | ")
+                   .replaceAll("<!--[^>]*-->", "")
+                   .replaceAll(" \\| \n", "\n")
                    .replaceAll("<[^>]+>", "");
     }
 }

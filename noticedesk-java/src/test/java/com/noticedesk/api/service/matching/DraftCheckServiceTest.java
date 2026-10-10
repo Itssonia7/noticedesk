@@ -27,7 +27,7 @@ class DraftCheckServiceTest {
 
     @Test
     void testAll7ChecksPassOnCleanDraft() {
-        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN1", "DIN1", "2023-10-15", "30 Days", "2022-23", "2022-23", 100000.0, "Tax Officer");
+        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN1", "DIN1", "2023-10-15", "14-11-2023", "2022-23", "2022-23", 100000.0, "Tax Officer");
         MatchedIssue issue1 = new MatchedIssue(1, "full", List.of("CARD-006"), "Why", List.of(), Map.of("period", "2022-23", "amount", 100000.0), List.of(), List.of());
         MatchingResult matchingResult = new MatchingResult(noticeInfo, List.of(issue1), Map.of("record", List.of(1)), List.of(), List.of(), "hash", 10, 10, 0, 0);
 
@@ -62,7 +62,7 @@ class DraftCheckServiceTest {
 
     @Test
     void testCheckMarkersListFailsWhenMissingOrPendingAiPresent() {
-        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN1", "DIN1", "2023-10-15", "30 Days", "2022-23", "2022-23", 100000.0, "Tax Officer");
+        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN1", "DIN1", "2023-10-15", "14-11-2023", "2022-23", "2022-23", 100000.0, "Tax Officer");
         MatchingResult matchingResult = new MatchingResult(noticeInfo, List.of(), Map.of(), List.of(), List.of(), "hash", 10, 10, 0, 0);
 
         List<AssembledSection> sections = new ArrayList<>();
@@ -82,7 +82,7 @@ class DraftCheckServiceTest {
 
     @Test
     void testCheckNoUnresolvedPlaceholdersFailsWhenCurlyBracesRemain() {
-        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN1", "DIN1", "2023-10-15", "30 Days", "2022-23", "2022-23", 100000.0, "Tax Officer");
+        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN1", "DIN1", "2023-10-15", "14-11-2023", "2022-23", "2022-23", 100000.0, "Tax Officer");
         MatchingResult matchingResult = new MatchingResult(noticeInfo, List.of(), Map.of(), List.of(), List.of(), "hash", 10, 10, 0, 0);
 
         List<AssembledSection> sections = new ArrayList<>();

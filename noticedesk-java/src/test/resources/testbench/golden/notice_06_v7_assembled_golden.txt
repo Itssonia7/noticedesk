@@ -3,9 +3,9 @@
 ================================================================================
 SECTION 1: 01 Executive Summary
 ================================================================================
-Executive Summary: Reply to Notice Ref SCN/MH/2023-24/606 dated 18-09-2023 for GSTIN 27IIIJJ1234I1Z9. Total Demand Amount: Rs 1,80,000.
+Executive Summary: Reply to Notice Ref SCN/MH/2023-24/606 dated 18-09-2023 for GSTIN 27IIIJJ1234I1Z9. Total Demand Amount: Rs 1,55,918.
   * Issue #1: Input Tax Credit disallowance under Section 16(2)(aa) of Rs 1,50,000.
-  * Issue #2: Interest demand under Section 50 of Rs 30,000 on gross tax liability.
+  * Issue #2: Interest demand under Section 50 of Rs 5,918 on gross tax liability.
 
 
 ================================================================================
@@ -25,12 +25,10 @@ SECTION 4: 04 Issue-wise Response
 ================================================================================
 
 --- Issue #1 Grounds of Defence ---
-[DEV - not CA reviewed] It is submitted that the discrepancy of Rs 1,50,000 in GSTR-2B was due to vendor delay in reporting in GSTR-1, and all conditions of Section 16(2) were duly satisfied by M/s Vantage Logistics Pvt Ltd.
-
+4.1 [DEV - not CA reviewed] It is submitted that the discrepancy of Rs 1,50,000 in GSTR-2B was due to [[MISSING: issue.reason_for_difference]], and [[MISSING: issue.section16_conditions_statement]] by M/s Vantage Logistics Pvt Ltd.
 
 --- Issue #2 Grounds of Defence ---
-[DEV - not CA reviewed] The interest demand of Rs 30,000 under Section 50 has been computed on gross tax liability instead of net cash liability. As per proviso to Section 50(1), interest is payable only on cash ledger debit.
-
+4.2 [DEV - not CA reviewed] The interest demand of Rs 5,918 under Section 50 has been computed on gross tax liability instead of net cash liability. As per proviso to Section 50(1), interest is payable only on cash ledger debit.
 
 
 ================================================================================
@@ -38,9 +36,9 @@ SECTION 5: 05 Para-wise Reply
 ================================================================================
 Point-by-point reply to the paragraphs of the notice:
   * Para 1: Matter of record; no comments.
-  * Para 2: Denied. Please refer to the reply to Issue #1 at para para 1.
-  * Para 3: Denied. Please refer to the reply to Issue #2 at para para 2.
-  * Para 4: Matter of record; contents denied save and except what is specifically admitted herein.
+  * Para 2: Denied. Please refer to the reply to Issue #1 at para 4.1.
+  * Para 3: Denied. Please refer to the reply to Issue #2 at para 4.2.
+  * Para 4: Denied, for the reasons stated in reply to Issues #1 and #2 at paras 4.1 and 4.2.
   * Para 5: Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.
   * Para 6: Matter of procedural direction; necessary compliance is being submitted herewith.
 
@@ -50,12 +48,10 @@ SECTION 6: 06 Legal Submissions
 ================================================================================
 
 --- Legal Submissions for Issue #1 ---
-[DEV - not CA reviewed] Section 16(2)(aa) cannot be applied retroactively or punitively where genuine tax has been deposited by the supplier into the public exchequer.
-
+6.1 [DEV - not CA reviewed] Section 16(2)(aa) cannot be applied retroactively or punitively where genuine tax has been deposited by the supplier into the public exchequer.
 
 --- Legal Submissions for Issue #2 ---
-[DEV - not CA reviewed] Proviso to Section 50(1) inserted retrospectively from 01-07-2017 mandates calculation of interest solely on net cash tax liability.
-
+6.2 [DEV - not CA reviewed] Proviso to Section 50(1) inserted retrospectively from 01-07-2017 mandates calculation of interest solely on net cash tax liability.
 
 
 ================================================================================
@@ -88,7 +84,10 @@ The following documents are enclosed in support of the reply:
 SECTION 11: 11 Annexure Index
 ================================================================================
 Annexure Index:
-AnnexureDocument DescriptionAnnexure A-1Form GSTR-3B Return AcknowledgmentsAnnexure A-2GSTR-2B Statement & Reconciliation
+Annexure | Document Description
+Annexure A-1 | Form GSTR-3B Return Acknowledgments
+Annexure A-2 | GSTR-2B Statement & Reconciliation
+
 
 ================================================================================
 SECTION 12: 12 Prayer
@@ -109,7 +108,16 @@ Procedural Objection Options (Partner to Select):
   * Check opportunity of hearing under Section 75(4).
   * Verify statutory limitation period under Section 73(10).
 Code Quality Check Results & Flags:
-Check NameStatusSeverityDetailsCHECK_ALL_SECTIONS_PRESENTPASSblock{missing_sections=[], total_sections=15}CHECK_EVERY_ISSUE_ANSWEREDPASSblock{unanswered_issues=[], total_issues=2}CHECK_PARA_MAP_ANSWEREDPASSwarn{para_map_categories=[record, directions, demand, issue]}CHECK_FIGURE_CONSISTENCYPASSblock{mismatches=[]}CHECK_NO_UNRESOLVED_PLACEHOLDERSPASSblock{unresolved_placeholders=[]}CHECK_MARKERS_LISTPASSblock{pending_ai_count=0, missing_markers=[], missing_count=0, pending_ai_markers=[]}CHECK_NO_DUPLICATE_BLOCKSPASSwarn{unique_rendered_blocks=4, total_rendered_blocks=4}Missing Data Markers: None
+Check Name | Status | Severity | Details
+CHECK_ALL_SECTIONS_PRESENT | PASS | block | {missing_sections=[], total_sections=15}
+CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {unanswered_issues=[], total_issues=2}
+CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[record, issue, demand, directions]}
+CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
+CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {unresolved_placeholders=[]}
+CHECK_MARKERS_LIST | FAIL | block | {missing_count=3, missing_markers=[issue.reason_for_difference, issue.section16_conditions_statement, date_of_receipt], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=4, unique_rendered_blocks=4}
+Missing Data Markers:
+  * date_of_receipt (severity: block)
 Pending AI Markers: None
 
 
@@ -118,9 +126,9 @@ SECTION 14: 14 Client Summary
 ================================================================================
 
 --- Client Summary ---
-Notice Type: Section 73
-Total Amount Demanded: Rs 1,80,000
-Reply Due Date: 30 Days
+Notice Type: Show Cause Notice under Section 73
+Total Amount Demanded: Rs 1,55,918
+Reply Due Date: Within 30 days of receipt (date of receipt: [[MISSING: date_of_receipt]])
 Documents Required from Client:
   * Copy of Tax Invoices and Purchase Register for FY 2022-23.
   * Form GSTR-3B return filing acknowledgments and GSTR-2B reconciliation statement.

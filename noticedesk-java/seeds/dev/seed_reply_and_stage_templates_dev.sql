@@ -9,9 +9,9 @@ INSERT INTO reply_templates (
 (
     'TPL-006', 1, 'CARD-006', '2017-07-01', '2099-12-31', 'draft',
     'Input Tax Credit disallowance under Section 16(2)(aa) based on GSTR-2B static statement discrepancy of Rs {{issue.amount_tax}}.',
-    '["issue.amount_tax", "notice.din", "client.legal_name", "issue.reason_for_difference"]'::jsonb,
+    '["issue.amount_tax", "notice.din", "client.legal_name", "issue.reason_for_difference", "issue.section16_conditions_statement"]'::jsonb,
     '[
-        {"id":"BLK-006-04A", "section":4, "html":"<p>[DEV - not CA reviewed] It is submitted that the discrepancy of Rs {{issue.amount_tax}} in GSTR-2B was due to {{issue.reason_for_difference}}, and all conditions of Section 16(2) were duly satisfied by {{client.legal_name}}.</p>", "citations":["CIT-001"]},
+        {"id":"BLK-006-04A", "section":4, "html":"<p>[DEV - not CA reviewed] It is submitted that the discrepancy of Rs {{issue.amount_tax}} in GSTR-2B was due to {{issue.reason_for_difference}}, and {{issue.section16_conditions_statement}} by {{client.legal_name}}.</p>", "citations":["CIT-001"]},
         {"id":"BLK-006-06A", "section":6, "html":"<p>[DEV - not CA reviewed] Section 16(2)(aa) cannot be applied retroactively or punitively where genuine tax has been deposited by the supplier into the public exchequer.</p>", "citations":["CIT-001"]}
     ]'::jsonb,
     '[]'::jsonb,

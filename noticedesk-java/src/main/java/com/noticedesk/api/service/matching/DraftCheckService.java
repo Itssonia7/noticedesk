@@ -83,7 +83,7 @@ public class DraftCheckService {
         boolean paraMapAnswered = !sec05Html.isBlank();
         results.add(new DraftCheckResult(
                 "CHECK_PARA_MAP_ANSWERED",
-                "warn",
+                "block",
                 paraMapAnswered,
                 Map.of("para_map_categories", paraMap.keySet())
         ));

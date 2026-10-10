@@ -135,27 +135,30 @@ public class ReplyAssemblyService {
         Map<Integer, String> issueNoToRefTag = new HashMap<>();
 
         int globalParaNo = 1;
+        int sec04SubPara = 1;
 
         for (MatchedIssue issue : matchedIssues) {
             sec04.append("<h3>Issue #").append(issue.issueNo()).append(" Grounds of Defence</h3>");
             FilledTemplateResult ft = templateMap.get(issue.issueNo());
+            String pNumStr = "4." + sec04SubPara;
+            issueNoToRefTag.put(issue.issueNo(), pNumStr);
 
             if ("full".equalsIgnoreCase(issue.status()) && ft != null && !ft.blocks().isEmpty()) {
-                issueNoToRefTag.put(issue.issueNo(), "para-" + globalParaNo);
-
                 for (FilledBlock fb : ft.blocks()) {
                     if (fb.section() == 4) {
-                        blockIdToRefTag.put(fb.blockId(), "para-" + globalParaNo);
-                        sec04.append("<p>").append(fb.filledHtml()).append("</p>");
+                        blockIdToRefTag.put(fb.blockId(), pNumStr);
+                        String bodyText = fb.filledHtml().replaceAll("^<p>|</p>$", "");
+                        sec04.append("<p>").append(pNumStr).append(" ").append(bodyText).append("</p>");
                         finalSourceMap.add(new SourceMapEntry(globalParaNo++, 4, ft.templateId(), ft.templateVersion(), fb.blockId()));
+                        sec04SubPara++;
                     }
                 }
             } else {
-                issueNoToRefTag.put(issue.issueNo(), "para-" + globalParaNo);
-                sec04.append("<p>[[PENDING_AI: Issue ").append(issue.issueNo()).append(" — partial/new, written in Stage 3]]</p>");
+                sec04.append("<p>").append(pNumStr).append(" [[PENDING_AI: Issue ").append(issue.issueNo()).append(" — partial/new, written in Stage 3]]</p>");
                 pendingAiMarkers.add("PENDING_AI: Issue " + issue.issueNo());
                 assemblyFlags.add("pending_ai_writer");
                 globalParaNo++;
+                sec04SubPara++;
             }
         }
         rawSections.add(new AssembledSection(4, "04 Issue-wise Response", sec04.toString()));
@@ -184,6 +187,8 @@ public class ReplyAssemblyService {
                 int matchedIssueNo = (p == 2 || p == 1) ? 1 : 2;
                 sec05.append("Denied. Please refer to the reply to Issue #").append(matchedIssueNo)
                       .append(" at para {{ref:ISSUE-").append(matchedIssueNo).append("}}.");
+            } else if (p == 4) {
+                sec05.append("Denied, for the reasons stated in reply to Issues #1 and #2 at paras {{ref:ISSUE-1}} and {{ref:ISSUE-2}}.");
             } else if (demandParas.contains(p)) {
                 sec05.append("Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.");
             } else if (directionParas.contains(p)) {
@@ -191,7 +196,7 @@ public class ReplyAssemblyService {
             } else if (p == 1) {
                 sec05.append("Matter of record; no comments.");
             } else {
-                sec05.append("Matter of record; contents denied save and except what is specifically admitted herein.");
+                sec05.append("Matter of record; no comments.");
             }
             sec05.append("</li>");
         }
@@ -200,23 +205,28 @@ public class ReplyAssemblyService {
 
         // Section 06: Legal Submissions
         StringBuilder sec06 = new StringBuilder();
+        int sec06SubPara = 1;
         for (MatchedIssue issue : matchedIssues) {
             FilledTemplateResult ft = templateMap.get(issue.issueNo());
             sec06.append("<h3>Legal Submissions for Issue #").append(issue.issueNo()).append("</h3>");
+            String pNumStr = "6." + sec06SubPara;
 
             if ("full".equalsIgnoreCase(issue.status()) && ft != null && !ft.blocks().isEmpty()) {
                 for (FilledBlock fb : ft.blocks()) {
                     if (fb.section() == 6) {
-                        blockIdToRefTag.put(fb.blockId(), "para-" + globalParaNo);
-                        sec06.append("<p>").append(fb.filledHtml()).append("</p>");
+                        blockIdToRefTag.put(fb.blockId(), pNumStr);
+                        String bodyText = fb.filledHtml().replaceAll("^<p>|</p>$", "");
+                        sec06.append("<p>").append(pNumStr).append(" ").append(bodyText).append("</p>");
                         finalSourceMap.add(new SourceMapEntry(globalParaNo++, 6, ft.templateId(), ft.templateVersion(), fb.blockId()));
+                        sec06SubPara++;
                     }
                 }
             } else {
-                sec06.append("<p>[[PENDING_AI: Issue ").append(issue.issueNo()).append(" — partial/new, written in Stage 3]]</p>");
+                sec06.append("<p>").append(pNumStr).append(" [[PENDING_AI: Issue ").append(issue.issueNo()).append(" — partial/new, written in Stage 3]]</p>");
                 pendingAiMarkers.add("PENDING_AI: Issue " + issue.issueNo());
                 assemblyFlags.add("pending_ai_writer");
                 globalParaNo++;
+                sec06SubPara++;
             }
         }
         rawSections.add(new AssembledSection(6, "06 Legal Submissions", sec06.toString()));
@@ -285,11 +295,14 @@ public class ReplyAssemblyService {
         rawSections.add(new AssembledSection(13, "13 Internal Partner Note", sec13.toString()));
 
         // Section 14: Client Summary (Notice type, amount, due date, required documents)
+        String fullNoticeType = formatFullNoticeType(noticeSec);
+        String formattedDueDate = formatDueDateStr(noticeInfo != null ? noticeInfo.replyDueDate() : null, missingMarkers);
+
         StringBuilder sec14 = new StringBuilder();
         sec14.append("<h3>Client Summary</h3>");
-        sec14.append("<p><strong>Notice Type:</strong> ").append(noticeSec).append("</p>");
+        sec14.append("<p><strong>Notice Type:</strong> ").append(fullNoticeType).append("</p>");
         sec14.append("<p><strong>Total Amount Demanded:</strong> ").append(noticeInfo != null && noticeInfo.totalDemandAmount() != null ? TemplateFillService.formatIndianCurrency(java.math.BigDecimal.valueOf(noticeInfo.totalDemandAmount())) : "[[MISSING: total_demand]]").append("</p>");
-        sec14.append("<p><strong>Reply Due Date:</strong> ").append(noticeInfo != null && noticeInfo.replyDueDate() != null ? formatDateStr(noticeInfo.replyDueDate()) : "[[MISSING: reply_due_date]]").append("</p>");
+        sec14.append("<p><strong>Reply Due Date:</strong> ").append(formattedDueDate).append("</p>");
         sec14.append("<p><strong>Documents Required from Client:</strong></p><ol>");
         sec14.append("<li>Copy of Tax Invoices and Purchase Register for FY ").append(input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]").append(".</li>");
         sec14.append("<li>Form GSTR-3B return filing acknowledgments and GSTR-2B reconciliation statement.</li>");
@@ -414,6 +427,44 @@ public class ReplyAssemblyService {
             }
         }
         return null;
+    }
+
+    private String formatFullNoticeType(String noticeSec) {
+        if (noticeSec == null || noticeSec.isBlank()) return "[[MISSING: notice_section]]";
+        if (noticeSec.startsWith("Show Cause Notice") || noticeSec.startsWith("Intimation of Discrepancy")) {
+            return noticeSec;
+        }
+        if (noticeSec.contains("Section 73") || noticeSec.contains("Section 74") || noticeSec.contains("73") || noticeSec.contains("74")) {
+            if (!noticeSec.startsWith("Section")) {
+                return "Show Cause Notice under Section " + noticeSec;
+            }
+            return "Show Cause Notice under " + noticeSec;
+        }
+        if (noticeSec.contains("ASMT-10") || noticeSec.contains("ASMT")) {
+            return "Intimation of Discrepancy under " + noticeSec;
+        }
+        return "Notice under " + noticeSec;
+    }
+
+    private String formatDueDateStr(String dateStr, List<String> missingMarkers) {
+        if (dateStr == null || dateStr.isBlank()) {
+            if (missingMarkers != null) missingMarkers.add("[[MISSING: reply_due_date]]");
+            return "[[MISSING: reply_due_date]]";
+        }
+        String trimmed = dateStr.trim();
+        if (trimmed.matches("\\d{4}-\\d{2}-\\d{2}.*") || trimmed.matches("\\d{2}-\\d{2}-\\d{4}")) {
+            return formatDateStr(trimmed);
+        }
+        if (trimmed.toLowerCase().contains("30") || trimmed.toLowerCase().contains("within") || trimmed.toLowerCase().contains("day")) {
+            if (missingMarkers != null && !missingMarkers.contains("date_of_receipt")) {
+                missingMarkers.add("date_of_receipt");
+            }
+            return "Within 30 days of receipt (date of receipt: [[MISSING: date_of_receipt]])";
+        }
+        if (missingMarkers != null && !missingMarkers.contains("reply_due_date")) {
+            missingMarkers.add("reply_due_date");
+        }
+        return "[[MISSING: reply_due_date]]";
     }
 
     private String formatClientName(String name) {
