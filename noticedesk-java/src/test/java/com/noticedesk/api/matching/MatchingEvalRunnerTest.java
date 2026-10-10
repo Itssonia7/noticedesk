@@ -9,6 +9,8 @@ import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.matching.CatalogueService;
+import com.noticedesk.api.testsupport.RunCostLedger;
+import com.noticedesk.api.testsupport.TestAppProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
@@ -47,7 +49,8 @@ class MatchingEvalRunnerTest {
             return;
         }
 
-        AppProperties props = new AppProperties();
+        // pricing, effort and max_tokens come from application.yml (+ env overrides)
+        AppProperties props = TestAppProperties.fromApplicationYml();
         props.getLlm().setProviderPrimary("anthropic");
         props.getLlm().getAnthropic().setApiKey(apiKey);
         String wsId = System.getenv("ANTHROPIC_WORKSPACE_ID");
@@ -57,15 +60,12 @@ class MatchingEvalRunnerTest {
         props.getLlm().setModelMatching(matchingModel);
         props.getMatching().setAllowDraftCards(true); // Allow dev draft cards for test bench evaluation
 
-        // Pricing configuration
-        AppProperties.Pricing pricing = props.getPricing();
-        pricing.setInrPerUsd(88.0);
-        AppProperties.Pricing.ModelPrice p1 = new AppProperties.Pricing.ModelPrice();
-        p1.setInputPerMillion(3.0);
-        p1.setOutputPerMillion(15.0);
-        p1.setCacheReadPerMillion(0.30);
-        p1.setCacheWritePerMillion(3.75);
-        pricing.getModels().put(matchingModel, p1);  // rates from the pricing table for the matching model
+        if (props.getPricing().getModels().get(matchingModel) == null) {
+            System.err.println("WARNING: no price configured for " + matchingModel + " in application.yml; costs will show UNPRICED");
+        }
+        System.out.println("Matching effort=" + props.getLlm().effortForAgent("matching")
+                + " max_tokens=" + props.getLlm().maxTokensForAgent("matching", false)
+                + " retry_max_tokens=" + props.getLlm().maxTokensForAgent("matching", true));
 
         org.springframework.jdbc.datasource.DriverManagerDataSource ds = new org.springframework.jdbc.datasource.DriverManagerDataSource();
         ds.setDriverClassName("org.postgresql.Driver");
@@ -77,6 +77,7 @@ class MatchingEvalRunnerTest {
         LlmFactory llmFactory = new LlmFactory(props);
         CatalogueService catalogueService = new CatalogueService(jdbcTemplate, props, objectMapper);
         ApiUsageLogService usageLogService = new ApiUsageLogService(null, props);
+        RunCostLedger ledger = RunCostLedger.attach(usageLogService, System.out);
         IssueMatchingAgent agent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, null, objectMapper);
 
         // Dummy set: the committed testbench (fake data). Private set: $PRIVATE_SEED_DIR/notices/*.json
@@ -103,9 +104,11 @@ class MatchingEvalRunnerTest {
         }
 
         BigDecimal[] spentInr = {BigDecimal.ZERO};
-        ObjectNode dummySummary = evaluateSet("dummy", dummyNotices, false, agent, usageLogService, matchingModel, spentInr);
+        ObjectNode dummySummary = evaluateSet("dummy", dummyNotices, false, agent, ledger, spentInr);
         ObjectNode privateSummary = privateNotices.isEmpty() ? null
-                : evaluateSet("private", privateNotices, true, agent, usageLogService, matchingModel, spentInr);
+                : evaluateSet("private", privateNotices, true, agent, ledger, spentInr);
+        System.out.printf("Total billed calls: %d (failed: %d, unpriced: %d) | Total cost: %.4f INR%n",
+                ledger.size(), ledger.failedCalls(), ledger.unpricedCalls(), ledger.totalInr().doubleValue());
 
         // Write timestamped JSON report to repo root testbench/results/
         File resultsDir = new File("../testbench/results");
@@ -132,9 +135,8 @@ class MatchingEvalRunnerTest {
      * Evaluates one notice set. The returned JSON holds only notice IDs and metrics; for the private
      * set nothing from the notice text or the model's explanation is printed or stored.
      */
-    private ObjectNode evaluateSet(String setName, List<Resource> noticeList, boolean isPrivate,
-                                   IssueMatchingAgent agent, ApiUsageLogService usageLogService,
-                                   String matchingModel, BigDecimal[] spentInr) throws Exception {
+    ObjectNode evaluateSet(String setName, List<Resource> noticeList, boolean isPrivate,
+                           IssueMatchingAgent agent, RunCostLedger ledger, BigDecimal[] spentInr) throws Exception {
 
         int totalNotices = 0;
         int errorCallsCount = 0;
@@ -181,7 +183,13 @@ class MatchingEvalRunnerTest {
             String ocrText = root.path("full_ocr_text").asText();
             JsonNode answerKey = root.path("answer_key");
 
+            System.out.println("Notice " + noticeId + ":");
+            int callCheckpoint = ledger.size();
             MatchingResult result = agent.matchNoticeWithOcrText(ocrText, docType, UUID.randomUUID(), UUID.randomUUID());
+
+            // every billed call for this notice (failed attempts and retries included)
+            BigDecimal noticeInr = ledger.totalInrSince(callCheckpoint);
+            totalCostInr = totalCostInr.add(noticeInr);
 
             // Requirement 1: Stop immediately on billing/auth errors (credit balance, 400, 401, 403)
             String flagStr = result.flags().toString().toLowerCase();
@@ -212,10 +220,6 @@ class MatchingEvalRunnerTest {
             if (result.cacheReadTokens() > 0) {
                 cacheHitCalls++;
             }
-
-            BigDecimal[] costs = usageLogService.calculateCost(matchingModel, result.inputTokens(), result.outputTokens(), result.cacheReadTokens(), result.cacheWriteTokens());
-            BigDecimal noticeInr = costs[1];
-            totalCostInr = totalCostInr.add(noticeInr);
 
             // Metrics evaluation against answer_key
             JsonNode expectedIssues = answerKey.path("issues");
@@ -276,27 +280,32 @@ class MatchingEvalRunnerTest {
         }
 
         int successfulCalls = totalNotices - errorCallsCount;
-        double wrongFullMatchRate = expectedFullMatchCount > 0 ? (double) wrongFullMatchCount / expectedFullMatchCount * 100.0 : 0.0;
-        double partialNoneCorrectPct = expectedPartialOrNoneCount > 0 ? (double) correctPartialOrNoneCount / expectedPartialOrNoneCount * 100.0 : 100.0;
-        double factAccuracyPct = totalExpectedFacts > 0 ? (double) matchedFactsCount / totalExpectedFacts * 100.0 : 100.0;
-        double paraCoveragePct = totalExpectedParas > 0 ? (double) coveredParasCount / totalExpectedParas * 100.0 : 100.0;
-        double cacheHitRatePct = successfulCalls > 1 ? (double) cacheHitCalls / (successfulCalls - 1) * 100.0 : 0.0;
+        // With zero successful calls nothing was measured: report N/A, never 100%.
+        String wrongFullMatchRate = RunCostLedger.pct(wrongFullMatchCount, expectedFullMatchCount, successfulCalls);
+        String partialNoneCorrectPct = RunCostLedger.pct(correctPartialOrNoneCount, expectedPartialOrNoneCount, successfulCalls);
+        String factAccuracyPct = RunCostLedger.pct(matchedFactsCount, totalExpectedFacts, successfulCalls);
+        String paraCoveragePct = RunCostLedger.pct(coveredParasCount, totalExpectedParas, successfulCalls);
+        String cacheHitRatePct = RunCostLedger.pct(cacheHitCalls, successfulCalls - 1, successfulCalls);
+        BigDecimal setCostInr = totalCostInr.subtract(startInr);
 
         System.out.println("=== MATCHING EVALUATION BENCHMARK METRICS: " + setName.toUpperCase() + " SET ===");
         System.out.printf("Total Notices Evaluated: %d (Files Count: %d)%n", totalNotices, noticeList.size());
         System.out.printf("Successful Calls: %d | Errors/Failures: %d%n", successfulCalls, errorCallsCount);
         System.out.printf("Multi-Issue Full Matches (multi_full): %d%n", multiFullMatchCount);
-        System.out.printf("Wrong Full-Match Rate: %.2f%%%n", wrongFullMatchRate);
-        System.out.printf("Partial/None Correctly Flagged: %.2f%%%n", partialNoneCorrectPct);
-        System.out.printf("Fact Accuracy: %.2f%%%n", factAccuracyPct);
-        System.out.printf("Para Coverage: %.2f%%%n", paraCoveragePct);
-        System.out.printf("Cache Hit Rate (Call 2+): %.2f%%%n", cacheHitRatePct);
+        System.out.println("Wrong Full-Match Rate: " + wrongFullMatchRate);
+        System.out.println("Partial/None Correctly Flagged: " + partialNoneCorrectPct);
+        System.out.println("Fact Accuracy: " + factAccuracyPct);
+        System.out.println("Para Coverage: " + paraCoveragePct);
+        System.out.println("Cache Hit Rate (Call 2+): " + cacheHitRatePct);
         System.out.printf("Cache Read Tokens (Calls 2+): %d%n", totalCacheReadTokensCall2Plus);
-        System.out.printf("Total Benchmark Cost: %.4f INR%n", totalCostInr.subtract(startInr).doubleValue());
+        System.out.printf("Total Benchmark Cost (all billed calls, failed included): %.4f INR%n", setCostInr.doubleValue());
 
-        if (wrongMatches.isEmpty()) {
-            System.out.println("\nNo wrong matches! 100% agreement with answer keys.");
-        } else {
+        if (successfulCalls == 0) {
+            System.out.println("\nNo successful calls: accuracy metrics are N/A.");
+        } else if (wrongMatches.isEmpty()) {
+            System.out.println("\nNo wrong matches against the answer keys.");
+        }
+        if (!wrongMatches.isEmpty()) {
             System.out.println("\n=== WRONG MATCH DETAILS ===");
             for (WrongMatchInfo wm : wrongMatches) {
                 System.out.printf("- Notice: %s | Expected: %s | Got: %s | Why: %s%n", wm.noticeId(), wm.expected(), wm.got(), wm.why());
@@ -309,13 +318,14 @@ class MatchingEvalRunnerTest {
         summaryReport.put("successful_calls", successfulCalls);
         summaryReport.put("error_calls", errorCallsCount);
         summaryReport.put("multi_full_matches", multiFullMatchCount);
-        summaryReport.put("wrong_full_match_rate_pct", wrongFullMatchRate);
-        summaryReport.put("partial_none_correct_pct", partialNoneCorrectPct);
-        summaryReport.put("fact_accuracy_pct", factAccuracyPct);
-        summaryReport.put("para_coverage_pct", paraCoveragePct);
-        summaryReport.put("cache_hit_rate_pct", cacheHitRatePct);
+        // null = N/A (no successful calls / nothing to measure)
+        summaryReport.put("wrong_full_match_rate_pct", RunCostLedger.pctValue(wrongFullMatchCount, expectedFullMatchCount, successfulCalls));
+        summaryReport.put("partial_none_correct_pct", RunCostLedger.pctValue(correctPartialOrNoneCount, expectedPartialOrNoneCount, successfulCalls));
+        summaryReport.put("fact_accuracy_pct", RunCostLedger.pctValue(matchedFactsCount, totalExpectedFacts, successfulCalls));
+        summaryReport.put("para_coverage_pct", RunCostLedger.pctValue(coveredParasCount, totalExpectedParas, successfulCalls));
+        summaryReport.put("cache_hit_rate_pct", RunCostLedger.pctValue(cacheHitCalls, successfulCalls - 1, successfulCalls));
         summaryReport.put("cache_read_tokens_calls_2_plus", totalCacheReadTokensCall2Plus);
-        summaryReport.put("total_cost_inr", totalCostInr.subtract(startInr).doubleValue());
+        summaryReport.put("total_cost_inr", setCostInr.doubleValue());
         summaryReport.set("notices", objectMapper.valueToTree(noticeEvalResults));
 
         spentInr[0] = totalCostInr;

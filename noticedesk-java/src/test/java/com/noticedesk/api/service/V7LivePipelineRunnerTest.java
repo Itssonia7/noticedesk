@@ -18,6 +18,8 @@ import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.TemplateFillService;
+import com.noticedesk.api.testsupport.RunCostLedger;
+import com.noticedesk.api.testsupport.TestAppProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 
@@ -59,7 +61,8 @@ public class V7LivePipelineRunnerTest {
         String ikToken = Optional.ofNullable(System.getenv("INDIANKANOON_API_TOKEN")).orElse("");
         String citationProvider = (!ikToken.isBlank()) ? "indiankanoon" : "stub";
 
-        AppProperties props = new AppProperties();
+        // pricing, effort and max_tokens come from application.yml (+ env overrides)
+        AppProperties props = TestAppProperties.fromApplicationYml();
         props.getLlm().setProviderPrimary("anthropic");
         props.getLlm().getAnthropic().setApiKey(apiKey);
         String wsId = System.getenv("ANTHROPIC_WORKSPACE_ID");
@@ -76,26 +79,16 @@ public class V7LivePipelineRunnerTest {
         props.getCitation().setIndiankanoonApiToken(ikToken);
         props.getMatching().setAllowDraftCards(true);
 
-        // Pricing configuration
-        AppProperties.Pricing pricing = props.getPricing();
-        pricing.setInrPerUsd(88.0);
-
-        AppProperties.Pricing.ModelPrice pSonnet = new AppProperties.Pricing.ModelPrice();
-        pSonnet.setInputPerMillion(3.0);
-        pSonnet.setOutputPerMillion(15.0);
-        pSonnet.setCacheReadPerMillion(0.30);
-        pSonnet.setCacheWritePerMillion(3.75);
-        pricing.getModels().put("claude-sonnet-5-5", pSonnet);
-        pricing.getModels().put("claude-3-5-sonnet-20241022", pSonnet);
-
-        AppProperties.Pricing.ModelPrice pOpus = new AppProperties.Pricing.ModelPrice();
-        pOpus.setInputPerMillion(15.0);
-        pOpus.setOutputPerMillion(75.0);
-        pOpus.setCacheReadPerMillion(1.50);
-        pOpus.setCacheWritePerMillion(18.75);
-        pricing.getModels().put("claude-opus-5-5", pOpus);
-        pricing.getModels().put("claude-opus-4-7", pOpus);
-        pricing.getModels().put("claude-3-opus-20240229", pOpus);
+        for (String m : List.of(modelMatching, modelPartial, modelNewIssue, modelHighStakes)) {
+            if (props.getPricing().getModels().get(m) == null) {
+                System.err.println("WARNING: no price configured for " + m + " in application.yml; its calls show UNPRICED");
+            }
+        }
+        for (String agent : List.of("matching", "partial_drafting", "new_issue", "high_stakes")) {
+            System.out.printf("%s: effort=%s max_tokens=%d retry_max_tokens=%d%n", agent,
+                    props.getLlm().effortForAgent(agent),
+                    props.getLlm().maxTokensForAgent(agent, false), props.getLlm().maxTokensForAgent(agent, true));
+        }
 
         ObjectMapper om = new ObjectMapper();
 
@@ -110,6 +103,7 @@ public class V7LivePipelineRunnerTest {
         LlmFactory llmFactory = new LlmFactory(props);
         CatalogueService catalogueService = new CatalogueService(jdbc.getJdbcTemplate(), props, om);
         ApiUsageLogService usageLogService = new ApiUsageLogService(jdbc, props);
+        RunCostLedger ledger = RunCostLedger.attach(usageLogService, System.out);
 
         IssueMatchingAgent matchingAgent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, jdbc, om);
         PartialDraftingAgent partialAgent = new PartialDraftingAgent(props, om, usageLogService, llmFactory);
@@ -188,21 +182,17 @@ public class V7LivePipelineRunnerTest {
                     List.of(), List.of(), null, null
             );
 
+            System.out.printf("%n--- Calls for %s ---%n", noticeId);
+            int callCheckpoint = ledger.size();
             DraftingPipelineResult result = pipelineService.runPipeline(input, tenantUuid, noticeUuid);
 
-            // Per notice cost calculations from DB logs
-            Double matchingInrObj = jdbc.getJdbcTemplate().queryForObject(
-                    "SELECT COALESCE(SUM(cost_inr), 0) FROM api_usage_logs WHERE notice_id = CAST(? AS UUID) AND step = 'matching'",
-                    Double.class, noticeUuid.toString());
-            Double writerInrObj = jdbc.getJdbcTemplate().queryForObject(
-                    "SELECT COALESCE(SUM(cost_inr), 0) FROM api_usage_logs WHERE notice_id = CAST(? AS UUID) AND step NOT IN ('matching', 'citation')",
-                    Double.class, noticeUuid.toString());
+            // Model cost per notice from every billed call (failed attempts and retries included)
+            double matchingInr = ledger.totalInrSince(callCheckpoint, "matching").doubleValue();
+            double writerInr = ledger.totalInrSince(callCheckpoint).doubleValue() - matchingInr;
+            // IndianKanoon calls are logged to the DB only (no token usage)
             Double ikInrObj = jdbc.getJdbcTemplate().queryForObject(
-                    "SELECT COALESCE(SUM(cost_inr), 0) FROM api_usage_logs WHERE notice_id = CAST(? AS UUID) AND step = 'citation'",
+                    "SELECT COALESCE(SUM(cost_inr), 0) FROM api_usage_logs WHERE notice_id = CAST(? AS UUID) AND provider = 'indiankanoon'",
                     Double.class, noticeUuid.toString());
-
-            double matchingInr = matchingInrObj != null ? matchingInrObj : 0.0;
-            double writerInr = writerInrObj != null ? writerInrObj : 0.0;
             double ikInr = ikInrObj != null ? ikInrObj : 0.0;
             int matchingInTokens = result.totalInputTokens();
             int matchingOutTokens = result.totalOutputTokens();
@@ -255,6 +245,8 @@ public class V7LivePipelineRunnerTest {
         }
 
         System.out.printf("%nTotal Run 2 Execution Cost: %.4f INR%n", totalRun2Inr.doubleValue());
+        System.out.printf("Billed model calls: %d (failed: %d, unpriced: %d) | model cost: %.4f INR%n",
+                ledger.size(), ledger.failedCalls(), ledger.unpricedCalls(), ledger.totalInr().doubleValue());
     }
 
     private static String findPattern(String text, String regex) {
