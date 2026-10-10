@@ -1,14 +1,14 @@
 {
   "notice_id": "notice-bench-007",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/GJ/2023/707 Dated 22-10-2023\nGSTIN: 24KKKLL5678K1Z3 M/s Apex Industrial Heavy Machinery\nFY: 2023-24\n\n1. During audit inspection, officer proposed disallowance of ITC of Rs. 4,00,000/- claimed on capital goods (industrial generator and heavy mobile crane equipment) alleging defective invoice layout and missing manufacturer serial numbers on delivery receipts.\n2. The taxpayer contends the capital equipment was purchased under valid tax invoices and used for business operations.",
+  "full_ocr_text": "GOVERNMENT OF GUJARAT\nOFFICE OF THE SUPERINTENDENT OF CENTRAL TAX\nRANGE-IV, SURAT COMMISSIONERATE\n\nShow Cause Notice under Section 73 of the CGST Act, 2017\nReference No: SCN/GJ/2023-24/707\nDate: 22-10-2023\n\nTo,\nM/s Apex Industrial Heavy Machinery\nGSTIN: 24KKKLL5678K1Z3\nFinancial Year: 2023-24\n\n1. WHEREAS, audit inspection of capital goods invoices and asset ledgers for FY 2023-24 was conducted by the Central Tax Audit team.\n\n2. AND WHEREAS, verification revealed that Input Tax Credit of Rs. 4,00,000/- was claimed on capital purchases described as specialized industrial generator units and heavy mobile crane equipment.\n\n3. IT IS OBSERVED that the purchase tax invoices lack mandatory invoice details under Rule 46 of the CGST Rules 2017, specifically omitting manufacturer machine registration serial numbers and equipment chassis numbers on delivery receipts.\n\n4. ACCORDINGLY, the Proper Officer proposes disallowance of ITC of Rs. 4,00,000/- under Section 16(2)(a) alleging improper invoice documentation and missing equipment identity marks on tax invoices.\n\n5. NOW THEREFORE, you are called upon to show cause why:\n(a) Input Tax Credit of Rs. 4,00,000/- should not be disallowed and recovered under Section 73(1);\n(b) Applicable interest should not be demanded under Section 50;\n(c) Penalty under Section 73(9) should not be imposed.\n\n6. Submit your written reply along with invoice copies within 30 days from service.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
       {
         "issue_no": 1,
         "status": "partial",
-        "card_ids": ["CARD-001", "CARD-006"],
+        "card_ids": ["CARD-006"],
         "key_facts": {
           "period": "2023-24",
           "amount": 400000.0,
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-011",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 27 READ WITH SECTION 129\nNotice Ref: SCN/UP/2023/1111 Dated 19-09-2023\nGSTIN: 09SSSTT1234S1Z0 M/s Heritage Handicrafts Expo\nFY: 2023-24\n\n1. It is observed that entity operated temporary exhibition stalls in Lucknow without obtaining Casual Taxable Person (CTP) registration or depositing estimated advance tax under Section 27.\n2. Notice is issued calling upon to show cause why penalty of Rs. 50,000/- should not be levied under Section 129.",
+  "full_ocr_text": "GOVERNMENT OF UTTAR PRADESH\nOFFICE OF THE ASSISTANT COMMISSIONER OF STATE TAX\nCOMMERCIAL TAXES WARD-3, LUCKNOW\n\nNotice under Section 27 read with Section 129 of the UP GST Act, 2017\nReference No: SCN/UP/2023-24/1111\nDate: 19-09-2023\n\nTo,\nM/s Heritage Handicrafts Expo\nGSTIN: 09SSSTT1234S1Z0\nFinancial Year: 2023-24\n\n1. WHEREAS, enforcement inspection of temporary exhibition stalls at Awadh Shilpgram, Lucknow was conducted by State Tax Officers on 15-09-2023.\n\n2. AND WHEREAS, inspection revealed that M/s Heritage Handicrafts Expo was making taxable retail sales of handicraft items at the venue without possessing valid registration in the State of Uttar Pradesh.\n\n3. IT IS OBSERVED that the entity qualifies as a Casual Taxable Person (CTP) under Section 2(20) of the CGST Act 2017 and was required to obtain temporary CTP registration and deposit estimated advance tax under Section 27 prior to commencing business.\n\n4. ACCORDINGLY, failure to obtain CTP registration and failure to deposit advance tax violates Section 27 read with Section 25 of the Act.\n\n5. NOW THEREFORE, you are called upon to show cause why:\n(a) Estimated tax liability of Rs. 1,20,000/- should not be assessed under Section 63;\n(b) Penalty of Rs. 50,000/- should not be imposed under Section 129 for operating without registration.\n\n6. You are required to submit your explanation within 7 days from service of this notice.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-008",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/KA/2022/808 Dated 14-07-2022\nGSTIN: 29MMMNN9012M1Z7 M/s Southern Infra Projects\nFY: 2021-22\n\n1. Issue 1: Non-payment of reverse charge GST under Section 9(3) amounting to Rs. 75,00,0/- on freight charges paid to Goods Transport Agencies (GTA) where GTA did not pay tax under forward charge.\n2. Issue 2: Taxable turnover of outward supplies reported in GSTR-1 exceeds tax paid in GSTR-3B by Rs. 1,20,000/- due to unadjusted credit notes.",
+  "full_ocr_text": "GOVERNMENT OF KARNATAKA\nOFFICE OF THE ASSISTANT COMMISSIONER OF COMMERCIAL TAXES\nAUDIT CIRCLE-1.2, BENGALURU\n\nShow Cause Notice under Section 73 of the CGST / KGST Act, 2017\nReference No: SCN/KA/2022-23/808\nDate: 14-07-2022\n\nTo,\nM/s Southern Infra Projects\nGSTIN: 29MMMNN9012M1Z7\nFinancial Year: 2021-22\n\n1. WHEREAS, comprehensive tax audit of books of accounts and returns filed by you for FY 2021-22 was conducted under Section 65 of the CGST Act 2017.\n\n2. GROUND I - REVERSE CHARGE MECHANISM (RCM) LIABILITY: Audit reveals that freight charges paid to Goods Transport Agencies (GTA) amounting to Rs. 15,00,000/- were paid without discharging RCM tax liability under Section 9(3). The GTA suppliers did not exercise option to pay tax under forward charge. Reverse charge GST liability of Rs. 75,000/- remains unpaid.\n\n3. GROUND II - GSTR-1 VS GSTR-3B OUTWARD TURNOVER DISCREPANCY: Outward taxable turnover declared in Form GSTR-1 exceeds taxable sales turnover reported in Form GSTR-3B by Rs. 6,66,667/-, resulting in short payment of tax amounting to Rs. 1,20,000/-.\n\n4. ACCORDINGLY, Ground I demands RCM tax under Section 9(3), and Ground II demands tax on turnover mismatch under Section 37 read with Section 73.\n\n5. NOW THEREFORE, you are called upon to show cause why:\n(a) Total GST demand of Rs. 1,95,000/- (RCM Rs. 75,000/- + Outward Rs. 1,20,000/-) should not be recovered under Section 73(1);\n(b) Interest under Section 50 should not be demanded;\n(c) Penalty under Section 73(9) should not be levied.\n\n6. File your reply within 30 days of service of this notice.",
   "answer_key": {
     "expected_issues": 2,
     "issues": [
@@ -26,6 +26,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-010",
   "document_type": "scn_73",
-  "full_ocr_text": "NOTICE FROM NATIONAL ANTI-PROFITEERING AUTHORITY UNDER SECTION 171\nNotice Ref: NAPA/ND/2023/1010 Dated 05-06-2023\nGSTIN: 07QQQRR7890Q1Z6 M/s Horizon Electronics\nFY: 2022-23\n\n1. Examination under Section 171 reveals taxpayer failed to pass on benefit of GST rate reduction from 28% to 18% on consumer television units to end consumers by commensurate reduction in prices.\n2. You are directed to show cause why profiteered amount of Rs. 15,00,000/- along with interest should not be deposited into Consumer Welfare Fund.",
+  "full_ocr_text": "NATIONAL ANTI-PROFITEERING AUTHORITY\nGOVERNMENT OF INDIA, NEW DELHI\n\nNotice under Section 171 of the Central Goods and Services Tax Act, 2017\nReference No: NAPA/ND/2023-24/1010\nDate: 05-06-2023\n\nTo,\nM/s Horizon Electronics\nGSTIN: 07QQQRR7890Q1Z6\nFinancial Year: 2022-23\n\n1. WHEREAS, a complaint was received by the Standing Committee on Anti-Profiteering alleging that M/s Horizon Electronics did not pass on the benefit of GST rate reduction on consumer television sets to retail buyers.\n\n2. AND WHEREAS, investigation conducted by the Directorate General of Anti-Profiteering (DGAP) revealed that effective 15-11-2017, the GST rate on smart televisions was reduced from 28% to 18%.\n\n3. IT IS OBSERVED that the taxpayer increased the base selling price of television units simultaneously with the rate reduction, maintaining the overall MRP unchanged, thereby withholding tax reduction benefits from buyers.\n\n4. ACCORDINGLY, under Section 171 of the CGST Act 2017, any reduction in rate of tax on any supply of goods or services must be accompanied by a commensurate reduction in price.\n\n5. NOW THEREFORE, you are directed to show cause why:\n(a) Profiteered amount of Rs. 15,00,000/- should not be recovered and deposited into the Consumer Welfare Fund;\n(b) Interest at the rate of 18% per annum should not be levied from the date of collection;\n(c) Penalty under Section 171(3A) should not be imposed.\n\n6. You are directed to submit your response within 21 days from receipt of this notice.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

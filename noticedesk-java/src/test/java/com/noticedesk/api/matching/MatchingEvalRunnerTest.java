@@ -80,11 +80,18 @@ class MatchingEvalRunnerTest {
             return;
         }
 
-        Arrays.sort(resources, Comparator.comparing(Resource::getFilename));
+        // Deduplicate resources by filename so each notice file is counted exactly once
+        Map<String, Resource> uniqueResources = new TreeMap<>();
+        for (Resource res : resources) {
+            uniqueResources.putIfAbsent(res.getFilename(), res);
+        }
+        List<Resource> noticeList = new ArrayList<>(uniqueResources.values());
 
         int totalNotices = 0;
+        int errorCallsCount = 0;
         int wrongFullMatchCount = 0;
         int expectedFullMatchCount = 0;
+        int multiFullMatchCount = 0;
         int correctPartialOrNoneCount = 0;
         int expectedPartialOrNoneCount = 0;
 
@@ -104,7 +111,7 @@ class MatchingEvalRunnerTest {
         List<ObjectNode> noticeEvalResults = new ArrayList<>();
         List<WrongMatchInfo> wrongMatches = new ArrayList<>();
 
-        for (Resource res : resources) {
+        for (Resource res : noticeList) {
             if (totalCostInr.compareTo(INR_CAP) >= 0) {
                 System.err.println("SAFETY CAP REACHED: Total spend " + totalCostInr + " INR exceeded INR 200 limit. Halting evaluation.");
                 break;
@@ -126,6 +133,25 @@ class MatchingEvalRunnerTest {
 
             MatchingResult result = agent.matchNoticeWithOcrText(ocrText, docType, UUID.randomUUID(), UUID.randomUUID());
 
+            // Requirement 1: Stop immediately on billing/auth errors (credit balance, 400, 401, 403)
+            String flagStr = result.flags().toString().toLowerCase();
+            String missingStr = result.missingOrDoubtful().toString().toLowerCase();
+            String whyStr = result.issues().stream().map(com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue::why).collect(java.util.stream.Collectors.joining(" ")).toLowerCase();
+            if (flagStr.contains("credit balance") || flagStr.contains("400") || flagStr.contains("401") || flagStr.contains("403")
+                    || missingStr.contains("credit balance") || missingStr.contains("400") || missingStr.contains("401") || missingStr.contains("403")
+                    || whyStr.contains("credit balance") || whyStr.contains("400") || whyStr.contains("401") || whyStr.contains("403")) {
+                String errDetail = "flags=" + result.flags() + " missing=" + result.missingOrDoubtful() + " why=" + whyStr;
+                System.err.println("FATAL BILLING / AUTH ERROR DETECTED for notice " + noticeId + ": " + errDetail);
+                throw new IllegalStateException("Halting evaluation runner due to API billing/auth error: " + errDetail);
+            }
+
+            // Requirement 1: Failed/fallback match counted as an ERROR, never as correct "none"
+            if (result.flags().contains("matching_failed") || result.flags().contains("matching_parse_failed")) {
+                errorCallsCount++;
+                wrongMatches.add(new WrongMatchInfo(noticeId, "Successful Match", "ERROR", "Call failed or returned fallback result: " + result.flags() + " | detail: " + whyStr));
+                continue;
+            }
+
             if (totalCalls > 1) {
                 totalCacheReadTokensCall2Plus += result.cacheReadTokens();
             }
@@ -141,9 +167,14 @@ class MatchingEvalRunnerTest {
             // Metrics evaluation against answer_key
             JsonNode expectedIssues = answerKey.path("issues");
             if (expectedIssues.isArray()) {
+                if (expectedIssues.size() > 1) {
+                    multiFullMatchCount++;
+                }
+
                 for (JsonNode exp : expectedIssues) {
                     String expStatus = exp.path("status").asText();
                     String expCardId = exp.path("card_ids").toString();
+
                     if ("full".equalsIgnoreCase(expStatus)) {
                         expectedFullMatchCount++;
                         boolean matchedFull = result.issues().stream().anyMatch(i -> "full".equalsIgnoreCase(i.status()));
@@ -191,14 +222,17 @@ class MatchingEvalRunnerTest {
             noticeEvalResults.add(evalItem);
         }
 
+        int successfulCalls = totalNotices - errorCallsCount;
         double wrongFullMatchRate = expectedFullMatchCount > 0 ? (double) wrongFullMatchCount / expectedFullMatchCount * 100.0 : 0.0;
         double partialNoneCorrectPct = expectedPartialOrNoneCount > 0 ? (double) correctPartialOrNoneCount / expectedPartialOrNoneCount * 100.0 : 100.0;
         double factAccuracyPct = totalExpectedFacts > 0 ? (double) matchedFactsCount / totalExpectedFacts * 100.0 : 100.0;
         double paraCoveragePct = totalExpectedParas > 0 ? (double) coveredParasCount / totalExpectedParas * 100.0 : 100.0;
-        double cacheHitRatePct = totalCalls > 1 ? (double) cacheHitCalls / (totalCalls - 1) * 100.0 : 0.0;
+        double cacheHitRatePct = successfulCalls > 1 ? (double) cacheHitCalls / (successfulCalls - 1) * 100.0 : 0.0;
 
         System.out.println("=== MATCHING EVALUATION BENCHMARK METRICS ===");
-        System.out.printf("Total Notices Evaluated: %d%n", totalNotices);
+        System.out.printf("Total Notices Evaluated: %d (Files Count: %d)%n", totalNotices, noticeList.size());
+        System.out.printf("Successful Calls: %d | Errors/Failures: %d%n", successfulCalls, errorCallsCount);
+        System.out.printf("Multi-Issue Full Matches (multi_full): %d%n", multiFullMatchCount);
         System.out.printf("Wrong Full-Match Rate: %.2f%%%n", wrongFullMatchRate);
         System.out.printf("Partial/None Correctly Flagged: %.2f%%%n", partialNoneCorrectPct);
         System.out.printf("Fact Accuracy: %.2f%%%n", factAccuracyPct);
@@ -229,6 +263,9 @@ class MatchingEvalRunnerTest {
         summaryReport.put("timestamp", timestamp);
         summaryReport.put("model", matchingModel);
         summaryReport.put("total_notices", totalNotices);
+        summaryReport.put("successful_calls", successfulCalls);
+        summaryReport.put("error_calls", errorCallsCount);
+        summaryReport.put("multi_full_matches", multiFullMatchCount);
         summaryReport.put("wrong_full_match_rate_pct", wrongFullMatchRate);
         summaryReport.put("partial_none_correct_pct", partialNoneCorrectPct);
         summaryReport.put("fact_accuracy_pct", factAccuracyPct);

@@ -1,21 +1,21 @@
 {
   "notice_id": "notice-bench-001",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/MH/2023/101 Dated 15-10-2023\nGSTIN: 27AAACA1234A1Z5 M/s Acme Traders Pvt Ltd\nFY: 2023-24\n\n1. On examination of GSTR-1 and GSTR-3B filings for FY 2023-24, it is observed that Input Tax Credit of Rs. 2,50,000/- claimed in GSTR-3B exceeds GSTR-2A auto-populated reflection by Rs. 1,00,000/-.\n2. You are hereby called upon to show cause why the differential ITC of Rs. 1,00,000/- along with interest under Section 50 should not be demanded under Section 73(1).",
+  "full_ocr_text": "GOVERNMENT OF MAHARASHTRA\nOFFICE OF THE DEPUTY COMMISSIONER OF STATE TAX\nSPECIAL CIRCLE-04, MUMBAI ZONE\n\nShow Cause Notice under Section 73 of the CGST / MGST Act, 2017\nReference No: SCN/MH/2023-24/101\nDate: 15-10-2023\n\nTo,\nM/s Acme Traders Pvt Ltd\nGSTIN: 27AAACA1234A1Z5\nFinancial Year: 2022-23\n\n1. WHEREAS, the undersigned in exercise of powers conferred under Section 73 of the Central Goods and Services Tax Act, 2017 (hereinafter referred to as the Act) has conducted scrutiny of GST returns filed by you for the Financial Year 2022-23.\n\n2. AND WHEREAS, upon detailed examination of self-assessed monthly returns filed in Form GSTR-3B against the auto-populated static statement Form GSTR-2B for the period April 2022 to March 2023, significant discrepancies were observed in Input Tax Credit (ITC) claims.\n\n3. IT IS OBSERVED that total Input Tax Credit availed by you in Form GSTR-3B under Table 4(A)(5) for FY 2022-23 amounts to Rs. 2,50,000/-. However, the eligible ITC reflected in your GSTR-2B static statement communicated under Section 16(2)(aa) amounts to only Rs. 1,50,000/-, resulting in an excess ineligible ITC claim of Rs. 1,00,000/-.\n\n4. ACCORDINGLY, as per Section 16(2)(aa) read with Rule 36(4) of the CGST Rules 2017, no registered person shall be entitled to avail ITC unless the details of invoice or debit note have been communicated in Form GSTR-2B. The excess credit of Rs. 1,00,000/- availed without reflection in GSTR-2B is liable to be disallowed and recovered.\n\n5. NOW THEREFORE, you are hereby called upon to show cause why:\n(a) Input Tax Credit amounting to Rs. 1,00,000/- should not be disallowed and recovered under Section 73(1) of the Act;\n(b) Interest under Section 50 of the Act should not be demanded on the improper ITC availed;\n(c) Penalty under Section 73(9) of the Act should not be imposed.\n\n6. You are directed to file your written reply along with supporting documentary evidence on the GST Portal within 30 days from the date of receipt of this notice, failing which the matter shall be determined ex-parte on the basis of facts available on record.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
       {
         "issue_no": 1,
         "status": "full",
-        "card_ids": ["CARD-001", "CARD-005"],
+        "card_ids": ["CARD-006"],
         "key_facts": {
-          "period": "2023-24",
+          "period": "2022-23",
           "amount": 100000.0,
           "legal_section": "Section 73"
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

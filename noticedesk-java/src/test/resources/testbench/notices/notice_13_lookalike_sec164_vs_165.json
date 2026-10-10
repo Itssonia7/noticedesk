@@ -1,21 +1,21 @@
 {
   "notice_id": "notice-bench-013",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/MH/2023/1313 Dated 25-10-2023\nGSTIN: 27WWWXX9012W1Z8 M/s Western Auto Components\nFY: 2018-19\n\n1. Officer proposes disallowance of ITC of Rs. 3,20,000/- for FY 2018-19 alleging delayed filing of GSTR-3B after 20th October 2019 under Section 16(4).\n2. Taxpayer points out return GSTR-3B was filed on 15th November 2020 before 30th November 2021 cut-off, which is explicitly protected by retrospective statutory relaxation under Section 16(5).",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CENTRAL GOODS AND SERVICES TAX ACT, 2017\nNotice Reference No: SCN/MH/2023/1313 | Date of Notice: 25-10-2023\nGSTIN: 27WWWXX9012W1Z8 | Legal Name: M/s Western Auto Components\nFinancial Year: 2018-19\n\n1. Background & Audit Scrutiny: M/s Western Auto Components (hereinafter referred to as the 'taxable person') holds GST registration under the Maharashtra GST jurisdiction. During statutory audit of financial statements and monthly returns filed for the Financial Year 2018-19, the audit team examined the dates of filing Form GSTR-3B returns vis-a-vis input tax credit claimed under Section 16 of the CGST Act, 2017.\n\n2. Examination of Return Filing Dates & Disallowance: As per Section 16(4) of the CGST Act, 2017, a registered person shall not be entitled to take input tax credit in respect of any invoice or debit note after the due date of furnishing of the return under Section 39 for the month of September following the end of financial year (i.e. 20th October 2019 for FY 2018-19). Examination of portal data shows that the taxpayer filed Form GSTR-3B for October 2018 on 15th November 2020, claiming ITC of Rs. 3,20,000/- long after the statutory cut-off date.\n\n3. Discrepancy & Ineligible ITC Computation Table:\nReturn Period | GSTR-3B Due Date | Actual Filing Date | Ineligible ITC Claimed (Rs.) | CGST (Rs.) | SGST (Rs.) | Total Disallowance (Rs.)\nOctober 2018 | 20-10-2019 | 15-11-2020 | 3,20,000/- | 1,60,000/- | 1,60,000/- | 3,20,000/-\n\n4. Statutory Provisions & Failure: By taking ITC after the statutory deadline prescribed under Section 16(4), the taxable person has contravened the provisions of Section 16(4) read with Rule 36 of the CGST Rules, 2017. The input tax credit amounting to Rs. 3,20,000/- is therefore rendered illegal, irregular, and liable to be recovered under Section 73(1).\n\n5. Tax, Interest & Penalty Proposal: In view of the above contravention, the taxable person is called upon to show cause why ineligible ITC of Rs. 3,20,000/- should not be recovered under Section 73(1), along with interest under Section 50(1) and penalty under Section 73(9) of the CGST Act, 2017.\n\n6. Written Submission & Personal Hearing Directions: The taxable person is required to submit a point-wise reply to this notice within thirty (30) days from the date of receipt. A personal hearing is scheduled on 28-11-2023 at the Office of the Deputy Commissioner of State Tax.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
       {
         "issue_no": 1,
-        "status": "full",
+        "status": "partial",
         "card_ids": ["CARD-004"],
         "key_facts": {
           "period": "2018-19",
           "amount": 320000.0,
-          "legal_section": "Section 16(5)"
+          "legal_section": "Section 16(4)"
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

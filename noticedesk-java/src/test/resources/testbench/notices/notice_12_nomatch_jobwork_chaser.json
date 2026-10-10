@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-012",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 143 OF THE CGST ACT 2017\nNotice Ref: SCN/TN/2023/1212 Dated 08-10-2023\nGSTIN: 33UUUVV5678U1Z4 M/s Precision Tooling Works\nFY: 2022-23\n\n1. Examination of Form GST ITC-04 returns reveals capital goods sent to job worker M/s Alloy Casting Co. were not returned within prescribed period of 3 years under Section 143(1)(b).\n2. Show cause why deemed supply tax demand of Rs. 1,80,000/- should not be raised under Section 143(3).",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 143 READ WITH SECTION 73 OF THE CENTRAL GOODS AND SERVICES TAX ACT, 2017\nNotice Reference No: SCN/TN/2023/1212 | Date of Notice: 08-10-2023\nGSTIN: 33UUUVV5678U1Z4 | Legal Name: M/s Precision Tooling Works\nFinancial Year: 2022-23\n\n1. Background & Verification of Job Work Returns: M/s Precision Tooling Works (hereinafter referred to as the 'taxable person') is registered under the CGST Act, 2017. During the course of departmental verification of quarterly Form GST ITC-04 returns submitted for the Financial Year 2022-23, the proper officer scrutinised the movement of capital goods sent for job work operations under Section 143 of the CGST Act, 2017.\n\n2. Examination of Records & Non-Return of Capital Goods: Inspection of Form GST ITC-04 declarations submitted for Quarter 1 to Quarter 4 of FY 2022-23 revealed that heavy machinery components and capital goods valued at Rs. 10,00,000/- were dispatched under Challan No. JW/2019/88 dated 12-05-2019 to job worker M/s Alloy Casting Co. As per Section 143(1)(b) of the CGST Act, 2017, capital goods sent for job work must be returned to the principal's premises within a period of three (3) years from the date of dispatch.\n\n3. Discrepancy & Deemed Supply Computation Table:\nChallan No & Date | Goods Dispatched | Dispatch Value (Rs.) | Due Date of Return | Status as on 31-03-2023 | Applicable Tax Rate | Tax Demand (Rs.)\nJW/2019/88 dt 12-05-2019 | CNC Machine Components | 10,00,000/- | 12-05-2022 | Not Returned | 18% CGST+SGST | 1,80,000/-\n\n4. Statutory Provisions & Breach: In terms of Section 143(3) of the CGST Act, 2017, where the capital goods sent for job work are not received back by the principal within three years, it shall be deemed that such capital goods were supplied by the principal to the job worker on the day when the said capital goods were sent out. Consequently, tax liability of Rs. 1,80,000/- arises on the deemed supply under Section 9(1) along with mandatory interest under Section 50.\n\n5. Proposed Demand: The taxable person is hereby called upon to show cause why tax amounting to Rs. 1,80,000/- should not be demanded under Section 73(1) of the CGST Act, 2017, along with applicable interest under Section 50(1) and penalty under Section 73(9).\n\n6. Directions for Filing Reply and Personal Hearing: The taxable person is directed to submit a written explanation within thirty (30) days from the receipt of this notice, failing which the demand will be adjudicated ex-parte based on available records.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-009",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/MH/2023/909 Dated 01-11-2023\nGSTIN: 27OOOPP3456O1Z2 M/s TransWorld Polymers\nFY: 2022-23\n\n1. Proper officer proposes disallowance of IGST credit of Rs. 2,80,000/- on imported raw chemical compounds claiming difference between customs bill of entry valuation and GST ledger reflection.\n2. Taxpayer contends IGST was assessed and cleared at customs port under ICEGATE bill of entry.",
+  "full_ocr_text": "GOVERNMENT OF MAHARASHTRA\nOFFICE OF THE JOINT COMMISSIONER OF STATE TAX\nLARGE TAXPAYERS UNIT, MUMBAI\n\nShow Cause Notice under Section 73 of the CGST / MGST Act, 2017\nReference No: SCN/MH/2023-24/909\nDate: 01-11-2023\n\nTo,\nM/s TransWorld Polymers\nGSTIN: 27OOOPP3456O1Z2\nFinancial Year: 2022-23\n\n1. WHEREAS, scrutiny of IGST credit availed by you in Form GSTR-3B for FY 2022-23 was conducted by comparing electronic customs portal ICEGATE data against electronic credit ledger entries.\n\n2. AND WHEREAS, verification revealed that IGST credit of Rs. 2,80,000/- was claimed on imported raw chemical compounds based on bill of entry filings.\n\n3. IT IS OBSERVED that customs re-assessment of import valuation resulted in variance between assessable customs value and IGST ledger reflection under Section 3(7) of the Customs Tariff Act.\n\n4. ACCORDINGLY, the Proper Officer proposes disallowance of differential IGST credit of Rs. 2,80,000/- alleging non-matching of customs ICEGATE valuation records with GSTR-2B reflection.\n\n5. NOW THEREFORE, you are called upon to show cause why:\n(a) Ineligible IGST credit of Rs. 2,80,000/- should not be disallowed and recovered under Section 73(1);\n(b) Applicable interest under Section 50 should not be demanded;\n(c) Penalty under Section 73(9) should not be imposed.\n\n6. You are requested to file your written reply on the GST Portal within 30 days.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

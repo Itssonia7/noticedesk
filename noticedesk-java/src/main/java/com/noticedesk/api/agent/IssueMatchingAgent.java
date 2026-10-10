@@ -170,7 +170,7 @@ public class IssueMatchingAgent {
 
         if (jsonNode == null || validationError != null) {
             log.error("matching_failed_all_attempts noticeId={} error={}", noticeId, validationError);
-            return createFallbackResult("matching_failed", catalogueHash, totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
+            return createFallbackResult("matching_failed", validationError, catalogueHash, totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
         }
 
         // Parse and validate issue cards against catalogue
@@ -251,15 +251,17 @@ public class IssueMatchingAgent {
 
         } catch (Exception e) {
             log.error("matching_parse_failed error={}", e.getMessage(), e);
-            return createFallbackResult("matching_parse_failed", catalogueHash, totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
+            return createFallbackResult("matching_parse_failed", e.getMessage(), catalogueHash, totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
         }
     }
 
-    private MatchingResult createFallbackResult(String flag, String hash, int in, int out, int cRead, int cWrite) {
+    private MatchingResult createFallbackResult(String flag, String errorDetail, String hash, int in, int out, int cRead, int cWrite) {
         MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo(null, null, null, null, null, null, null, null);
-        MatchedIssue fallbackIssue = new MatchedIssue(1, "none", List.of(), "Matching failed or returned invalid output.",
+        String whyMsg = errorDetail != null ? "Matching failed: " + errorDetail : "Matching failed or returned invalid output.";
+        MatchedIssue fallbackIssue = new MatchedIssue(1, "none", List.of(), whyMsg,
                 List.of(), Map.of(), List.of(), List.of(flag));
-        return new MatchingResult(noticeInfo, List.of(fallbackIssue), Map.of(), List.of("matching_failed"),
+        List<String> missing = errorDetail != null ? List.of(flag, errorDetail) : List.of(flag);
+        return new MatchingResult(noticeInfo, List.of(fallbackIssue), Map.of(), missing,
                 List.of(flag), hash, in, out, cRead, cWrite);
     }
 

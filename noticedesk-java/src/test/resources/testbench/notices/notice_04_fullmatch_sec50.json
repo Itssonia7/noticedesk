@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-004",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/GJ/2023/505 Dated 05-09-2023\nGSTIN: 24EEEFF3456E1Z4 M/s Sterling Chemicals\nFY: 2022-23\n\n1. It is noticed that taxpayer delayed payment of tax liability for October 2022 by 45 days. The tax paid was Rs. 6,00,000/- out of which Rs. 5,00,000/- was available in Electronic Credit Ledger and Rs. 1,00,000/- was paid in cash.\n2. The officer calculated interest under Section 50 on the gross liability of Rs. 6,00,000/- amounting to Rs. 45,00,00/- instead of restricting calculation to net cash liability.",
+  "full_ocr_text": "GOVERNMENT OF GUJARAT\nOFFICE OF THE STATE TAX OFFICER\nRANGE-12, AHMEDABAD ZONE\n\nShow Cause Notice under Section 73 of the CGST / GGST Act, 2017\nReference No: SCN/GJ/2023-24/505\nDate: 05-09-2023\n\nTo,\nM/s Sterling Chemicals\nGSTIN: 24EEEFF3456E1Z4\nFinancial Year: 2022-23\n\n1. WHEREAS, scrutiny of GST returns filed by you for FY 2022-23 revealed that there was a delay of 45 days in filing monthly return Form GSTR-3B for October 2022.\n\n2. AND WHEREAS, the total tax liability for October 2022 was Rs. 6,00,000/-, comprising IGST Rs. 3,00,000/-, CGST Rs. 1,50,000/-, and SGST Rs. 1,50,000/-, which was discharged on 04-12-2022 instead of the statutory due date 20-11-2022.\n\n3. IT IS OBSERVED that the Proper Officer computed interest under Section 50(1) of the CGST Act 2017 at the rate of 18% per annum on the gross tax liability of Rs. 6,00,000/-, calculating total interest payable as Rs. 45,000/- for the delay of 45 days.\n\n4. ACCORDINGLY, under Section 50 of the Act read with Rule 88A, any registered person who fails to pay tax within the prescribed period is liable to pay interest on the tax unpaid.\n\n5. NOW THEREFORE, you are called upon to show cause why interest under Section 50 amounting to Rs. 45,00,00/- should not be demanded and recovered from you under Section 73(1) of the Act.\n\n6. You are required to submit your written explanation along with proof of payment within 30 days from the date of service of this notice.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

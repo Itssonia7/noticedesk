@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-002",
   "document_type": "scn_74",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 74 OF THE CGST ACT 2017\nNotice Ref: SCN/DL/2021/740 Dated 20-11-2021\nGSTIN: 07BBBCC5678B1Z2 M/s Zenith Enterprises\nFY: 2020-21\n\n1. It is alleged that the taxpayer suppressed taxable turnover in monthly GSTR-3B returns with intent to evade payment of tax during FY 2020-21.\n2. In view of the deliberate suppression, extended period of limitation under Section 74(1) is invoked proposing demand of tax amounting to Rs. 5,00,000/- along with penalty under Section 74.",
+  "full_ocr_text": "GOVERNMENT OF NATIONAL CAPITAL TERRITORY OF DELHI\nOFFICE OF THE ASSISTANT COMMISSIONER OF STATE TAX\nWARD-68, DELHI GST ZONE\n\nShow Cause Notice under Section 74 of the CGST / DGST Act, 2017\nReference No: SCN/DL/2021-22/740\nDate: 20-11-2021\n\nTo,\nM/s Zenith Enterprises\nGSTIN: 07BBBCC5678B1Z2\nFinancial Year: 2020-21\n\n1. WHEREAS, intelligence was gathered by the Anti-Evasion wing indicating that the registered taxable person M/s Zenith Enterprises engaged in willful suppression of taxable turnover in monthly returns filed for FY 2020-21.\n\n2. AND WHEREAS, inspection of financial ledgers and bank statements revealed that taxable sales turnover of Rs. 28,00,000/- was suppressed and omitted from Form GSTR-3B monthly filings with deliberate intent to evade payment of tax.\n\n3. IT IS ALLEGED that the taxpayer suppressed outward supplies and deliberately failed to declare taxable revenue, thereby evading Goods and Services Tax liability amounting to Rs. 5,00,000/- during the period April 2020 to March 2021.\n\n4. ACCORDINGLY, the improper non-payment of tax is attributable to fraud, willful misstatement, and suppression of facts with intent to evade tax, necessitating the invocation of extended period of limitation under Section 74(1) of the CGST Act 2017.\n\n5. NOW THEREFORE, you are called upon to show cause why:\n(a) Taxable GST demand of Rs. 5,00,000/- should not be determined and recovered under Section 74(1);\n(b) Mandatory interest under Section 50 should not be levied;\n(c) Equivalent penalty equal to 100% of tax demanded should not be imposed under Section 74(1).\n\n6. You are directed to submit your response within 30 days of service of this notice and specify whether a personal hearing is requested.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }

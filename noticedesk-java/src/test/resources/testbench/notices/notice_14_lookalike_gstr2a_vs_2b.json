@@ -1,7 +1,7 @@
 {
   "notice_id": "notice-bench-014",
   "document_type": "scn_73",
-  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CGST ACT 2017\nNotice Ref: SCN/KA/2023/1414 Dated 10-11-2023\nGSTIN: 29YYYZZ3456Y1Z2 M/s Silicon Tech Hardware\nFY: 2022-23\n\n1. Disallowance of ITC of Rs. 2,10,000/- for return period May 2022 under Section 16(2)(aa) based on static statement GSTR-2B generated on 14th June 2022.\n2. Invoices were communicated by vendors in subsequent monthly return periods.",
+  "full_ocr_text": "SHOW CAUSE NOTICE UNDER SECTION 73 OF THE CENTRAL GOODS AND SERVICES TAX ACT, 2017\nNotice Reference No: SCN/KA/2023/1414 | Date of Notice: 10-11-2023\nGSTIN: 29YYYZZ3456Y1Z2 | Legal Name: M/s Silicon Tech Hardware\nFinancial Year: 2022-23\n\n1. Background & Verification of Inward Supplies: M/s Silicon Tech Hardware (hereinafter referred to as the 'taxable person') is registered under Karnataka GST. Verification of monthly returns filed by the taxable person for the Financial Year 2022-23 was conducted by comparing input tax credit claimed in Form GSTR-3B against details communicated in Form GSTR-2B.\n\n2. Examination of Static Statement GSTR-2B & Section 16(2)(aa): Effective from 01-01-2022, clause (aa) to Section 16(2) mandates that ITC can only be availed if the details of the invoice have been furnished by the supplier in Form GSTR-1 and communicated to the registered person in Form GSTR-2B. Scrutiny of May 2022 returns revealed that the taxable person claimed ITC of Rs. 8,50,000/- in GSTR-3B, whereas auto-populated static statement GSTR-2B (generated on 14th June 2022) reflected eligible credit of only Rs. 6,40,000/-, resulting in excess ITC claim of Rs. 2,10,000/-.\n\n3. Discrepancy & Excess ITC Availment Table:\nReturn Period | GSTR-3B ITC Claimed (Rs.) | GSTR-2B Communication (Rs.) | Excess Ineligible ITC (Rs.) | CGST (Rs.) | SGST (Rs.)\nMay 2022 | 8,50,000/- | 6,40,000/- | 2,10,000/- | 1,05,000/- | 1,05,000/-\n\n4. Statutory Violation & Legal Provisions: By claiming ITC of Rs. 2,10,000/- in excess of details communicated in Form GSTR-2B, the taxable person violated Section 16(2)(aa) of the CGST Act, 2017 read with Rule 36(4) of the CGST Rules, 2017. The excess ITC claimed is liable for disallowance and recovery under Section 73(1).\n\n5. Tax Demand, Interest & Penalty Proposal: The taxable person is hereby called upon to show cause why tax of Rs. 2,10,000/- should not be recovered under Section 73(1) of the CGST Act, 2017, along with interest under Section 50(1) and penalty under Section 73(9).\n\n6. Reply Directions & Opportunity of Hearing: The taxable person is required to submit a written reply within thirty (30) days from receipt of this notice, supported by documentary evidence. Failure to reply within the stipulated time will result in ex-parte determination of tax liability.",
   "answer_key": {
     "expected_issues": 1,
     "issues": [
@@ -16,6 +16,6 @@
         }
       }
     ],
-    "para_count": 2
+    "para_count": 6
   }
 }
