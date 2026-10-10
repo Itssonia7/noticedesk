@@ -23,6 +23,8 @@ public class AppProperties {
     private Embedding embedding = new Embedding();
     private String sentryDsn;
     private List<String> allowedOrigins = List.of("http://localhost:3000");
+    private Matching matching = new Matching();
+    private Pricing pricing = new Pricing();
 
     public boolean isDevAuthAllowed() {
         return "development".equals(environment) && "dev".equals(auth.getProvider());
@@ -49,6 +51,7 @@ public class AppProperties {
         private String modelDrafting = "";
         private String modelTriage = "";
         private String modelParsing = "";
+        private String modelMatching = "";
         private String stubDefaultCanned;
 
         @Data
@@ -72,6 +75,25 @@ public class AppProperties {
             private String apiKey;
             private String model = "";
             private double timeoutSeconds = 180.0;
+        }
+    }
+
+    @Data
+    public static class Matching {
+        private boolean allowDraftCards = false;
+    }
+
+    @Data
+    public static class Pricing {
+        private double inrPerUsd = 88.0;
+        private java.util.Map<String, ModelPrice> models = new java.util.HashMap<>();
+
+        @Data
+        public static class ModelPrice {
+            private double inputPerMillion = 0.0;
+            private double outputPerMillion = 0.0;
+            private double cacheReadPerMillion = 0.0;
+            private double cacheWritePerMillion = 0.0;
         }
     }
 
@@ -180,6 +202,7 @@ public class AppProperties {
             case "drafting"   -> llm.modelDrafting;
             case "triage"     -> llm.modelTriage;
             case "parsing"    -> llm.modelParsing;
+            case "matching"   -> llm.modelMatching;
             default         -> "";
         };
         return (override != null && !override.isBlank()) ? override : llm.anthropic.model;

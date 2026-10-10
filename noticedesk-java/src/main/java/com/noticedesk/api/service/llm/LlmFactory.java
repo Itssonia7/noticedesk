@@ -39,7 +39,16 @@ public class LlmFactory {
      */
     public LlmProvider getLlmForAgent(String agentName) {
         String providerName = properties.getLlm().getProviderPrimary();
+        if ("matching".equals(agentName)) {
+            String matchingModel = properties.getLlm().getModelMatching();
+            if (matchingModel == null || matchingModel.isBlank()) {
+                throw new LlmException("LLM_MODEL_MATCHING environment variable or noticedesk.llm.model-matching property is empty");
+            }
+        }
         String model = properties.modelForAgent(agentName, providerName);
+        if ("matching".equals(agentName) && (model == null || model.isBlank())) {
+            throw new LlmException("LLM_MODEL_MATCHING environment variable or noticedesk.llm.model-matching property is empty");
+        }
         return getOrCreate(providerName, model);
     }
 

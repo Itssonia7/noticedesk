@@ -2,6 +2,7 @@ package com.noticedesk.api.workflow;
 
 import com.noticedesk.api.agent.CitationVerificationAgent;
 import com.noticedesk.api.agent.DraftingAgent;
+import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.AuditService;
 import com.noticedesk.api.service.DraftingPipelineResult;
@@ -41,7 +42,9 @@ class PipelineSwitchTest {
         AppProperties props = new AppProperties();
         props.getDrafting().setPipeline("v7");
 
-        V7DraftingPipelineService realV7Service = new V7DraftingPipelineService();
+        V7DraftingPipelineService realV7Service = new V7DraftingPipelineService(
+                Mockito.mock(IssueMatchingAgent.class), Mockito.mock(org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate.class), new com.fasterxml.jackson.databind.ObjectMapper()
+        );
 
         DraftingWorkflow workflow = new DraftingWorkflow(
                 null, Mockito.mock(DraftingAgent.class), Mockito.mock(CitationVerificationAgent.class),

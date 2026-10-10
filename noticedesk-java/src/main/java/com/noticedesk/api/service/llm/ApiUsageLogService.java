@@ -1,10 +1,11 @@
 package com.noticedesk.api.service.llm;
 
+import com.noticedesk.api.config.AppProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -15,69 +16,103 @@ public class ApiUsageLogService {
 
     private static final Logger log = LoggerFactory.getLogger(ApiUsageLogService.class);
     private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final AppProperties properties;
 
-    // Hardcoded exchange rate as requested/assumed
-    private static final BigDecimal USD_TO_INR = new BigDecimal("83.00");
-
-    public ApiUsageLogService(NamedParameterJdbcTemplate jdbcTemplate) {
+    public ApiUsageLogService(NamedParameterJdbcTemplate jdbcTemplate, AppProperties properties) {
         this.jdbcTemplate = jdbcTemplate;
+        this.properties = properties;
     }
 
     public void logUsage(String provider, String model, int inputTokens, int outputTokens) {
+        logUsage(provider, model, inputTokens, outputTokens, 0, 0, "general", null, null);
+    }
+
+    public void logUsage(
+            String provider,
+            String model,
+            int inputTokens,
+            int outputTokens,
+            int cacheReadTokens,
+            int cacheWriteTokens,
+            String step,
+            UUID tenantId,
+            UUID noticeId) {
         try {
-            BigDecimal[] costs = calculateCost(provider, model, inputTokens, outputTokens);
+            BigDecimal[] costs = calculateCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
             BigDecimal costUsd = costs[0];
             BigDecimal costInr = costs[1];
 
-            String sql = "INSERT INTO api_usage_logs (id, provider, model, input_tokens, output_tokens, cost_usd, cost_inr) " +
-                         "VALUES (:id, :provider, :model, :inTokens, :outTokens, :costUsd, :costInr)";
+            String sql = """
+                    INSERT INTO api_usage_logs (
+                        id, tenant_id, notice_id, provider, model, step,
+                        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                        cost_usd, cost_inr
+                    ) VALUES (
+                        :id, :tenantId, :noticeId, :provider, :model, :step,
+                        :inTokens, :outTokens, :cacheReadTokens, :cacheWriteTokens,
+                        :costUsd, :costInr
+                    )
+                    """;
 
             MapSqlParameterSource params = new MapSqlParameterSource()
                     .addValue("id", UUID.randomUUID())
+                    .addValue("tenantId", tenantId != null ? tenantId.toString() : null)
+                    .addValue("noticeId", noticeId != null ? noticeId.toString() : null)
                     .addValue("provider", provider)
                     .addValue("model", model)
+                    .addValue("step", step)
                     .addValue("inTokens", inputTokens)
                     .addValue("outTokens", outputTokens)
+                    .addValue("cacheReadTokens", cacheReadTokens)
+                    .addValue("cacheWriteTokens", cacheWriteTokens)
                     .addValue("costUsd", costUsd)
                     .addValue("costInr", costInr);
 
-            jdbcTemplate.update(sql, params);
-            log.info("Logged API Usage: provider={}, model={}, in={}, out={}, costInr={}", provider, model, inputTokens, outputTokens, costInr);
+            if (jdbcTemplate != null) {
+                jdbcTemplate.update(sql, params);
+            }
+            log.info("Logged API Usage: step={} provider={} model={} in={} out={} cacheRead={} cacheWrite={} costInr={}",
+                    step, provider, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costInr);
         } catch (Exception e) {
-            log.error("Failed to log API usage for provider: {}", provider, e);
+            log.error("Failed to log API usage for model: {}", model, e);
         }
     }
 
-    private BigDecimal[] calculateCost(String provider, String model, int inputTokens, int outputTokens) {
-        BigDecimal costUsd = BigDecimal.ZERO;
-        
-        if ("anthropic".equalsIgnoreCase(provider)) {
-            if (model.contains("opus")) {
-                // $15 / 1M in, $75 / 1M out
-                costUsd = calculate(inputTokens, "15.00").add(calculate(outputTokens, "75.00"));
-            } else if (model.contains("sonnet")) {
-                // $3 / 1M in, $15 / 1M out
-                costUsd = calculate(inputTokens, "3.00").add(calculate(outputTokens, "15.00"));
-            } else if (model.contains("haiku")) {
-                // $0.25 / 1M in, $1.25 / 1M out
-                costUsd = calculate(inputTokens, "0.25").add(calculate(outputTokens, "1.25"));
-            }
-        } else if ("openai".equalsIgnoreCase(provider)) {
-            if (model.contains("gpt-4-turbo") || model.contains("gpt-4o")) {
-                // Approximate: $10 / 1M in, $30 / 1M out
-                costUsd = calculate(inputTokens, "10.00").add(calculate(outputTokens, "30.00"));
-            }
+    public BigDecimal[] calculateCost(String model, int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens) {
+        if (model == null || model.isBlank()) {
+            throw new IllegalStateException("Unconfigured pricing model: null or empty model string");
         }
-        // Add gemini or other providers if needed
 
-        BigDecimal costInr = costUsd.multiply(USD_TO_INR).setScale(4, RoundingMode.HALF_UP);
+        AppProperties.Pricing.ModelPrice modelPrice = null;
+        if (properties != null && properties.getPricing() != null && properties.getPricing().getModels() != null) {
+            modelPrice = properties.getPricing().getModels().get(model.trim());
+        }
+
+        if (modelPrice == null) {
+            throw new IllegalStateException("Unconfigured pricing model: " + model + ". Please configure pricing in application.yml under noticedesk.pricing.models.");
+        }
+
+        double inrRate = (properties != null && properties.getPricing() != null) ? properties.getPricing().getInrPerUsd() : 88.0;
+        BigDecimal rateInr = BigDecimal.valueOf(inrRate);
+
+        BigDecimal inputCost = calculateTokens(inputTokens, modelPrice.getInputPerMillion());
+        BigDecimal outputCost = calculateTokens(outputTokens, modelPrice.getOutputPerMillion());
+        BigDecimal cacheReadCost = calculateTokens(cacheReadTokens, modelPrice.getCacheReadPerMillion());
+        BigDecimal cacheWriteCost = calculateTokens(cacheWriteTokens, modelPrice.getCacheWritePerMillion());
+
+        BigDecimal costUsd = inputCost.add(outputCost).add(cacheReadCost).add(cacheWriteCost);
+        BigDecimal costInr = costUsd.multiply(rateInr).setScale(4, RoundingMode.HALF_UP);
+
         return new BigDecimal[]{costUsd.setScale(6, RoundingMode.HALF_UP), costInr};
     }
 
-    private BigDecimal calculate(int tokens, String pricePerMillionStr) {
-        BigDecimal tokensBd = new BigDecimal(tokens);
-        BigDecimal pricePerMillion = new BigDecimal(pricePerMillionStr);
+    private BigDecimal calculateTokens(int tokens, double pricePerMillion) {
+        if (tokens <= 0 || pricePerMillion <= 0.0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal tokensBd = BigDecimal.valueOf(tokens);
+        BigDecimal priceBd = BigDecimal.valueOf(pricePerMillion);
         BigDecimal million = new BigDecimal("1000000");
-        return tokensBd.multiply(pricePerMillion).divide(million, 6, RoundingMode.HALF_UP);
+        return tokensBd.multiply(priceBd).divide(million, 6, RoundingMode.HALF_UP);
     }
 }

@@ -83,6 +83,7 @@ noticedesk:
     model-drafting: ${LLM_MODEL_DRAFTING:claude-haiku-4-5-20251001}
     model-triage: ${LLM_MODEL_TRIAGE:claude-haiku-4-5-20251001}
     model-parsing: ${LLM_MODEL_PARSING:claude-haiku-4-5-20251001}
+    model-matching: ${LLM_MODEL_MATCHING:}
     stub-default-canned: ${STUB_DEFAULT_CANNED:acme_mh_asmt10}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:}
@@ -98,6 +99,36 @@ noticedesk:
       api-key: ${GEMINI_API_KEY:}
       model: ${GEMINI_MODEL:gemini-3.6-flash}
       timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:180.0}
+  matching:
+    allow-draft-cards: ${ALLOW_DRAFT_CARDS:false}
+  pricing:
+    inr-per-usd: 88.0
+    models:
+      "claude-sonnet-5-5":
+        input-per-million: 3.0
+        output-per-million: 15.0
+        cache-read-per-million: 0.30
+        cache-write-per-million: 3.75
+      "claude-3-5-sonnet-20241022":
+        input-per-million: 3.0
+        output-per-million: 15.0
+        cache-read-per-million: 0.30
+        cache-write-per-million: 3.75
+      "claude-3-5-haiku-20241022":
+        input-per-million: 0.80
+        output-per-million: 4.00
+        cache-read-per-million: 0.08
+        cache-write-per-million: 1.00
+      "claude-haiku-4-5-20251001":
+        input-per-million: 0.80
+        output-per-million: 4.00
+        cache-read-per-million: 0.08
+        cache-write-per-million: 1.00
+      "claude-opus-4-7":
+        input-per-million: 15.0
+        output-per-million: 75.0
+        cache-read-per-million: 1.50
+        cache-write-per-million: 18.75
   ocr:
     provider-primary: ${OCR_PROVIDER_PRIMARY:stub}
     provider-fallback: ${OCR_PROVIDER_FALLBACK:}

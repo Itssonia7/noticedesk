@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-004",
+  "document_type": "scn_73",
+  "full_ocr_text": "SHOW CAUSE NOTICE FOR DISALLOWANCE OF INPUT TAX CREDIT\nNotice Ref: SCN/164/2023/404 Dated 01-12-2023\nGSTIN: 27DDDDD1111D1Z1 M/s Buildcon Infra\nFY: 2018-19\n\n1. It is alleged that taxpayer availed ITC of Rs. 3,20,000/- in GSTR-3B filed for September 2019 return period after statutory deadline under Section 16(4).\n2. Show cause why ITC of Rs. 3,20,000/- should not be recovered under Section 73.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-004"],
+        "key_facts": {
+          "period": "2018-19",
+          "amount": 320000.0,
+          "legal_section": "Section 16(5)"
+        }
+      }
+    ],
+    "para_count": 2
+  }
+}
