@@ -133,6 +133,16 @@ noticedesk:
         output-per-million: 75.0
         cache-read-per-million: 1.50
         cache-write-per-million: 18.75
+      "claude-opus-5-5":
+        input-per-million: 15.0
+        output-per-million: 75.0
+        cache-read-per-million: 1.50
+        cache-write-per-million: 18.75
+      "claude-3-opus-20240229":
+        input-per-million: 15.0
+        output-per-million: 75.0
+        cache-read-per-million: 1.50
+        cache-write-per-million: 18.75
   ocr:
     provider-primary: ${OCR_PROVIDER_PRIMARY:stub}
     provider-fallback: ${OCR_PROVIDER_FALLBACK:}

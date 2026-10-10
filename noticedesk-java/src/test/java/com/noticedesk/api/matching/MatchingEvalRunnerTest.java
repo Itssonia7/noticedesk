@@ -67,8 +67,15 @@ class MatchingEvalRunnerTest {
         p1.setCacheWritePerMillion(3.75);
         pricing.getModels().put(matchingModel, p1);  // rates from the pricing table for the matching model
 
+        org.springframework.jdbc.datasource.DriverManagerDataSource ds = new org.springframework.jdbc.datasource.DriverManagerDataSource();
+        ds.setDriverClassName("org.postgresql.Driver");
+        ds.setUrl("jdbc:postgresql://127.0.0.1:5432/noticedesk_dev");
+        ds.setUsername("noticedesk");
+        ds.setPassword("noticedesk");
+        org.springframework.jdbc.core.JdbcTemplate jdbcTemplate = new org.springframework.jdbc.core.JdbcTemplate(ds);
+
         LlmFactory llmFactory = new LlmFactory(props);
-        CatalogueService catalogueService = new CatalogueService(null, props, objectMapper);
+        CatalogueService catalogueService = new CatalogueService(jdbcTemplate, props, objectMapper);
         ApiUsageLogService usageLogService = new ApiUsageLogService(null, props);
         IssueMatchingAgent agent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, null, objectMapper);
 

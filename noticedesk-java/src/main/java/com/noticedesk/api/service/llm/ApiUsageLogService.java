@@ -52,7 +52,7 @@ public class ApiUsageLogService {
                         input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                         cost_usd, cost_inr
                     ) VALUES (
-                        :id, :tenantId, :noticeId, :provider, :model, :step,
+                        :id, CAST(:tenantId AS UUID), CAST(:noticeId AS UUID), :provider, :model, :step,
                         :inTokens, :outTokens, :cacheReadTokens, :cacheWriteTokens,
                         :costUsd, :costInr
                     )
