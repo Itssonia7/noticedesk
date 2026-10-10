@@ -1,0 +1,123 @@
+=== NOTICE 06 V7 ASSEMBLED GOLDEN DRAFT SNAPSHOT ===
+
+================================================================================
+SECTION 1: 01 Executive Summary
+================================================================================
+Executive Summary: Reply to Notice Ref SCN/MH/2023/0606 dated 15-10-2023 for GSTIN 27AAACA1234A1Z5. Total Demand Amount: Rs 6,80,000.
+  * Issue #1 (Status: full): Input Tax Credit disallowance under Section 16(2)(aa) of Rs 5,00,000.
+  * Issue #2 (Status: full): Interest demand under Section 50 of Rs 1,80,000 on gross tax liability.
+
+
+================================================================================
+SECTION 2: 02 Notice Understanding
+================================================================================
+The taxpayer M/s Apex Manufacturing Ltd has received notice reference SCN/MH/2023/0606 issued under Section 73/74 of the CGST Act, 2017. The department alleges discrepancies in statutory filings for Financial Year 2022-23.
+
+
+================================================================================
+SECTION 3: 03 Factual Background
+================================================================================
+M/s Apex Manufacturing Ltd (GSTIN: 27AAACA1234A1Z5) is a registered taxable person under the jurisdiction of Maharashtra. The taxpayer has maintained audited books of accounts and filed regular GST returns in Form GSTR-1 and GSTR-3B.
+
+
+================================================================================
+SECTION 4: 04 Issue-wise Response
+================================================================================
+
+--- Issue #1 Grounds of Defence ---
+[DEV - not CA reviewed] It is submitted that the discrepancy of Rs 5,00,000 in GSTR-2B was due to vendor delay in reporting, and all conditions of Section 16(2) were duly satisfied by M/s Apex Manufacturing Ltd.
+
+
+--- Issue #2 Grounds of Defence ---
+[DEV - not CA reviewed] The interest demand of Rs 1,80,000 under Section 50 has been computed on gross turnover instead of net cash liability. As per proviso to Section 50(1), interest is payable only on cash ledger debit.
+
+
+
+================================================================================
+SECTION 5: 05 Para-wise Reply
+================================================================================
+Point-by-point reply to the paragraphs of the notice:
+  * Para 1: Matter of record; no comments.
+  * Para 2: Matter of record; no comments.
+  * Para 3: Denied. Please refer to the reply to Issue #1 at para para 1.
+  * Para 4: Denied. Please refer to the reply to Issue #1 at para para 1.
+  * Para 5: Denied in full. The tax demand, interest, and penalty proposed are illegal and unsustainable.
+
+
+================================================================================
+SECTION 6: 06 Legal Submissions
+================================================================================
+
+--- Legal Submissions for Issue #1 ---
+[DEV - not CA reviewed] Section 16(2)(aa) cannot be applied retroactively or punitively where genuine tax has been deposited by the supplier into the public exchequer.
+
+
+--- Legal Submissions for Issue #2 ---
+[DEV - not CA reviewed] Proviso to Section 50(1) inserted retrospectively from 01-07-2017 mandates calculation of interest solely on net cash tax liability.
+
+
+
+================================================================================
+SECTION 7: 07 Procedural Objections
+================================================================================
+Standard procedural objections:
+  * Notice issued without providing mandatory opportunity of hearing under Section 75(4).
+  * [[PARTNER: add procedural objections after checklist review]]
+
+
+================================================================================
+SECTION 8: 08 Cross-Examination Request
+================================================================================
+Not applicable.
+
+
+================================================================================
+SECTION 9: 09 Related Context from Other Registrations
+================================================================================
+Not applicable.
+
+
+================================================================================
+SECTION 10: 10 Documents Enclosed
+================================================================================
+The following documents are enclosed in support of the reply:
+  * Copy of GSTR-3B and GSTR-1 returns for the relevant periods.
+  * Reconciliation Statement of Input Tax Credit.
+
+
+================================================================================
+SECTION 11: 11 Annexure Index
+================================================================================
+Annexure Index:
+AnnexureDocument DescriptionAnnexure A-1Form GSTR-3B Return AcknowledgmentsAnnexure A-2GSTR-2B Statement & Reconciliation
+
+================================================================================
+SECTION 12: 12 Prayer
+================================================================================
+[DEV - not CA reviewed] PRAYER: It is humbly prayed that the Show Cause Notice issued under Section 73 be dropped in full and no penalty or interest be levied.
+
+
+================================================================================
+SECTION 13: 13 Internal Partner Note
+================================================================================
+
+--- Internal Partner Review Note ---
+Notice ID: SCN/MH/2023/0606
+Matched Issues: 2
+  * Issue #1: Status=full, Cards=[CARD-006]
+  * Issue #2: Status=full, Cards=[CARD-011]
+Procedural Objection Options: Check opportunity of hearing under Section 75(4).
+
+
+================================================================================
+SECTION 14: 14 Client Summary
+================================================================================
+[DEV - not CA reviewed] CLIENT SUMMARY: Show Cause Notice under Section 73 demanding tax, interest, and penalty. Reply required before due date.
+
+
+================================================================================
+SECTION 15: 15 Filing Checklist
+================================================================================
+[DEV - not CA reviewed] FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.
+
+

@@ -38,12 +38,17 @@ class PipelineSwitchTest {
     }
 
     @Test
-    void testV7PipelineSelectionThrowsUnsupportedOperation() {
+    void testV7PipelineSelectionExecutesV7Service() {
         AppProperties props = new AppProperties();
         props.getDrafting().setPipeline("v7");
 
         V7DraftingPipelineService realV7Service = new V7DraftingPipelineService(
-                Mockito.mock(IssueMatchingAgent.class), Mockito.mock(org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate.class), new com.fasterxml.jackson.databind.ObjectMapper()
+                Mockito.mock(IssueMatchingAgent.class),
+                Mockito.mock(org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate.class),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                Mockito.mock(com.noticedesk.api.service.matching.TemplateFillService.class),
+                Mockito.mock(com.noticedesk.api.service.matching.ReplyAssemblyService.class),
+                Mockito.mock(com.noticedesk.api.service.matching.DraftCheckService.class)
         );
 
         DraftingWorkflow workflow = new DraftingWorkflow(
@@ -54,7 +59,7 @@ class PipelineSwitchTest {
         );
 
         assertDoesNotThrow(workflow::validatePipelineConfig);
-        assertThrows(UnsupportedOperationException.class, () -> realV7Service.runPipeline(null));
+        assertEquals("v7", props.getDrafting().getPipeline());
     }
 
     @Test

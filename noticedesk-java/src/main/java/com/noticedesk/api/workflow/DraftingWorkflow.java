@@ -49,6 +49,8 @@ public class DraftingWorkflow {
     private final RagStoreService             ragStoreService;
     private final DraftingPipelineService     draftingPipelineService;
     private final V7DraftingPipelineService   v7DraftingPipelineService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.noticedesk.api.service.matching.DraftCheckService draftCheckService;
 
     @PostConstruct
     public void validatePipelineConfig() {
@@ -131,8 +133,9 @@ public class DraftingWorkflow {
                 })
                 .toList();
 
-        // 7. Paragraph → source map (stub: empty for now)
-        List<Map<String, Object>> paragraphToSourceMap = List.of();
+        // 7. Paragraph → source map
+        Object paragraphToSourceMap = (pipelineResult.paragraphSourceMap() != null && !pipelineResult.paragraphSourceMap().isEmpty())
+                ? pipelineResult.paragraphSourceMap() : List.of();
 
         String sectionsJson;
         String citationSummaryJson;
@@ -169,6 +172,11 @@ public class DraftingWorkflow {
                 """,
                 buildDraftParams(draftId, job, nextVersion, generated,
                         sectionsJson, citationSummaryJson, pmapJson));
+
+        // 8b. Rule 3: Insert draft_flags in the same transaction after draft row creation
+        if (pipelineResult.checkResults() != null && !pipelineResult.checkResults().isEmpty() && draftCheckService != null) {
+            draftCheckService.persistDraftFlags(job.tenantId(), job.noticeId(), draftId, pipelineResult.checkResults());
+        }
 
         // 9. INSERT one row per verified citation (including stripped)
         for (VerifiedCitation vc : citations) {

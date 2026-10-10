@@ -1,21 +1,34 @@
 package com.noticedesk.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.noticedesk.api.agent.DraftingAgent;
+import com.noticedesk.api.agent.DraftingAgent.DraftSection;
 import com.noticedesk.api.agent.DraftingAgent.DraftingInput;
+import com.noticedesk.api.agent.DraftingAgent.GeneratedDraft;
 import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
+import com.noticedesk.api.model.matching.DraftCheckResult;
+import com.noticedesk.api.service.matching.DraftCheckService;
+import com.noticedesk.api.service.matching.ReplyAssemblyService;
+import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledReplyResult;
+import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledSection;
+import com.noticedesk.api.service.matching.TemplateFillService;
+import com.noticedesk.api.service.matching.TemplateFillService.FilledTemplateResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
  * Service for Architecture v7 Drafting Pipeline.
- * Stage 1: Runs IssueMatchingAgent, persists issue_matches rows, and halts.
+ * Stage 1: Issue matching & catalog lookup.
+ * Stage 2: Code-based template filling, 15-section reply assembly, deterministic code checks.
  */
 @Service
 @RequiredArgsConstructor
@@ -25,11 +38,14 @@ public class V7DraftingPipelineService {
     private final IssueMatchingAgent issueMatchingAgent;
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
+    private final TemplateFillService templateFillService;
+    private final ReplyAssemblyService replyAssemblyService;
+    private final DraftCheckService draftCheckService;
 
     public DraftingPipelineResult runPipeline(DraftingInput input) {
         log.info("V7DraftingPipelineService starting Stage 1 issue matching execution");
 
-        UUID tenantId = UUID.randomUUID(); // Resolved from context or job
+        UUID tenantId = UUID.randomUUID();
         UUID noticeId = UUID.randomUUID();
         if (input != null && input.notice() != null && input.notice().get("notice_id") != null) {
             try {
@@ -45,7 +61,7 @@ public class V7DraftingPipelineService {
         String fullOcrText = input != null ? input.noticeOcrExcerpt() : "";
         MatchingResult matchingResult = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId);
 
-        // Persist issue_matches rows to database
+        // 1. Persist issue_matches rows to database
         if (jdbc != null && matchingResult != null && matchingResult.issues() != null) {
             for (MatchedIssue issue : matchingResult.issues()) {
                 try {
@@ -75,6 +91,52 @@ public class V7DraftingPipelineService {
         }
 
         log.info("Stage 1 Issue Matching complete: matched {} issues", matchingResult != null ? matchingResult.issues().size() : 0);
-        throw new UnsupportedOperationException("v7 drafting after matching not built yet");
+
+        // 2. Stage 2: Code-based Template Filling
+        List<FilledTemplateResult> filledTemplates = new ArrayList<>();
+        if (matchingResult != null && matchingResult.issues() != null) {
+            for (MatchedIssue issue : matchingResult.issues()) {
+                FilledTemplateResult ft = templateFillService.fillTemplateForIssue(issue, matchingResult.notice(), input);
+                filledTemplates.add(ft);
+            }
+        }
+
+        // 3. Stage 2: 15-Section Reply Assembly
+        AssembledReplyResult assemblyResult = replyAssemblyService.assembleReply(matchingResult, filledTemplates, input, noticeType);
+
+        // 4. Stage 2: Deterministic Code Checks
+        List<DraftCheckResult> checkResults = draftCheckService.runAllChecks(matchingResult, assemblyResult);
+
+        // 5. Construct GeneratedDraft DTO
+        List<DraftSection> draftSections = new ArrayList<>();
+        for (AssembledSection s : assemblyResult.sections()) {
+            draftSections.add(new DraftSection(s.num(), s.title(), s.bodyHtml()));
+        }
+
+        GeneratedDraft generatedDraft = new GeneratedDraft(
+                draftSections,
+                "v7 Stage 2 Assembled Draft",
+                "Firm Standard Disclaimers Apply",
+                "v7-assembled",
+                "none",
+                "formal",
+                matchingResult != null ? matchingResult.outputTokens() : 0,
+                draftSections.size()
+        );
+
+        log.info("Stage 2 Reply Assembly complete: assembled {} sections and executed {} code checks",
+                draftSections.size(), checkResults.size());
+
+        return new DraftingPipelineResult(
+                generatedDraft,
+                List.of(),
+                Map.of("total_citations", 0),
+                0, 0, 0,
+                matchingResult != null ? matchingResult.inputTokens() : 0,
+                matchingResult != null ? matchingResult.outputTokens() : 0,
+                "end_turn",
+                assemblyResult.paragraphSourceMap(),
+                checkResults
+        );
     }
 }
