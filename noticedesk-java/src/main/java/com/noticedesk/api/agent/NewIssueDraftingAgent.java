@@ -8,6 +8,7 @@ import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.llm.LlmProvider;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -72,10 +73,6 @@ public class NewIssueDraftingAgent {
         return generateNewIssueDraft(issue, noticeInfo, fullOcrText, stageName, noticeId, false);
     }
 
-    /**
-     * @param highStakes when true the high-stakes model ({@code LLM_MODEL_HIGH_STAKES}) writes the issue
-     * @return the parsed output, or {@code null} when the model call failed or returned unusable output
-     */
     public NewIssueDraftingResult generateNewIssueDraft(
             MatchedIssue issue,
             MatchedNoticeInfo noticeInfo,
@@ -84,7 +81,27 @@ public class NewIssueDraftingAgent {
             UUID noticeId,
             boolean highStakes
     ) {
+        return generateNewIssueDraft(issue, noticeInfo, fullOcrText, stageName, noticeId, highStakes, null);
+    }
+
+    /**
+     * @param highStakes when true the high-stakes model ({@code LLM_MODEL_HIGH_STAKES}) writes the issue
+     * @param budget     per-notice call/cost limits (null = none)
+     * @return the parsed output, or {@code null} when the model call failed, returned unusable output twice,
+     *         or the budget refused the call
+     */
+    public NewIssueDraftingResult generateNewIssueDraft(
+            MatchedIssue issue,
+            MatchedNoticeInfo noticeInfo,
+            String fullOcrText,
+            String stageName,
+            UUID noticeId,
+            boolean highStakes,
+            NoticeCallBudget budget
+    ) {
         String agentKey = highStakes ? "high_stakes" : "new_issue";
+        // high-stakes issues are written with this agent's prompt by the high-stakes model: log them as such
+        String label = (highStakes ? "HighStakesDraftingAgent" : "NewIssueDraftingAgent") + " issue #" + issue.issueNo();
         String model = properties.getLlm() != null
                 ? (highStakes ? properties.getLlm().getModelHighStakes() : properties.getLlm().getModelNewIssue())
                 : null;
@@ -95,62 +112,72 @@ public class NewIssueDraftingAgent {
 
         String provider = properties.getLlm().getProviderPrimary();
         if ("stub".equalsIgnoreCase(provider) || llmFactory == null) {
-            log.info("NewIssueDraftingAgent running in stub mode for issue {}", issue.issueNo());
+            log.info("{} running in stub mode", label);
             return stubResult(issue);
         }
 
-        Map<String, Object> userPayload = new LinkedHashMap<>();
-        userPayload.put("issue", issue);
-        userPayload.put("notice", noticeInfo);
-        userPayload.put("full_ocr_text", fullOcrText);
-        userPayload.put("stage", stageName);
+        // The notice context is identical for every issue of the notice: sent first as a cacheable block.
+        Map<String, Object> noticeContext = new LinkedHashMap<>();
+        noticeContext.put("notice", noticeInfo);
+        noticeContext.put("stage", stageName);
+        noticeContext.put("full_ocr_text", fullOcrText);
+        Map<String, Object> issuePayload = new LinkedHashMap<>();
+        issuePayload.put("issue", issue);
 
         String systemPrompt = loadPrompt();
-        String userPrompt;
+        String noticePrompt;
+        String issuePrompt;
         try {
-            userPrompt = objectMapper.writeValueAsString(userPayload);
+            noticePrompt = "NOTICE CONTEXT (JSON):\n" + objectMapper.writeValueAsString(noticeContext);
+            issuePrompt = "ISSUE TO ANSWER (JSON):\n" + objectMapper.writeValueAsString(issuePayload);
         } catch (Exception e) {
-            userPrompt = userPayload.toString();
+            noticePrompt = "NOTICE CONTEXT:\n" + noticeContext;
+            issuePrompt = "ISSUE TO ANSWER:\n" + issuePayload;
         }
 
         try {
             LlmProvider llmProvider = llmFactory.getLlmForAgent(agentKey);
-            NewIssueDraftingResult result = WriterCall.run(llmProvider, apiUsageLogService, properties, agentKey, model,
-                    systemPrompt, userPrompt, noticeId, true, "\n\nCRITICAL: Output valid JSON only.",
-                    response -> parseAndSanitize(response.content(), issue.issueNo(),
+            NewIssueDraftingResult result = WriterCall.run(llmProvider, apiUsageLogService, properties, agentKey, label, model,
+                    systemPrompt, noticePrompt, issuePrompt, noticeId, budget,
+                    response -> parseOrThrow(response.content(), issue.issueNo(),
                             response.model() != null ? response.model() : model));
             if (result == null) {
-                log.warn("NewIssueDraftingAgent produced no usable output for issue {}", issue.issueNo());
+                log.warn("{} produced no usable output", label);
             }
             return result;
         } catch (Exception e) {
-            log.error("NewIssueDraftingAgent execution failed for issue {}: {}", issue.issueNo(), e.getMessage());
+            log.error("{} execution failed: {}", label, e.getMessage());
             return null;
         }
     }
 
     NewIssueDraftingResult parseAndSanitize(String json, int issueNo, String model) {
-        if (json == null || json.isBlank()) return null;
         try {
-            Map<String, Object> map = AiOutputParser.readJsonObject(objectMapper, json);
-
-            String sec04 = HtmlSanitizer.sanitize(Objects.toString(map.get("section04_html"), ""));
-            String sec05 = HtmlSanitizer.sanitize(Objects.toString(map.get("section05_html"), ""));
-            String sec06 = HtmlSanitizer.sanitize(Objects.toString(map.get("section06_html"), ""));
-            if (sec04.isBlank() && sec06.isBlank()) {
-                return null;
-            }
-
-            return new NewIssueDraftingResult(issueNo, sec04, sec05, sec06,
-                    AiOutputParser.citations(map),
-                    AiOutputParser.str(map.get("strength_note")),
-                    AiOutputParser.stringList(map, "documents"),
-                    AiOutputParser.str(map.get("summary_line")),
-                    model, PROMPT_VERSION);
-        } catch (Exception e) {
-            log.warn("Failed to parse NewIssueDraftingAgent JSON: {}", e.getMessage());
+            return parseOrThrow(json, issueNo, model);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to parse new-issue writer JSON: {}", e.getMessage());
             return null;
         }
+    }
+
+    /** @throws IllegalArgumentException (short message, no content) when the output is not usable */
+    NewIssueDraftingResult parseOrThrow(String json, int issueNo, String model) {
+        Map<String, Object> map = AiOutputParser.readJsonObject(objectMapper, json);
+
+        String sec04 = HtmlSanitizer.sanitize(Objects.toString(map.get("section04_html"), ""));
+        String sec05 = HtmlSanitizer.sanitize(Objects.toString(map.get("section05_html"), ""));
+        String sec06 = HtmlSanitizer.sanitize(Objects.toString(map.get("section06_html"), ""));
+        if (sec04.isBlank() && sec06.isBlank()) {
+            throw new IllegalArgumentException("section04_html and section06_html are both missing or empty (keys present: "
+                    + new TreeSet<>(map.keySet()) + ")");
+        }
+
+        return new NewIssueDraftingResult(issueNo, sec04, sec05, sec06,
+                AiOutputParser.citations(map),
+                AiOutputParser.str(map.get("strength_note")),
+                AiOutputParser.stringList(map, "documents"),
+                AiOutputParser.str(map.get("summary_line")),
+                model, PROMPT_VERSION);
     }
 
     private NewIssueDraftingResult stubResult(MatchedIssue issue) {

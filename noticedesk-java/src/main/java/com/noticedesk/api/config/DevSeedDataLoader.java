@@ -30,21 +30,18 @@ public class DevSeedDataLoader implements CommandLineRunner {
     public void run(String... args) throws Exception {
         log.info("dev_profile_active: Loading development seed issue cards...");
 
-        File seedFile = new File("seeds/dev/seed_issue_cards_dev.sql");
-        Resource resource;
-        if (seedFile.exists()) {
-            resource = new FileSystemResource(seedFile);
-        } else {
-            resource = new ClassPathResource("seeds/dev/seed_issue_cards_dev.sql");
-        }
-
-        if (resource.exists()) {
-            try (Connection conn = dataSource.getConnection()) {
-                ScriptUtils.executeSqlScript(conn, resource);
-                log.info("dev_profile_active: Successfully loaded 20 development seed issue cards");
+        // issue cards, then the reply / stage templates that reference them
+        for (String path : new String[]{"seeds/dev/seed_issue_cards_dev.sql", "seeds/dev/seed_reply_and_stage_templates_dev.sql"}) {
+            File seedFile = new File(path);
+            Resource resource = seedFile.exists() ? new FileSystemResource(seedFile) : new ClassPathResource(path);
+            if (resource.exists()) {
+                try (Connection conn = dataSource.getConnection()) {
+                    ScriptUtils.executeSqlScript(conn, resource);
+                    log.info("dev_profile_active: loaded {}", path);
+                }
+            } else {
+                log.warn("dev_profile_active: Seed SQL script not found at {}", seedFile.getAbsolutePath());
             }
-        } else {
-            log.warn("dev_profile_active: Seed SQL script not found at {}", seedFile.getAbsolutePath());
         }
     }
 }

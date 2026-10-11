@@ -103,6 +103,15 @@ class V7Stage3GoldenDraftTest {
                         "14", "<p>[DEV - not CA reviewed] CLIENT SUMMARY: {{notice.type}} proposing a demand. Reply required before due date.</p>",
                         "15", "<p>[DEV - not CA reviewed] FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.</p>"),
                 null, null, null));
+        // Same content as seeds/dev/seed_reply_and_stage_templates_dev.sql (stage anti_profiteering)
+        assembly.registerInMemoryStageTemplate(new StageTemplate(
+                "anti_profiteering", 1, LocalDate.of(2017, 7, 1), LocalDate.of(2099, 12, 31), "draft",
+                Map.of(
+                        "08", "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for copies of the investigation report, the computation of the alleged profiteered amount and the material relied upon, and for cross-examination of the persons whose statements are relied upon.</p>",
+                        "12", "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} read with Rule 133 of the CGST Rules, 2017 be dropped; that no amount be held to be profiteered or directed to be deposited in the Consumer Welfare Fund; and that no interest or penalty be imposed. It is further requested that an opportunity of personal hearing be granted before any adverse order is passed.</p>",
+                        "14", "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} alleging that the benefit of a tax rate reduction or input tax credit was not passed on to recipients. Reply required before the due date.</p>",
+                        "15", "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Price lists before and after the rate change 3. Product-wise computation workings 4. Authorisation Letter 5. Document Annexures.</p>"),
+                null, null, null));
     }
 
     // ------------------------------------------------------------------ notice_07: capital goods ITC (partial)
@@ -112,13 +121,16 @@ class V7Stage3GoldenDraftTest {
         NoticeFacts n = loadNotice("notice_07_partial_novel_machinery.json");
         assertEquals("Section 73", n.section());
 
-        // Stage 1 output (mock), facts from the answer key; para map classifies the notice's 6 paragraphs
+        // Stage 1 output (mock), facts from the answer key; para map classifies the notice's 6 paragraphs.
+        // This golden exercises the PARTIAL writer path: Stage 1 is pinned to what the live matcher returned
+        // (partial, CARD-006), although the answer key now expects "none" (no catalogue card covers Rule 46).
         Map<String, List<Integer>> paraMap = Map.of("record", List.of(1), "issue", List.of(2, 3, 4), "demand", List.of(5), "directions", List.of(6));
-        mockStage1(n, paraMap, List.of("2", "3", "4"), "ITC on capital goods disallowed for missing machine serial / chassis numbers on invoices");
+        mockStage1(n, paraMap, List.of("2", "3", "4"), "ITC on capital goods disallowed for missing machine serial / chassis numbers on invoices",
+                "partial", List.of("CARD-006"));
 
         // Partial writer (mock): the GSTR-2B blocks of CARD-006 do not fit, so nothing is anchored to them
         String amt = inr(n.answerIssues().get(0).path("key_facts").path("amount").asDouble());
-        when(partialAgent.generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean()))
+        when(partialAgent.generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any()))
                 .thenReturn(new PartialDraftingResult(
                         List.of(
                                 new PartialSectionAddition(4, null,
@@ -151,7 +163,7 @@ class V7Stage3GoldenDraftTest {
         assertFalse(clientFacing(result).contains("Supplier confirmation certificates"), "unused template's document list must not appear");
         assertTrue(section(result, 10).contains("Purchase tax invoices for the generator units"));
         assertTrue(section(result, 14).contains("Within 30 days from service"), "the notice says 'from service'");
-        verify(partialAgent).generatePartialDrafting(argThat(i -> i.issueNo() == 1), any(), argThat(t -> t != null && "TPL-006".equals(t.templateId())), eq("scn_73"), any(), eq(false));
+        verify(partialAgent).generatePartialDrafting(argThat(i -> i.issueNo() == 1), any(), argThat(t -> t != null && "TPL-006".equals(t.templateId())), eq("scn_73"), any(), eq(false), any());
         verifyNoInteractions(newIssueAgent);
 
         compareOrUpdate("notice_07_v7_assembled_golden.txt", text);
@@ -168,7 +180,7 @@ class V7Stage3GoldenDraftTest {
         mockStage1(n, paraMap, List.of("1", "3", "4"), "Alleged failure to pass on GST rate reduction on televisions (Section 171)");
 
         String amt = inr(n.answerIssues().get(0).path("key_facts").path("amount").asDouble());
-        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean()))
+        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any()))
                 .thenReturn(new NewIssueDraftingResult(1,
                         "<p>The Noticee denies that it has profiteered within the meaning of Section 171 of the CGST Act, 2017. The notice alleges that the base selling price of television units was increased simultaneously with the reduction of the GST rate on smart televisions from 28% to 18% effective 15-11-2017, keeping the MRP unchanged. Section 171(1) requires that a reduction in the rate of tax be passed on by way of a commensurate reduction in prices; it does not bar price revisions made for independent commercial reasons.</p>"
                                 + "<p>The notice is issued for Financial Year " + n.financialYear() + ", whereas the rate reduction relied upon took effect on 15-11-2017. The notice does not state the period over which the profiteered amount of " + amt + " was computed, nor the method of computation. The Noticee requests a copy of the DGAP investigation report and the computation, to the extent not already supplied.</p>"
@@ -211,8 +223,11 @@ class V7Stage3GoldenDraftTest {
         assertTrue(section(result, 13).contains("defence is weak"));
         assertEquals("VERIFIED", result.citations().get(0).status());
         assertEquals(1, result.aiIssueSections().size());
-        // Stage template scn_73 (document_type in the JSON) does not match a Section 171 notice -> block flag
-        assertFalse(check(result, "CHECK_PROCEEDING_CONSISTENT").passed());
+        // triage says scn_73, but the notice is under Section 171: the anti_profiteering stage template is used
+        assertTrue(check(result, "CHECK_PROCEEDING_CONSISTENT").passed(), check(result, "CHECK_PROCEEDING_CONSISTENT").details().toString());
+        assertTrue(section(result, 13).contains("Stage template: anti_profiteering"));
+        assertTrue(section(result, 12).contains("Rule 133"));
+        verify(newIssueAgent).generateNewIssueDraft(any(), any(), anyString(), eq("anti_profiteering"), any(), eq(false), any());
 
         compareOrUpdate("notice_10_v7_assembled_golden.txt", text);
     }
@@ -251,6 +266,12 @@ class V7Stage3GoldenDraftTest {
     }
 
     private void mockStage1(NoticeFacts n, Map<String, List<Integer>> paraMap, List<String> issueParas, String why) {
+        mockStage1(n, paraMap, issueParas, why, null, null);
+    }
+
+    /** {@code status}/{@code cards} (when not null) replace the answer key's match for every issue. */
+    private void mockStage1(NoticeFacts n, Map<String, List<Integer>> paraMap, List<String> issueParas, String why,
+                            String status, List<String> cardsOverride) {
         assertEquals(n.paraCount(), paraMap.values().stream().flatMap(List::stream).mapToInt(Integer::intValue).max().orElse(0),
                 "para map must cover exactly the notice's paragraphs");
         List<MatchedIssue> issues = new ArrayList<>();
@@ -260,7 +281,8 @@ class V7Stage3GoldenDraftTest {
                     facts.put(e.getKey(), e.getValue().isNumber() ? e.getValue().asDouble() : e.getValue().asText()));
             List<String> cards = new ArrayList<>();
             ai.path("card_ids").forEach(c -> cards.add(c.asText()));
-            issues.add(new MatchedIssue(ai.path("issue_no").asInt(), ai.path("status").asText(), cards, why, List.of(), facts, issueParas, List.of()));
+            issues.add(new MatchedIssue(ai.path("issue_no").asInt(), status != null ? status : ai.path("status").asText(),
+                    cardsOverride != null ? cardsOverride : cards, why, List.of(), facts, issueParas, List.of()));
         }
         MatchedNoticeInfo info = new MatchedNoticeInfo(n.reference(), null, n.date(), n.replyWithin(), n.financialYear(),
                 n.financialYear(), n.totalDemand(), null);

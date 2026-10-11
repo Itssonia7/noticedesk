@@ -373,7 +373,7 @@ public class CitationVerificationAgent {
      * The per-citation status is the only output; the caller edits the HTML.
      */
     public CitationVerificationResult verifyAiCitations(List<RawAiCitation> rawCitations, UUID noticeId) {
-        List<RawAiCitation> raws = rawCitations != null ? rawCitations : List.of();
+        List<RawAiCitation> raws = dedupeCitations(rawCitations);
         List<VerifiedCitation> out = new ArrayList<>();
         List<String> flags = new ArrayList<>();
 
@@ -513,6 +513,64 @@ public class CitationVerificationAgent {
         } catch (Exception e) {
             log.debug("ik_citation_cache write failed: {}", e.getClass().getSimpleName());
         }
+    }
+
+    private static final Pattern STATUTORY_REF = Pattern.compile(
+            "(?i)^\\s*(section|sec\\.?|rule|notification|circular|instruction|order)\\s*(?:no\\.?|number)?\\s*([0-9][0-9A-Za-z()/.\\-]*)");
+    private static final Pattern REPORTER = Pattern.compile(
+            "(?i)[,;]?\\s*(?:[\\[(]\\s*(?:19|20)\\d{2}\\s*[\\])]|\\b(?:19|20)\\d{2}\\s*\\(|\\bAIR\\b|\\(?\\d+\\)?\\s*(?:SCC|GSTL|G\\.S\\.T\\.L|STR|ELT|E\\.L\\.T|taxmann|Centax|TMI)\\b).*$");
+    private static final Pattern VERSUS = Pattern.compile("(?i)\\s+(?:vs?\\.?|versus)\\s+");
+    private static final Set<String> NAME_NOISE = Set.of("m", "s", "ms", "the", "ltd", "limited", "pvt", "private", "p",
+            "co", "company", "corp", "corporation", "inc", "and", "anr", "ors", "others", "another");
+
+    /**
+     * Identity of a citation for de-duplication: case-insensitive party names without reporter citations,
+     * punctuation or company suffixes ("M/s ABC Pvt. Ltd. vs. Union of India, (2023) 5 SCC 1" and
+     * "ABC Private Limited v Union of India" are the same case); for statutory references, the kind
+     * and number ("Notification No. 40/2017-Central Tax" == "notification 40/2017-central tax").
+     */
+    public static String citationIdentity(String name) {
+        if (name == null) return "";
+        String s = name.replace('\u00a0', ' ').trim();
+        Matcher st = STATUTORY_REF.matcher(s);
+        if (st.find()) {
+            String kind = st.group(1).toLowerCase(Locale.ROOT).replace(".", "");
+            if (kind.equals("sec")) kind = "section";
+            return kind + ":" + st.group(2).toLowerCase(Locale.ROOT).replaceAll("[.\\-]+$", "");
+        }
+        s = REPORTER.matcher(s).replaceFirst("");
+        s = VERSUS.matcher(s).replaceAll(" v ");
+        StringBuilder out = new StringBuilder();
+        for (String tok : s.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9 ]", " ").trim().split("\\s+")) {
+            if (tok.isEmpty() || NAME_NOISE.contains(tok)) continue;
+            if (out.length() > 0) out.append(' ');
+            out.append(tok);
+        }
+        return out.toString();
+    }
+
+    /**
+     * Drops repeated citations (same {@link #citationIdentity}), keeping the first and filling its missing
+     * court, year, quote or purpose from the repeats. Order is preserved.
+     */
+    public static List<RawAiCitation> dedupeCitations(List<RawAiCitation> citations) {
+        if (citations == null || citations.isEmpty()) return List.of();
+        Map<String, RawAiCitation> byKey = new LinkedHashMap<>();
+        for (RawAiCitation c : citations) {
+            if (c == null || c.caseName() == null || c.caseName().isBlank()) continue;
+            String key = citationIdentity(c.caseName());
+            RawAiCitation first = byKey.get(key);
+            if (first == null) {
+                byKey.put(key, c);
+            } else {
+                byKey.put(key, new RawAiCitation(first.caseName(),
+                        first.court() != null ? first.court() : c.court(),
+                        first.year() != null ? first.year() : c.year(),
+                        first.quotedText() != null ? first.quotedText() : c.quotedText(),
+                        first.citedFor() != null ? first.citedFor() : c.citedFor()));
+            }
+        }
+        return new ArrayList<>(byKey.values());
     }
 
     private static VerifiedCitation v7Result(RawAiCitation r, String status, String url, String action, String details) {

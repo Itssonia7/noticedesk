@@ -68,6 +68,34 @@ INSERT INTO stage_templates (
         "14": "<p>[DEV - not CA reviewed] CLIENT SUMMARY: {{notice.type}} proposing a demand. Reply required before due date.</p>",
         "15": "<p>[DEV - not CA reviewed] FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.</p>"
     }'::jsonb
+),
+-- Synthetic generic text for development only. DRAFT - partner to review before any real use.
+(
+    'scn_74', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for cross-examination of every person whose statement, report or material is relied upon to allege fraud, wilful misstatement or suppression of facts.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} be dropped in full; that the allegation of fraud, wilful misstatement or suppression of facts be held not established and the extended period of limitation be held not invocable; and that no tax, interest or penalty be demanded. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} alleging fraud or suppression and invoking the extended period. Higher penalty exposure; reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures 5. Request for copies of relied-upon documents and statements.</p>"
+    }'::jsonb
+),
+(
+    'scn_74a', 1, '2024-04-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for cross-examination of every person whose statement, report or material is relied upon in the notice.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} be dropped in full and that no tax, interest or penalty be demanded; in the alternative, that any allegation of fraud, wilful misstatement or suppression of facts be held not established. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} proposing a demand. Reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.</p>"
+    }'::jsonb
+),
+(
+    'anti_profiteering', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for copies of the investigation report, the computation of the alleged profiteered amount and the material relied upon, and for cross-examination of the persons whose statements are relied upon.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} read with Rule 133 of the CGST Rules, 2017 be dropped; that no amount be held to be profiteered or directed to be deposited in the Consumer Welfare Fund; and that no interest or penalty be imposed. It is further requested that an opportunity of personal hearing be granted before any adverse order is passed.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} alleging that the benefit of a tax rate reduction or input tax credit was not passed on to recipients. Reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Price lists before and after the rate change 3. Product-wise computation workings 4. Authorisation Letter 5. Document Annexures.</p>"
+    }'::jsonb
 )
 ON CONFLICT (stage, version) DO UPDATE SET
     sections = EXCLUDED.sections;

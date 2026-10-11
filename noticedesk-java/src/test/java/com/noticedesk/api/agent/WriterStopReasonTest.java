@@ -61,8 +61,11 @@ class WriterStopReasonTest {
         return new LlmResponse(json, MODEL, "anthropic", 1000, 4000, "end_turn", 0, 0);
     }
 
+    /** Stubs both call shapes: with and without the cacheable notice prefix (the new-issue writer uses it). */
     private void stub(LlmResponse first, LlmResponse... rest) {
         Mockito.when(llm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
+                .thenReturn(first, rest);
+        Mockito.when(llm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
                 .thenReturn(first, rest);
     }
 
@@ -74,8 +77,9 @@ class WriterStopReasonTest {
         NewIssueDraftingAgent.NewIssueDraftingResult r = agent.generateNewIssueDraft(issue, notice, "ocr", "scn", UUID.randomUUID());
 
         assertNotNull(r);
-        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(16000), Mockito.eq("medium"), Mockito.eq(true));
-        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(24000), Mockito.eq("medium"), Mockito.eq(true));
+        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.contains("NOTICE CONTEXT"), Mockito.contains("ISSUE TO ANSWER"),
+                Mockito.eq(MODEL), Mockito.eq(16000), Mockito.eq("medium"), Mockito.eq(true));
+        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(24000), Mockito.eq("medium"), Mockito.eq(true));
         Mockito.verify(usage, Mockito.times(2)).logCall(Mockito.any(), Mockito.any(), Mockito.eq("new_issue"), Mockito.anyInt(), Mockito.any(), Mockito.any());
     }
 
@@ -85,7 +89,7 @@ class WriterStopReasonTest {
         NewIssueDraftingAgent agent = new NewIssueDraftingAgent(props, om, usage, factory);
 
         assertNull(agent.generateNewIssueDraft(issue, notice, "ocr", "scn", UUID.randomUUID()));
-        Mockito.verify(llm, Mockito.times(1)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+        Mockito.verify(llm, Mockito.times(1)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
         Mockito.verify(usage, Mockito.times(1)).logCall(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.any());
     }
 
@@ -100,6 +104,50 @@ class WriterStopReasonTest {
         assertEquals(1, r.sections().size());
         Mockito.verify(llm, Mockito.times(2)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq("claude-sonnet-5-5"),
                 Mockito.eq(16000), Mockito.eq("medium"), Mockito.eq(true));
+    }
+
+    @Test
+    void newIssue_invalidJson_oneRetryWithValidationErrorThenStops() {
+        stub(ok("Here is the draft: {\"section04_html\": oops}"), ok("still not json"), ok(NEW_ISSUE_JSON));
+        NewIssueDraftingAgent agent = new NewIssueDraftingAgent(props, om, usage, factory);
+
+        assertNull(agent.generateNewIssueDraft(issue, notice, "ocr", "scn", UUID.randomUUID()));
+
+        org.mockito.ArgumentCaptor<String> prompts = org.mockito.ArgumentCaptor.forClass(String.class);
+        Mockito.verify(llm, Mockito.times(2)).generateWithEffort(Mockito.any(), Mockito.any(), prompts.capture(), Mockito.any(),
+                Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+        assertFalse(prompts.getAllValues().get(0).contains("COULD NOT BE USED"));
+        assertTrue(prompts.getAllValues().get(1).contains("YOUR PREVIOUS RESPONSE COULD NOT BE USED: invalid JSON"));
+    }
+
+    @Test
+    void highStakesIssue_budgetCapStopsFurtherCalls() {
+        stub(ok("not json"), ok("not json"), ok(NEW_ISSUE_JSON));
+        NewIssueDraftingAgent agent = new NewIssueDraftingAgent(props, om, usage, factory);
+        com.noticedesk.api.service.llm.NoticeCallBudget budget =
+                new com.noticedesk.api.service.llm.NoticeCallBudget(1, null, null);   // one high-stakes call per notice
+
+        assertNull(agent.generateNewIssueDraft(issue, notice, "ocr", "scn", UUID.randomUUID(), true, budget));
+        assertNull(agent.generateNewIssueDraft(issue, notice, "ocr", "scn", UUID.randomUUID(), true, budget));
+
+        Mockito.verify(llm, Mockito.times(1)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(),
+                Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+        assertEquals(1, budget.highStakesCalls());
+    }
+
+    @Test
+    void newIssue_fencedJsonWithProseAndUnescapedQuotes_parsedOnFirstCall() {
+        stub(ok("Sure, here it is:\n```json\n{\"section04_html\": \"<p>The so-called \"input\" tax claim.</p>\", "
+                + "\"section05_html\": \"\", \"section06_html\": \"<p>He said \"yes\", then left.</p>\", \"citations\": []}\n```\nDone."));
+        NewIssueDraftingAgent agent = new NewIssueDraftingAgent(props, om, usage, factory);
+
+        NewIssueDraftingAgent.NewIssueDraftingResult r = agent.generateNewIssueDraft(issue, notice, "ocr", "scn", UUID.randomUUID());
+
+        assertNotNull(r);
+        assertTrue(r.section04Html().contains("input"));
+        assertTrue(r.section06Html().contains("then left"));
+        Mockito.verify(llm, Mockito.times(1)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(),
+                Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
     }
 
     @Test

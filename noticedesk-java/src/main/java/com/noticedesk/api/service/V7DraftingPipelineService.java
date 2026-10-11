@@ -19,15 +19,20 @@ import com.noticedesk.api.agent.PartialDraftingAgent;
 import com.noticedesk.api.agent.PartialDraftingAgent.PartialDraftingResult;
 import com.noticedesk.api.agent.PartialDraftingAgent.PartialSectionAddition;
 import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
+import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.model.matching.ReplyTemplate;
+import com.noticedesk.api.service.llm.ApiUsageLogService;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.service.matching.DraftCheckService;
+import com.noticedesk.api.service.matching.PrayerStripper;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AiFragment;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AiIssueContent;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledReplyResult;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledSection;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.HighStakesContent;
+import com.noticedesk.api.service.matching.StageDetector;
 import com.noticedesk.api.service.matching.TemplateFillService;
 import com.noticedesk.api.service.matching.TemplateFillService.FilledTemplateResult;
 import com.noticedesk.api.util.HtmlSanitizer;
@@ -66,6 +71,11 @@ public class V7DraftingPipelineService {
     private final NewIssueDraftingAgent newIssueDraftingAgent;
     private final HighStakesDraftingAgent highStakesDraftingAgent;
     private final CitationVerificationAgent citationVerificationAgent;
+    private final AppProperties properties;
+    private final ApiUsageLogService apiUsageLogService;
+
+    /** Client-facing placeholder for an AI issue the writer could not (or was not allowed to) write. */
+    public static final String AI_FAILED_PLACEHOLDER = "[[PARTNER: AI draft failed — write manually]]";
 
     @Autowired
     public V7DraftingPipelineService(
@@ -78,7 +88,9 @@ public class V7DraftingPipelineService {
             PartialDraftingAgent partialDraftingAgent,
             NewIssueDraftingAgent newIssueDraftingAgent,
             HighStakesDraftingAgent highStakesDraftingAgent,
-            CitationVerificationAgent citationVerificationAgent) {
+            CitationVerificationAgent citationVerificationAgent,
+            AppProperties properties,
+            ApiUsageLogService apiUsageLogService) {
         this.issueMatchingAgent = issueMatchingAgent;
         this.jdbc = jdbc;
         this.objectMapper = objectMapper;
@@ -89,6 +101,24 @@ public class V7DraftingPipelineService {
         this.newIssueDraftingAgent = newIssueDraftingAgent;
         this.highStakesDraftingAgent = highStakesDraftingAgent;
         this.citationVerificationAgent = citationVerificationAgent;
+        this.properties = properties;
+        this.apiUsageLogService = apiUsageLogService;
+    }
+
+    /** No per-notice call/cost limits (tests). */
+    public V7DraftingPipelineService(
+            IssueMatchingAgent issueMatchingAgent,
+            NamedParameterJdbcTemplate jdbc,
+            ObjectMapper objectMapper,
+            TemplateFillService templateFillService,
+            ReplyAssemblyService replyAssemblyService,
+            DraftCheckService draftCheckService,
+            PartialDraftingAgent partialDraftingAgent,
+            NewIssueDraftingAgent newIssueDraftingAgent,
+            HighStakesDraftingAgent highStakesDraftingAgent,
+            CitationVerificationAgent citationVerificationAgent) {
+        this(issueMatchingAgent, jdbc, objectMapper, templateFillService, replyAssemblyService, draftCheckService,
+                partialDraftingAgent, newIssueDraftingAgent, highStakesDraftingAgent, citationVerificationAgent, null, null);
     }
 
     /** Stage 1 + 2 only (no AI writers): partial / unmatched issues keep their [[PENDING_AI]] markers. */
@@ -105,7 +135,19 @@ public class V7DraftingPipelineService {
     /** Stage 3 output of one issue before citation clean-up. */
     private record IssueAiOutput(MatchedIssue issue, String writer, List<AiFragment> fragments, List<RawAiCitation> citations,
                                  List<String> documents, String summaryLine, String strengthNote,
-                                 String model, String promptVersion) {}
+                                 String model, String promptVersion, boolean placeholder) {
+        IssueAiOutput(MatchedIssue issue, String writer, List<AiFragment> fragments, List<RawAiCitation> citations,
+                      List<String> documents, String summaryLine, String strengthNote, String model, String promptVersion) {
+            this(issue, writer, fragments, citations, documents, summaryLine, strengthNote, model, promptVersion, false);
+        }
+
+        /** The issue is left to the partner: a [[PARTNER]] placeholder in sections 04 and 06, no model output. */
+        static IssueAiOutput partnerPlaceholder(MatchedIssue issue) {
+            String p = "<p>" + AI_FAILED_PLACEHOLDER + "</p>";
+            return new IssueAiOutput(issue, "none (AI draft failed)", List.of(new AiFragment(4, null, p), new AiFragment(6, null, p)),
+                    List.of(), List.of(), AI_FAILED_PLACEHOLDER, null, null, null, true);
+        }
+    }
 
     public DraftingPipelineResult runPipeline(DraftingInput input) {
         return runPipeline(input, null, null);
@@ -125,14 +167,25 @@ public class V7DraftingPipelineService {
         }
         if (noticeId == null) noticeId = UUID.randomUUID();
 
-        String noticeType = "scn_73";
-        if (input != null && input.notice() != null && input.notice().get("document_type") != null) {
-            noticeType = input.notice().get("document_type").toString();
+        Object rawSection = input != null && input.notice() != null ? input.notice().get("section") : null;
+        String noticeSectionRaw = rawSection != null && !rawSection.toString().isBlank() ? rawSection.toString().trim() : null;
+        Object triageType = input != null && input.notice() != null ? input.notice().get("document_type") : null;
+        // stage from the notice's own provision (Section 171 / 74 / 74A / 73) before the triage label
+        String noticeType = StageDetector.detect(noticeSectionRaw, triageType != null ? triageType.toString() : null);
+        if (triageType != null && !noticeType.equalsIgnoreCase(triageType.toString())) {
+            log.info("Stage {} chosen from notice section '{}' (triage document_type was {})", noticeType, noticeSectionRaw, triageType);
         }
+
+        NoticeCallBudget budget = NoticeCallBudget.fromProperties(properties, apiUsageLogService);
+        Set<String> stageFlags = new LinkedHashSet<>();
 
         String fullOcrText = input != null && input.noticeOcrExcerpt() != null ? input.noticeOcrExcerpt() : "";
         MatchingResult matchingResult = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId);
         List<MatchedIssue> issues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
+        if (matchingResult != null && properties != null && properties.getLlm() != null) {
+            budget.addCost(properties.getLlm().getModelMatching(), matchingResult.inputTokens(), matchingResult.outputTokens(),
+                    matchingResult.cacheReadTokens(), matchingResult.cacheWriteTokens());
+        }
 
         persistIssueMatches(tenantId, noticeId, issues);
         log.info("Stage 1 Issue Matching complete: matched {} issues", issues.size());
@@ -144,8 +197,6 @@ public class V7DraftingPipelineService {
         }
 
         // ---- Stage 3: AI writers
-        Object rawSection = input != null && input.notice() != null ? input.notice().get("section") : null;
-        String noticeSectionRaw = rawSection != null && !rawSection.toString().isBlank() ? rawSection.toString().trim() : null;
         Double totalDemand = matchingResult != null && matchingResult.notice() != null ? matchingResult.notice().totalDemandAmount() : null;
         boolean highStakes = highStakesDraftingAgent != null
                 && highStakesDraftingAgent.isHighStakesActive(noticeSectionRaw, noticeType, totalDemand);
@@ -160,29 +211,45 @@ public class V7DraftingPipelineService {
             MatchedIssue issue = issues.get(i);
             FilledTemplateResult ft = filledTemplates.get(i);
             if (!ReplyAssemblyService.needsAiWriter(issue, ft)) continue;
-            IssueAiOutput out = runIssueWriter(issue, ft, matchingResult, fullOcrText, noticeType, noticeId, highStakes, notes);
+            IssueAiOutput out = runIssueWriter(issue, ft, matchingResult, fullOcrText, noticeType, noticeId, highStakes, notes,
+                    budget, stageFlags);
             if (out != null) aiOutputs.add(out);
         }
 
         HighStakesResult hsResult = null;
         if (highStakes) {
-            hsResult = highStakesDraftingAgent.generateHighStakesDraft(matchingResult, input, noticeType, noticeId);
-            if (hsResult == null) {
-                notes.add("High-stakes writer returned no usable output; sections 01/03 contain the code-built facts only.");
+            String refusal = budget.refusalReason(NoticeCallBudget.HIGH_STAKES);
+            if (refusal != null) {
+                notes.add("High-stakes sections 01/03 not written (" + refusal + "); they contain the code-built facts only.");
+            } else {
+                hsResult = highStakesDraftingAgent.generateHighStakesDraft(matchingResult, input, noticeType, noticeId, budget);
+                if (hsResult == null) {
+                    notes.add("High-stakes writer returned no usable output; sections 01/03 contain the code-built facts only.");
+                }
             }
         }
 
-        // ---- Stage 3: citation check on every AI citation
-        List<RawAiCitation> allCitations = new ArrayList<>();
-        aiOutputs.forEach(o -> allCitations.addAll(o.citations()));
-        if (hsResult != null && hsResult.citations() != null) allCitations.addAll(hsResult.citations());
+        // ---- Stage 3: citation check on every AI citation (each case / provision once)
+        List<RawAiCitation> rawCitations = new ArrayList<>();
+        aiOutputs.forEach(o -> rawCitations.addAll(o.citations()));
+        if (hsResult != null && hsResult.citations() != null) rawCitations.addAll(hsResult.citations());
+        List<RawAiCitation> allCitations = CitationVerificationAgent.dedupeCitations(rawCitations);
+        if (allCitations.size() < rawCitations.size()) {
+            log.info("AI citations: {} listed, {} after removing duplicates", rawCitations.size(), allCitations.size());
+        }
 
         CitationVerificationResult citationResult = verifyCitations(allCitations, noticeId);
         List<VerifiedCitation> verified = citationResult.citations();
 
-        Set<String> removedNames = new LinkedHashSet<>();
+        Set<String> notFoundIds = new HashSet<>();
         for (VerifiedCitation vc : verified) {
-            if (CitationVerificationAgent.NOT_FOUND.equals(vc.status())) removedNames.add(vc.caseName());
+            if (CitationVerificationAgent.NOT_FOUND.equals(vc.status())) notFoundIds.add(CitationVerificationAgent.citationIdentity(vc.caseName()));
+        }
+        Set<String> removedNames = new LinkedHashSet<>();   // every spelling the writers used for a NOT_FOUND case
+        for (RawAiCitation rc : rawCitations) {
+            if (notFoundIds.contains(CitationVerificationAgent.citationIdentity(rc.caseName()))) removedNames.add(rc.caseName());
+        }
+        for (VerifiedCitation vc : verified) {
             notes.add("Citation " + HtmlSanitizer.sanitize(vc.caseName()) + " (" + Objects.toString(vc.court(), "court not given")
                     + ", " + Objects.toString(vc.year(), "year not given") + "): " + vc.status()
                     + (vc.details() != null ? " - " + HtmlSanitizer.sanitize(vc.details()) : "")
@@ -196,14 +263,27 @@ public class V7DraftingPipelineService {
         List<AiIssueSectionRecord> aiRecords = new ArrayList<>();
         for (IssueAiOutput o : aiOutputs) {
             List<AiFragment> cleaned = new ArrayList<>();
+            int prayerParas = 0;
             for (AiFragment f : o.fragments()) {
                 String html = f.html();
                 for (String name : removedNames) html = CitationVerificationAgent.removeCitationText(html, name);
+                if (f.section() == 4 || f.section() == 6) {
+                    // Section 12 is the only prayer: drop one the writer appended
+                    PrayerStripper.Stripped st = PrayerStripper.stripTrailingPrayer(html);
+                    prayerParas += st.removed();
+                    html = st.html();
+                }
                 html = HtmlSanitizer.sanitize(html);
                 if (!html.isBlank()) cleaned.add(new AiFragment(f.section(), f.afterBlock(), html));
             }
+            if (prayerParas > 0) {
+                stageFlags.add("info:ai_prayer_stripped");
+                notes.add("Issue #" + o.issue().issueNo() + ": " + prayerParas
+                        + " prayer paragraph(s) written by the AI removed; Section 12 is the reply's only prayer.");
+            }
             aiContent.put(o.issue().issueNo(), new AiIssueContent(o.issue().issueNo(), o.writer(), cleaned, o.documents(),
                     o.summaryLine() != null ? HtmlSanitizer.sanitize(stripCitations(o.summaryLine(), removedNames)) : null));
+            if (o.placeholder()) continue;
             aiRecords.add(new AiIssueSectionRecord(o.issue().issueNo(),
                     o.model() != null ? o.model() : "unknown",
                     o.promptVersion() != null ? o.promptVersion() : "unknown",
@@ -229,6 +309,12 @@ public class V7DraftingPipelineService {
         if (!allCitations.isEmpty()) {
             checkResults.addAll(draftCheckService.citationChecks(verified));
         }
+        Set<String> flags = new LinkedHashSet<>(stageFlags);
+        for (FilledTemplateResult ft : filledTemplates) {
+            if (ft != null && ft.flags() != null) flags.addAll(ft.flags());
+        }
+        if (assemblyResult.flags() != null) flags.addAll(assemblyResult.flags());
+        checkResults.addAll(draftCheckService.flagChecks(flags));
 
         List<DraftSection> draftSections = new ArrayList<>();
         String checkHtml = renderCheckResults(checkResults, assemblyResult,
@@ -273,18 +359,48 @@ public class V7DraftingPipelineService {
         );
     }
 
+    /**
+     * Runs the Stage 3 writer for one issue. When the writer fails (twice) or the per-notice budget refuses
+     * the call, the issue gets the [[PARTNER]] placeholder and a block flag; no further call is made for it.
+     * Returns null only when no writer is configured (the [[PENDING_AI]] marker stays).
+     */
     private IssueAiOutput runIssueWriter(MatchedIssue issue, FilledTemplateResult ft, MatchingResult mr, String fullOcrText,
-                                         String stage, UUID noticeId, boolean highStakes, List<String> notes) {
+                                         String stage, UUID noticeId, boolean highStakes, List<String> notes,
+                                         NoticeCallBudget budget, Set<String> flags) {
         boolean partial = "partial".equalsIgnoreCase(issue.status());
-        if (partial && partialDraftingAgent != null) {
+        boolean usePartial = partial && partialDraftingAgent != null;
+        if (!usePartial && newIssueDraftingAgent == null) {
+            return null;
+        }
+        String agentKey = highStakes ? NoticeCallBudget.HIGH_STAKES : usePartial ? "partial_drafting" : "new_issue";
+        String refusal = budget.refusalReason(agentKey);
+        if (refusal != null) {
+            notes.add("Issue #" + issue.issueNo() + ": not sent to the AI writer (" + refusal + "); left to the partner.");
+            flags.add("block:ai_budget_exhausted");
+            return IssueAiOutput.partnerPlaceholder(issue);
+        }
+        IssueAiOutput out = callIssueWriter(issue, ft, mr, fullOcrText, stage, noticeId, highStakes, notes, budget, usePartial);
+        if (out == null) {
+            flags.add("block:ai_draft_failed");
+            return IssueAiOutput.partnerPlaceholder(issue);
+        }
+        return out;
+    }
+
+    private IssueAiOutput callIssueWriter(MatchedIssue issue, FilledTemplateResult ft, MatchingResult mr, String fullOcrText,
+                                          String stage, UUID noticeId, boolean highStakes, List<String> notes,
+                                          NoticeCallBudget budget, boolean usePartial) {
+        if (usePartial) {
             ReplyTemplate template = null;
             if (ft != null && ft.cardId() != null && !"NONE".equals(ft.templateId()) && !"MISSING_PERIOD".equals(ft.templateId())) {
                 Object period = issue.facts() != null ? issue.facts().get("period") : null;
                 template = templateFillService.selectTemplateForCardAndPeriod(ft.cardId(), period != null ? period.toString() : null);
             }
-            PartialDraftingResult r = partialDraftingAgent.generatePartialDrafting(issue, mr.notice(), template, stage, noticeId, highStakes);
+            PartialDraftingResult r = partialDraftingAgent.generatePartialDrafting(issue, mr.notice(), template, stage, noticeId,
+                    highStakes, budget);
             if (r == null || r.sections() == null || r.sections().isEmpty()) {
-                notes.add("Issue #" + issue.issueNo() + ": partial-drafting writer returned no usable output; [[PENDING_AI]] kept.");
+                notes.add("Issue #" + issue.issueNo() + ": " + (highStakes ? "high-stakes" : "partial-drafting")
+                        + " writer returned no usable output; left to the partner (write manually).");
                 return null;
             }
             List<AiFragment> frags = new ArrayList<>();
@@ -299,15 +415,14 @@ public class V7DraftingPipelineService {
                     r.model(), r.promptVersion());
         }
 
-        if (newIssueDraftingAgent == null) {
-            return null;
-        }
         if (!"none".equalsIgnoreCase(issue.status())) {
             notes.add("Issue #" + issue.issueNo() + " (" + issue.status() + "): no usable template, written by the new-issue writer.");
         }
-        NewIssueDraftingResult r = newIssueDraftingAgent.generateNewIssueDraft(issue, mr.notice(), fullOcrText, stage, noticeId, highStakes);
+        NewIssueDraftingResult r = newIssueDraftingAgent.generateNewIssueDraft(issue, mr.notice(), fullOcrText, stage, noticeId,
+                highStakes, budget);
         if (r == null) {
-            notes.add("Issue #" + issue.issueNo() + ": new-issue writer returned no usable output; [[PENDING_AI]] kept.");
+            notes.add("Issue #" + issue.issueNo() + ": " + (highStakes ? "high-stakes" : "new-issue")
+                    + " writer returned no usable output; left to the partner (write manually).");
             return null;
         }
         List<AiFragment> frags = new ArrayList<>();

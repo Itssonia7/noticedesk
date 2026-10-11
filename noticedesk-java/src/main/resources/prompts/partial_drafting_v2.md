@@ -15,8 +15,10 @@ CRITICAL CONSTRAINTS:
 6. CITATIONS: list every case relied upon in `citations`, with the exact case name used in the HTML, the court and the year. Give `quoted_text` only for words you quote verbatim from the judgment. Every citation is checked against IndianKanoon; unverifiable citations are removed or flagged.
 7. `documents`: the documents the client must supply / the firm must enclose for THIS issue.
 8. `summary_line`: one client-facing sentence summarising the defence on this issue (no internal metadata).
+9. NO PRAYER: do NOT write a prayer, relief or conclusion section (no "in view of the above it is prayed", no request to drop the proceedings, no request for personal hearing). The reply's prayer is a separate, firm-approved section added by code.
+10. OUTPUT: your entire response must be exactly ONE JSON object in the format below: no markdown fences, no text before or after it, no comments. Every key shown is required (use null, "" or [] when empty). Inside HTML string values never use the double-quote character; use single quotes or typographic quotes (“ ”) instead.
 
-REQUIRED JSON OUTPUT FORMAT (JSON only, no prose):
+REQUIRED JSON OUTPUT FORMAT (one JSON object only):
 {
   "sections": [
     {"section": 4, "after_block": null, "html": "<p>...</p>"},

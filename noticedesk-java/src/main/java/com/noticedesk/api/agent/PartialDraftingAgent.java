@@ -8,6 +8,7 @@ import com.noticedesk.api.model.matching.ReplyTemplate;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.llm.LlmProvider;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -71,11 +72,6 @@ public class PartialDraftingAgent {
         return generatePartialDrafting(issue, noticeInfo, template, stageName, noticeId, false);
     }
 
-    /**
-     * @param highStakes when true the high-stakes model ({@code LLM_MODEL_HIGH_STAKES}) writes the additions
-     * @return the parsed additions, or {@code null} when the model call failed or returned unusable output
-     *         (the caller keeps the [[PENDING_AI]] marker and raises a block flag)
-     */
     public PartialDraftingResult generatePartialDrafting(
             MatchedIssue issue,
             MatchedNoticeInfo noticeInfo,
@@ -84,7 +80,26 @@ public class PartialDraftingAgent {
             UUID noticeId,
             boolean highStakes
     ) {
+        return generatePartialDrafting(issue, noticeInfo, template, stageName, noticeId, highStakes, null);
+    }
+
+    /**
+     * @param highStakes when true the high-stakes model ({@code LLM_MODEL_HIGH_STAKES}) writes the additions
+     * @param budget     per-notice call/cost limits (null = none)
+     * @return the parsed additions, or {@code null} when the model call failed, returned unusable output
+     *         twice, or the budget refused the call (the caller leaves the issue to the partner)
+     */
+    public PartialDraftingResult generatePartialDrafting(
+            MatchedIssue issue,
+            MatchedNoticeInfo noticeInfo,
+            ReplyTemplate template,
+            String stageName,
+            UUID noticeId,
+            boolean highStakes,
+            NoticeCallBudget budget
+    ) {
         String agentKey = highStakes ? "high_stakes" : "partial_drafting";
+        String label = (highStakes ? "HighStakesDraftingAgent (partial)" : "PartialDraftingAgent") + " issue #" + issue.issueNo();
         String model = properties.getLlm() != null
                 ? (highStakes ? properties.getLlm().getModelHighStakes() : properties.getLlm().getModelPartialDrafting())
                 : null;
@@ -95,7 +110,7 @@ public class PartialDraftingAgent {
 
         String provider = properties.getLlm().getProviderPrimary();
         if ("stub".equalsIgnoreCase(provider) || llmFactory == null) {
-            log.info("PartialDraftingAgent running in stub mode for issue {}", issue.issueNo());
+            log.info("{} running in stub mode", label);
             return stubResult(issue);
         }
 
@@ -116,52 +131,62 @@ public class PartialDraftingAgent {
 
         try {
             LlmProvider llmProvider = llmFactory.getLlmForAgent(agentKey);
-            PartialDraftingResult result = WriterCall.run(llmProvider, apiUsageLogService, properties, agentKey, model,
-                    systemPrompt, userPrompt, noticeId, true, "\n\nCRITICAL: Output valid JSON only.",
-                    response -> parseAndSanitize(response.content(), response.model() != null ? response.model() : model));
+            PartialDraftingResult result = WriterCall.run(llmProvider, apiUsageLogService, properties, agentKey, label, model,
+                    systemPrompt, null, userPrompt, noticeId, budget,
+                    response -> parseOrThrow(response.content(), response.model() != null ? response.model() : model));
             if (result == null) {
-                log.warn("PartialDraftingAgent produced no usable output for issue {}", issue.issueNo());
+                log.warn("{} produced no usable output", label);
             }
             return result;
         } catch (Exception e) {
-            log.error("PartialDraftingAgent execution failed for issue {}: {}", issue.issueNo(), e.getMessage());
+            log.error("{} execution failed: {}", label, e.getMessage());
             return null;
         }
     }
 
     PartialDraftingResult parseAndSanitize(String json, String model) {
-        if (json == null || json.isBlank()) return null;
         try {
-            Map<String, Object> map = AiOutputParser.readJsonObject(objectMapper, json);
+            return parseOrThrow(json, model);
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to parse partial-drafting writer JSON: {}", e.getMessage());
+            return null;
+        }
+    }
 
-            List<PartialSectionAddition> sections = new ArrayList<>();
-            if (map.get("sections") instanceof List<?> secList) {
-                for (Object item : secList) {
-                    if (item instanceof Map<?, ?> m) {
-                        int sec = m.get("section") != null ? Integer.parseInt(m.get("section").toString().trim()) : 4;
-                        String after = AiOutputParser.str(m.get("after_block"));
-                        String html = HtmlSanitizer.sanitize(m.get("html") != null ? m.get("html").toString() : "");
-                        if (!html.isBlank()) {
-                            sections.add(new PartialSectionAddition(sec, after, html));
-                        }
+    /** @throws IllegalArgumentException (short message, no content) when the output is not usable */
+    PartialDraftingResult parseOrThrow(String json, String model) {
+        Map<String, Object> map = AiOutputParser.readJsonObject(objectMapper, json);
+
+        List<PartialSectionAddition> sections = new ArrayList<>();
+        if (map.get("sections") instanceof List<?> secList) {
+            for (Object item : secList) {
+                if (item instanceof Map<?, ?> m) {
+                    int sec;
+                    try {
+                        sec = m.get("section") != null ? Integer.parseInt(m.get("section").toString().trim()) : 4;
+                    } catch (NumberFormatException e) {
+                        throw new IllegalArgumentException("'section' must be the number 4, 5 or 6");
+                    }
+                    String after = AiOutputParser.str(m.get("after_block"));
+                    String html = HtmlSanitizer.sanitize(m.get("html") != null ? m.get("html").toString() : "");
+                    if (!html.isBlank()) {
+                        sections.add(new PartialSectionAddition(sec, after, html));
                     }
                 }
             }
-            if (sections.isEmpty()) {
-                return null;
-            }
-
-            return new PartialDraftingResult(
-                    sections,
-                    AiOutputParser.citations(map),
-                    AiOutputParser.stringList(map, "documents"),
-                    AiOutputParser.str(map.get("summary_line")),
-                    model,
-                    PROMPT_VERSION);
-        } catch (Exception e) {
-            log.warn("Failed to parse PartialDraftingAgent JSON output: {}", e.getMessage());
-            return null;
         }
+        if (sections.isEmpty()) {
+            throw new IllegalArgumentException("'sections' is missing or has no non-empty html (keys present: "
+                    + new TreeSet<>(map.keySet()) + ")");
+        }
+
+        return new PartialDraftingResult(
+                sections,
+                AiOutputParser.citations(map),
+                AiOutputParser.stringList(map, "documents"),
+                AiOutputParser.str(map.get("summary_line")),
+                model,
+                PROMPT_VERSION);
     }
 
     private PartialDraftingResult stubResult(MatchedIssue issue) {

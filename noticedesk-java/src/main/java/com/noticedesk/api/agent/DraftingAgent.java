@@ -145,7 +145,7 @@ public class DraftingAgent {
                        c.entity_type AS client_entity_type,
                        r.registration_type, r.identifier_value, r.state_name,
                        n.notice_id, n.document_type, n.notice_number,
-                       n.din_or_rfn, n.issue_date, n.due_date, n.hearing_date,
+                       n.din_or_rfn, n.issue_date, n.receipt_date, n.due_date, n.hearing_date,
                        n.authority, n.demand_amount, n.lifecycle_status,
                        n.raw_extracted_json,
                        n.source_inbox_id,
@@ -265,6 +265,7 @@ public class DraftingAgent {
         noticeMap.put("notice_number",    row.get("notice_number"));
         noticeMap.put("din_or_rfn",       row.get("din_or_rfn"));
         noticeMap.put("issue_date",       isoDate(row.get("issue_date")));
+        noticeMap.put("receipt_date",     isoDate(row.get("receipt_date")));
         noticeMap.put("due_date",         isoDate(row.get("due_date")));
         noticeMap.put("hearing_date",     isoDate(row.get("hearing_date")));
         noticeMap.put("authority",        row.get("authority"));

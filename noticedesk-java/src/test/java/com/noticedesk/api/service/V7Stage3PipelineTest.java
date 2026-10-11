@@ -25,6 +25,7 @@ import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.model.matching.ReplyTemplate;
 import com.noticedesk.api.model.matching.StageTemplate;
 import com.noticedesk.api.model.matching.TemplateBlock;
+import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.TemplateFillService;
@@ -55,12 +56,15 @@ class V7Stage3PipelineTest {
     private IndianKanoonClient ikClient;
     private AppProperties props;
     private V7DraftingPipelineService pipeline;
+    private final ObjectMapper om = new ObjectMapper();
+    private TemplateFillService fill;
+    private ReplyAssemblyService assembly;
+    private CitationVerificationAgent citationAgent;
 
     @BeforeEach
     void setUp() throws Exception {
-        ObjectMapper om = new ObjectMapper();
-        TemplateFillService fill = new TemplateFillService(null, null, om);
-        ReplyAssemblyService assembly = new ReplyAssemblyService(null, null, om);
+        fill = new TemplateFillService(null, null, om);
+        assembly = new ReplyAssemblyService(null, null, om);
         matchingAgent = mock(IssueMatchingAgent.class);
         partialAgent = mock(PartialDraftingAgent.class);
         newIssueAgent = mock(NewIssueDraftingAgent.class);
@@ -70,7 +74,7 @@ class V7Stage3PipelineTest {
         props = new AppProperties();
         props.getCitation().setIndiankanoonApiToken(TOKEN);
         props.getCitation().setMaxCallsPerDraft(15);
-        CitationVerificationAgent citationAgent = new CitationVerificationAgent(om, props, null, null, ikClient);
+        citationAgent = new CitationVerificationAgent(om, props, null, null, ikClient);
 
         pipeline = new V7DraftingPipelineService(matchingAgent, null, om, fill, assembly, new DraftCheckService(null),
                 partialAgent, newIssueAgent, highStakesAgent, citationAgent);
@@ -99,7 +103,7 @@ class V7Stage3PipelineTest {
                 List.of(), List.of(), "h", 1, 1, 0, 0);
         when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any())).thenReturn(mr);
 
-        when(partialAgent.generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean()))
+        when(partialAgent.generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any()))
                 .thenReturn(new PartialDraftingResult(
                         List.of(new PartialSectionAddition(4, null, "<p>Partial ground relying on Alpha Traders v. State of Gujarat.<script>alert(1)</script></p>"),
                                 new PartialSectionAddition(5, null, "<li><strong>Para 3:</strong> Denied as regards the partial issue.</li>"),
@@ -107,7 +111,7 @@ class V7Stage3PipelineTest {
                         List.of(new RawAiCitation("Alpha Traders v. State of Gujarat", "Gujarat High Court", 2019, null, "point A"),
                                 new RawAiCitation("Ghost Co v. Union of India", "Supreme Court", 2015, null, "point B")),
                         List.of("Partial issue document"), "Partial issue summary.", "test-model-partial", "partial_drafting_v2"));
-        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean()))
+        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any()))
                 .thenReturn(new NewIssueDraftingResult(3,
                         "<p>New issue ground. <a href=\"http://x\">link text</a></p>",
                         "<li><strong>Para 4:</strong> Denied as regards the new issue.</li><li><strong>Para 9:</strong> Para that does not exist.</li>",
@@ -158,12 +162,14 @@ class V7Stage3PipelineTest {
         assertTrue(s04.contains("New issue ground."));
         assertFalse(s04.contains("Template ground B"), "partial template block not anchored by the writer must not be rendered");
 
-        // Para-wise reply: AI paras used, non-existent Para 9 dropped, 5 paras only
+        // Para-wise reply: AI paras used; the AI's Para 9 is beyond the matcher's 5 paragraphs: kept, with a warn flag
         String s05 = section(r, 5);
         assertTrue(s05.contains("Denied as regards the partial issue."));
         assertTrue(s05.contains("Denied as regards the new issue."));
-        assertFalse(s05.contains("Para 9"));
-        assertFalse(s05.contains("Para 6:"));
+        assertTrue(s05.contains("<strong>Para 9:</strong> Para that does not exist."));
+        assertTrue(s05.contains("<strong>Para 6:</strong> [[PARTNER: reply to Para 6"));
+        assertFalse(s05.contains("Para 10:"));
+        assertEquals("warn", check(r, "FLAG_AI_PARA_BEYOND_NOTICE").severity());
         assertTrue(s05.contains("<strong>Para 2:</strong> Denied. Please refer to the reply to Issue #1 at para 4.1."));
 
         // Sanitised AI HTML
@@ -196,8 +202,8 @@ class V7Stage3PipelineTest {
         assertEquals("new_issue", newIssueRow.outputJson().get("writer"));
         assertEquals("pending_review", newIssueRow.status());
 
-        verify(partialAgent).generatePartialDrafting(argThat(i -> i.issueNo() == 2), any(), any(), eq("scn_73"), any(), eq(false));
-        verify(newIssueAgent).generateNewIssueDraft(argThat(i -> i.issueNo() == 3), any(), eq("notice text"), eq("scn_73"), any(), eq(false));
+        verify(partialAgent).generatePartialDrafting(argThat(i -> i.issueNo() == 2), any(), any(), eq("scn_73"), any(), eq(false), any());
+        verify(newIssueAgent).generateNewIssueDraft(argThat(i -> i.issueNo() == 3), any(), eq("notice text"), eq("scn_73"), any(), eq(false), any());
         verify(highStakesAgent, never()).generateHighStakesDraft(any(), any(), any(), any());
     }
 
@@ -248,19 +254,65 @@ class V7Stage3PipelineTest {
     }
 
     @Test
-    void writerFailureKeepsPendingMarkerAsBlockFlag() {
-        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean())).thenReturn(null);
+    void writerFailureLeavesIssueToPartnerWithBlockFlag() {
+        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any())).thenReturn(null);
         DraftingPipelineResult r = pipeline.runPipeline(input("Section 73"));
-        assertTrue(section(r, 4).contains("[[PENDING_AI: Issue 3"));
-        assertFalse(check(r, "CHECK_MARKERS_LIST").passed());
-        assertTrue(section(r, 13).contains("new-issue writer returned no usable output"));
-        assertEquals(1, r.aiIssueSections().size());
+        assertTrue(section(r, 4).contains(V7DraftingPipelineService.AI_FAILED_PLACEHOLDER));
+        assertTrue(section(r, 6).contains(V7DraftingPipelineService.AI_FAILED_PLACEHOLDER));
+        assertFalse(allHtml(r).contains("PENDING_AI"));
+        DraftCheckResult flag = check(r, "FLAG_AI_DRAFT_FAILED");
+        assertFalse(flag.passed());
+        assertEquals("block", flag.severity());
+        assertTrue(section(r, 13).contains("new-issue writer returned no usable output; left to the partner"));
+        assertEquals(1, r.aiIssueSections().size(), "no ai_issue_sections row for the failed issue");
+        verify(newIssueAgent, times(1)).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any());
+    }
+
+    @Test
+    void costCapReachedLeavesRemainingIssuesToPartnerWithoutCalls() {
+        AppProperties props = new AppProperties();
+        props.getLlm().setModelMatching("priced-model");
+        props.getLlm().setMaxCostInrPerNotice(1.0);
+        AppProperties.Pricing.ModelPrice price = new AppProperties.Pricing.ModelPrice();
+        price.setInputPerMillion(1_000_000.0);   // Stage 1 alone costs far more than INR 1
+        props.getPricing().getModels().put("priced-model", price);
+        V7DraftingPipelineService capped = new V7DraftingPipelineService(matchingAgent, null, om, fill, assembly,
+                new DraftCheckService(null), partialAgent, newIssueAgent, highStakesAgent, citationAgent,
+                props, new ApiUsageLogService(null, props));
+
+        DraftingPipelineResult r = capped.runPipeline(input("Section 73"));
+
+        verify(partialAgent, never()).generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any());
+        verify(newIssueAgent, never()).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any());
+        assertEquals("block", check(r, "FLAG_AI_BUDGET_EXHAUSTED").severity());
+        assertTrue(section(r, 4).contains(V7DraftingPipelineService.AI_FAILED_PLACEHOLDER));
+        assertTrue(section(r, 13).contains("per-notice cost cap reached"));
+    }
+
+    @Test
+    void trailingAiPrayerIsStrippedAndCitationsDeduplicated() {
+        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any()))
+                .thenReturn(new NewIssueDraftingResult(3, "<p>New issue ground.</p>", "",
+                        "<p>New issue legal submission.</p><p>In view of the above, it is prayed that the proceedings be dropped.</p>"
+                                + "<p>It is further requested that a personal hearing be granted.</p>",
+                        List.of(new RawAiCitation("Alpha Traders vs. State of Gujarat", "Gujarat High Court", 2019, null, "dup")),
+                        null, List.of(), null, "test-model-new", "new_issue_v2"));
+
+        DraftingPipelineResult r = pipeline.runPipeline(input("Section 73"));
+
+        String s06 = section(r, 6);
+        assertTrue(s06.contains("New issue legal submission."));
+        assertFalse(s06.contains("it is prayed"));
+        assertFalse(s06.contains("personal hearing be granted"));
+        assertEquals("info", check(r, "FLAG_AI_PRAYER_STRIPPED").severity());
+        // "Alpha Traders v. State of Gujarat" (partial writer) and "... vs. ..." (new-issue writer): one citation
+        assertEquals(1, r.citations().stream().filter(c -> c.caseName().startsWith("Alpha Traders")).count());
     }
 
     @Test
     void highStakesModeRoutesWritersAndWritesSections01And03() {
         when(highStakesAgent.isHighStakesActive(eq("Section 74"), anyString(), any())).thenReturn(true);
-        when(highStakesAgent.generateHighStakesDraft(any(), any(), anyString(), any()))
+        when(highStakesAgent.generateHighStakesDraft(any(), any(), anyString(), any(), any()))
                 .thenReturn(new HighStakesResult(true, "<p>High-stakes summary narrative.</p>", "<p>High-stakes background narrative.</p>",
                         List.of(), "test-model-hs", "high_stakes_v1"));
 
@@ -272,21 +324,31 @@ class V7Stage3PipelineTest {
         assertTrue(section(r, 3).contains("High-stakes background narrative."));
         assertTrue(section(r, 3).contains("TESTGSTIN"));
         assertTrue(section(r, 4).contains("Template ground for Test Client Pvt Ltd on Rs 1,00,000."), "template blocks kept verbatim");
-        verify(partialAgent).generatePartialDrafting(any(), any(), any(), anyString(), any(), eq(true));
-        verify(newIssueAgent).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), eq(true));
+        verify(partialAgent).generatePartialDrafting(any(), any(), any(), anyString(), any(), eq(true), any());
+        verify(newIssueAgent).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), eq(true), any());
         assertTrue(section(r, 13).contains("High-stakes mode active"));
     }
 
     @Test
     void prayerAndNoticeUnderstandingUseTheNoticesOwnSection() {
+        assembly.registerInMemoryStageTemplate(new StageTemplate("anti_profiteering", 1, null, null, "active",
+                Map.of("12", "<p>It is prayed to drop the proceedings under {{notice.section}} read with Rule 133.</p>",
+                        "15", "<p>Checklist.</p>"), null, null, null));
         DraftingPipelineResult r = pipeline.runPipeline(input("Section 171"));
         assertTrue(section(r, 2).contains("under Section 171 of the CGST Act, 2017"));
-        assertTrue(section(r, 12).contains("drop the proceedings under Section 171"));
+        assertTrue(section(r, 12).contains("drop the proceedings under Section 171 read with Rule 133"));
         assertFalse(section(r, 2).contains("Section 73"));
         assertFalse(section(r, 12).contains("Section 73"));
-        // stage template scn_73 used for a Section 171 notice -> block flag
-        DraftCheckResult c = check(r, "CHECK_PROCEEDING_CONSISTENT");
-        assertFalse(c.passed());
-        assertEquals("block", c.severity());
+        // triage said scn_73; the Section 171 notice gets the anti_profiteering stage template
+        assertTrue(check(r, "CHECK_PROCEEDING_CONSISTENT").passed());
+        verify(newIssueAgent).generateNewIssueDraft(any(), any(), anyString(), eq("anti_profiteering"), any(), eq(false), any());
+    }
+
+    @Test
+    void missingStageTemplateIsBlockedNotReplacedByScn73() {
+        DraftingPipelineResult r = pipeline.runPipeline(input("Section 74"));   // no scn_74 template registered
+        assertTrue(section(r, 12).contains("[[MISSING: stage template for scn_74]]"));
+        assertFalse(section(r, 12).contains("PRAYER"), "the scn_73 prayer must not be used");
+        assertEquals("block", check(r, "FLAG_STAGE_TEMPLATE_MISSING").severity());
     }
 }

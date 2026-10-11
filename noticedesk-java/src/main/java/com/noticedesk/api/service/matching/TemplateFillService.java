@@ -93,9 +93,10 @@ public class TemplateFillService {
             return createNoTemplateResult(cardId, "No card_id provided for issue #" + issue.issueNo());
         }
 
-        ReplyTemplate template = selectTemplateForCardAndPeriod(cardId, period);
+        TemplateSelection selection = selectTemplate(cardId, period);
+        ReplyTemplate template = selection.template();
         if (template == null) {
-            log.warn("No active template found for card_id={} period={}", cardId, period);
+            log.warn("No active template for card_id={} period={}: {}", cardId, period, selection.reason());
             return createNoTemplateResult(cardId, "no_template_available");
         }
 
@@ -106,6 +107,11 @@ public class TemplateFillService {
         List<SourceMapEntry> sourceMapEntries = new ArrayList<>();
         List<String> allMissingVars = new ArrayList<>();
         List<String> allFlags = new ArrayList<>();
+        if (selection.crossesVersionBoundary()) {
+            log.warn("Issue #{} period {} crosses a template version boundary for card {}; using the version in force on {}",
+                    issue.issueNo(), period, cardId, selection.period().start());
+            allFlags.add(PERIOD_CROSSES_TEMPLATE_VERSION_FLAG);
+        }
 
         int paraCounter = 1;
 
@@ -168,25 +174,65 @@ public class TemplateFillService {
         );
     }
 
-    /**
-     * Selects active/draft template for card matching the issue period.
-     */
+    /** Draft flag (warn) raised when an issue period spans more than one version of its reply template. */
+    public static final String PERIOD_CROSSES_TEMPLATE_VERSION_FLAG = "warn:period_crosses_template_version";
 
+    /**
+     * Result of template version selection.
+     *
+     * @param template               the version in force on the period's start date, or null
+     * @param period                 the normalised period, or null when the text could not be read
+     * @param crossesVersionBoundary true when the period runs past the chosen version (another version
+     *                               applies to part of it)
+     * @param reason                 why no template was chosen (log text only)
+     */
+    public record TemplateSelection(ReplyTemplate template, PeriodNormalizer.Period period,
+                                    boolean crossesVersionBoundary, String reason) {}
+
+    /** Selects the active (or, when allowed, draft) template version for the card that is in force for the period. */
     public ReplyTemplate selectTemplateForCardAndPeriod(String cardId, String period) {
+        return selectTemplate(cardId, period).template();
+    }
+
+    /**
+     * Picks the highest template version whose effective dates contain the START of the issue period
+     * (normalised by {@link PeriodNormalizer}). A period that cannot be read only matches templates with
+     * no effective dates.
+     */
+    public TemplateSelection selectTemplate(String cardId, String period) {
         boolean allowDraft = properties == null || properties.getMatching() == null || properties.getMatching().isAllowDraftCards();
 
         List<ReplyTemplate> candidates = loadTemplatesForCard(cardId, allowDraft);
         if (candidates.isEmpty()) {
-            return null;
+            return new TemplateSelection(null, null, false,
+                    "no " + (allowDraft ? "active or draft" : "active") + " template exists for the card");
         }
 
-        // Filter by effective date matching the period
+        Optional<PeriodNormalizer.Period> parsed = PeriodNormalizer.parse(period);
+        if (parsed.isEmpty()) {
+            for (ReplyTemplate t : candidates) {
+                if (t.effectiveFrom() == null && t.effectiveTo() == null) {
+                    return new TemplateSelection(t, null, false, null);
+                }
+            }
+            return new TemplateSelection(null, null, false, "period could not be normalised");
+        }
+
+        PeriodNormalizer.Period p = parsed.get();
         for (ReplyTemplate t : candidates) {
-            if (isPeriodWithinEffectiveDates(period, t.effectiveFrom(), t.effectiveTo())) {
-                return t;
+            if (inForceOn(t, p.start())) {
+                boolean crosses = (t.effectiveTo() != null && p.end().isAfter(t.effectiveTo()))
+                        || candidates.stream().anyMatch(o -> o != t && o.effectiveFrom() != null
+                                && o.effectiveFrom().isAfter(p.start()) && !o.effectiveFrom().isAfter(p.end()));
+                return new TemplateSelection(t, p, crosses, null);
             }
         }
-        return null;
+        return new TemplateSelection(null, p, false, "no template version in force on " + p.start());
+    }
+
+    private static boolean inForceOn(ReplyTemplate t, LocalDate date) {
+        return (t.effectiveFrom() == null || !date.isBefore(t.effectiveFrom()))
+                && (t.effectiveTo() == null || !date.isAfter(t.effectiveTo()));
     }
 
     private List<ReplyTemplate> loadTemplatesForCard(String cardId, boolean allowDraft) {
@@ -236,49 +282,6 @@ public class TemplateFillService {
 
         list.sort(Comparator.comparingInt(ReplyTemplate::version).reversed());
         return list;
-    }
-
-    private boolean isPeriodWithinEffectiveDates(String period, LocalDate effFrom, LocalDate effTo) {
-        if (effFrom == null && effTo == null) {
-            return true;
-        }
-        // Basic year extraction from period e.g. "2022-23" -> 2022-04-01 to 2023-03-31
-        LocalDate periodStart = parsePeriodStart(period);
-        LocalDate periodEnd = parsePeriodEnd(period);
-
-        if (effFrom != null && periodEnd.isBefore(effFrom)) {
-            return false;
-        }
-        if (effTo != null && periodStart.isAfter(effTo)) {
-            return false;
-        }
-        return true;
-    }
-
-    private LocalDate parsePeriodStart(String period) {
-        if (period == null) return LocalDate.of(2017, 7, 1);
-        if (period.contains("-")) {
-            String[] parts = period.split("-");
-            try {
-                int startYear = Integer.parseInt(parts[0].trim());
-                if (startYear < 100) startYear += 2000;
-                return LocalDate.of(startYear, 4, 1);
-            } catch (Exception ignored) {}
-        }
-        return LocalDate.of(2017, 7, 1);
-    }
-
-    private LocalDate parsePeriodEnd(String period) {
-        if (period == null) return LocalDate.of(2099, 12, 31);
-        if (period.contains("-")) {
-            String[] parts = period.split("-");
-            try {
-                int endYear = Integer.parseInt(parts[parts.length - 1].trim());
-                if (endYear < 100) endYear += 2000;
-                return LocalDate.of(endYear, 3, 31);
-            } catch (Exception ignored) {}
-        }
-        return LocalDate.of(2099, 12, 31);
     }
 
     public record BlockFillResult(String html, List<String> missingVars, List<String> flags) {}
@@ -432,6 +435,7 @@ public class TemplateFillService {
             if (noticeInfo.issueDate() != null) map.put("notice.issue_date", noticeInfo.issueDate());
             if (noticeInfo.replyDueDate() != null) map.put("notice.reply_due_date", noticeInfo.replyDueDate());
             if (noticeInfo.totalDemandAmount() != null) map.put("notice.total_demand_amount", noticeInfo.totalDemandAmount());
+            if (noticeInfo.taxPeriod() != null && !noticeInfo.taxPeriod().isBlank()) map.put("notice.tax_period", noticeInfo.taxPeriod());
         }
 
         // Client / Registration input
@@ -445,7 +449,14 @@ public class TemplateFillService {
                 for (Map.Entry<String, Object> entry : input.notice().entrySet()) {
                     map.put("notice." + entry.getKey(), entry.getValue());
                 }
+                // the client's date of receipt comes from intake (notices.receipt_date), never from the model
+                Object receipt = input.notice().get("receipt_date");
+                if (receipt != null) map.putIfAbsent("notice.date_of_receipt", receipt);
             }
+        }
+        // tax period: matcher notice block first, else the issue's own period
+        if (!map.containsKey("notice.tax_period") && map.get("issue.period") != null) {
+            map.put("notice.tax_period", map.get("issue.period"));
         }
 
         return map;

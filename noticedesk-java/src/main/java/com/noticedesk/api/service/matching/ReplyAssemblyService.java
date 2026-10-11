@@ -37,6 +37,10 @@ public class ReplyAssemblyService {
     private static final Pattern PARA_LI = Pattern.compile(
             "<li>\\s*(?:<(?:strong|b)>)?\\s*Para(?:graph)?\\s*(\\d+)\\s*[:.]?\\s*(?:</(?:strong|b)>)?\\s*[:.\\-–—]?\\s*(.*?)</li>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    /** para_map keys that name a paragraph category (values = notice paragraph numbers). */
+    private static final Set<String> PARA_CATEGORIES = Set.of("record", "issue", "demand", "directions");
+    /** Other para_map keys are notice paragraph numbers ("3", "3.1", "Para 3"; values = issue numbers). */
+    private static final Pattern PARA_KEY = Pattern.compile("(?i)^\\s*(?:para(?:graph)?\\.?\\s*)?(\\d{1,3})\\b");
     private static final Pattern STAGE_PLACEHOLDER = Pattern.compile("\\{\\{\\s*([a-z_.]+)\\s*\\}\\}");
 
     private final JdbcTemplate jdbcTemplate;
@@ -127,7 +131,7 @@ public class ReplyAssemblyService {
         MatchedNoticeInfo noticeInfo = matchingResult != null ? matchingResult.notice() : null;
         List<MatchedIssue> matchedIssues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
 
-        String normalizedStage = stageName != null ? stageName.toLowerCase().trim() : "scn_73";
+        String normalizedStage = stageName != null && !stageName.isBlank() ? stageName.toLowerCase().trim() : StageDetector.UNKNOWN;
         StageTemplate stageTpl = loadStageTemplate(normalizedStage);
 
         Map<Integer, FilledTemplateResult> templateMap = new HashMap<>();
@@ -243,6 +247,11 @@ public class ReplyAssemblyService {
              .append(") is registered under the GST law in the State of ").append(state).append(".</p>");
         sec03.append("<p>Notice reference ").append(noticeRef).append(" dated ").append(noticeDate)
              .append(" pertains to Financial Year ").append(fy).append(".</p>");
+        String taxPeriod = taxPeriod(noticeInfo, input, matchedIssues);
+        String receiptDate = dateOfReceipt(input, matchedIssues);
+        sec03.append("<p>The notice covers the tax period ").append(orMissing(taxPeriod, "tax_period", missingMarkers, assemblyFlags))
+             .append(" and was received by the taxpayer on ").append(orMissing(receiptDate, "date_of_receipt", missingMarkers, assemblyFlags))
+             .append(".</p>");
         if (highStakes != null && highStakes.section03Html() != null && !highStakes.section03Html().isBlank()) {
             sec03.append(highStakes.section03Html());
         }
@@ -252,7 +261,7 @@ public class ReplyAssemblyService {
 
         // ---------------------------------------------------------------- Section 05
         rawSections.add(new AssembledSection(5, "05 Para-wise Reply",
-                buildParaWiseReply(matchingResult, input, matchedIssues, ai, missingMarkers, notes)));
+                buildParaWiseReply(matchingResult, input, matchedIssues, ai, missingMarkers, assemblyFlags, notes)));
 
         // ---------------------------------------------------------------- Section 06
         StringBuilder sec06 = new StringBuilder();
@@ -315,6 +324,8 @@ public class ReplyAssemblyService {
         stageVars.put("notice.notice_number", noticeRef);
         stageVars.put("notice.issue_date", noticeDate);
         stageVars.put("client.legal_name", clientName);
+        stageVars.put("notice.tax_period", taxPeriod);
+        stageVars.put("notice.date_of_receipt", receiptDate);
         String sec12Body = fillStagePlaceholders(
                 getStageSectionOrMissing(stageTpl, "12", normalizedStage, missingMarkers, assemblyFlags), stageVars, missingMarkers);
         rawSections.add(new AssembledSection(12, "12 Prayer", sec12Body));
@@ -371,7 +382,7 @@ public class ReplyAssemblyService {
         rawSections.add(new AssembledSection(13, "13 Internal Partner Note", sec13.toString()));
 
         // ---------------------------------------------------------------- Section 14
-        String formattedDueDate = formatDueDateStr(noticeInfo != null ? noticeInfo.replyDueDate() : null, missingMarkers);
+        String formattedDueDate = formatDueDateStr(noticeInfo != null ? noticeInfo.replyDueDate() : null, receiptDate, missingMarkers);
         StringBuilder sec14 = new StringBuilder();
         sec14.append("<h3>Client Summary</h3>");
         sec14.append("<p><strong>Notice Type:</strong> ").append(formatFullNoticeType(noticeSec)).append("</p>");
@@ -518,21 +529,43 @@ public class ReplyAssemblyService {
 
     // ------------------------------------------------------------------ Section 05
 
+    /**
+     * Section 05. The paragraph count is the largest of: the matcher's para_map (category form
+     * {"issue": [2, 3]} or paragraph form {"3": [1]}), the numbered paragraphs found in the notice text,
+     * and the paragraphs the AI writers replied to. AI replies are never dropped: a reply to a paragraph
+     * beyond what the matcher and the notice text show is printed and raises a warn flag.
+     */
     private String buildParaWiseReply(MatchingResult matchingResult, DraftingAgent.DraftingInput input,
                                       List<MatchedIssue> issues, Map<Integer, AiIssueContent> ai,
-                                      List<String> missingMarkers, List<String> notes) {
+                                      List<String> missingMarkers, List<String> flags, List<String> notes) {
         Map<String, List<Integer>> paraMap = matchingResult != null && matchingResult.paraMap() != null ? matchingResult.paraMap() : Map.of();
 
-        int paraCount = 0;
-        for (List<Integer> list : paraMap.values()) {
-            for (Integer v : list) if (v != null && v > paraCount) paraCount = v;
+        Map<String, Set<Integer>> categories = new HashMap<>();
+        Map<Integer, Set<Integer>> paraToIssues = new TreeMap<>();
+        int matcherMax = 0;
+        for (Map.Entry<String, List<Integer>> e : paraMap.entrySet()) {
+            String key = e.getKey() != null ? e.getKey().trim().toLowerCase() : "";
+            List<Integer> values = e.getValue() != null ? e.getValue() : List.of();
+            if (PARA_CATEGORIES.contains(key)) {
+                for (Integer v : values) {
+                    if (v == null || v < 1) continue;
+                    categories.computeIfAbsent(key, k -> new HashSet<>()).add(v);
+                    matcherMax = Math.max(matcherMax, v);
+                }
+            } else {
+                Matcher km = PARA_KEY.matcher(key);
+                if (km.find()) {
+                    int p = Integer.parseInt(km.group(1));
+                    if (p < 1) continue;
+                    Set<Integer> linked = paraToIssues.computeIfAbsent(p, k -> new TreeSet<>());
+                    for (Integer v : values) if (v != null) linked.add(v);
+                    matcherMax = Math.max(matcherMax, p);
+                }
+            }
         }
-        if (paraCount == 0) {
-            addOnce(missingMarkers, "para_map");
-            return "<p>[[MISSING: para_map]]</p>";
-        }
+        int noticeParas = NoticeParagraphs.count(input != null ? input.noticeOcrExcerpt() : null);
 
-        // AI para replies, keyed by notice paragraph number (only paragraphs that exist in THIS notice)
+        // AI para replies, keyed by notice paragraph number
         Map<Integer, List<String>> aiParaReplies = new TreeMap<>();
         for (MatchedIssue issue : issues) {
             AiIssueContent c = ai.get(issue.issueNo());
@@ -545,10 +578,7 @@ public class ReplyAssemblyService {
                     any = true;
                     int p = Integer.parseInt(m.group(1));
                     String text = m.group(2).trim();
-                    if (p < 1 || p > paraCount) {
-                        notes.add("Issue #" + issue.issueNo() + ": AI para-wise reply for Para " + p
-                                + " ignored (the notice has " + paraCount + " paragraphs).");
-                    } else if (!text.isEmpty()) {
+                    if (p >= 1 && !text.isEmpty()) {
                         aiParaReplies.computeIfAbsent(p, k -> new ArrayList<>()).add(text);
                     }
                 }
@@ -557,11 +587,24 @@ public class ReplyAssemblyService {
                 }
             }
         }
+        int aiMax = aiParaReplies.isEmpty() ? 0 : ((TreeMap<Integer, List<String>>) aiParaReplies).lastKey();
 
-        List<Integer> recordParas = paraMap.getOrDefault("record", List.of());
-        List<Integer> issueParas = paraMap.getOrDefault("issue", List.of());
-        List<Integer> demandParas = paraMap.getOrDefault("demand", List.of());
-        List<Integer> directionParas = paraMap.getOrDefault("directions", List.of());
+        int known = Math.max(matcherMax, noticeParas);
+        int paraCount = Math.max(known, aiMax);
+        if (paraCount == 0) {
+            addOnce(missingMarkers, "para_map");
+            return "<p>[[MISSING: para_map]]</p>";
+        }
+        if (aiMax > known) {
+            addOnce(flags, "warn:ai_para_beyond_notice");
+            notes.add("AI para-wise replies go up to Para " + aiMax + " but the matcher para_map shows " + matcherMax
+                    + " and the notice text " + noticeParas + " numbered paragraphs; all AI replies printed, check the numbering.");
+        }
+
+        Set<Integer> recordParas = categories.getOrDefault("record", Set.of());
+        Set<Integer> issueParas = categories.getOrDefault("issue", Set.of());
+        Set<Integer> demandParas = categories.getOrDefault("demand", Set.of());
+        Set<Integer> directionParas = categories.getOrDefault("directions", Set.of());
 
         StringBuilder sb = new StringBuilder();
         sb.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
@@ -569,6 +612,8 @@ public class ReplyAssemblyService {
             sb.append("<li><strong>Para ").append(p).append(":</strong> ");
             if (aiParaReplies.containsKey(p)) {
                 sb.append(String.join(" ", aiParaReplies.get(p)));
+            } else if (paraToIssues.containsKey(p)) {
+                sb.append(denialWithRefs(issuesByNumber(paraToIssues.get(p), p, issues)));
             } else if (issueParas.contains(p)) {
                 sb.append(denialWithRefs(issuesForPara(p, issues)));
             } else if (demandParas.contains(p)) {
@@ -584,6 +629,15 @@ public class ReplyAssemblyService {
         }
         sb.append("</ol>");
         return sb.toString();
+    }
+
+    /** The matched issues with the given numbers; falls back to {@link #issuesForPara} when none match. */
+    private static List<MatchedIssue> issuesByNumber(Set<Integer> issueNos, int p, List<MatchedIssue> issues) {
+        List<MatchedIssue> hits = new ArrayList<>();
+        for (MatchedIssue issue : issues) {
+            if (issueNos.contains(issue.issueNo())) hits.add(issue);
+        }
+        return hits.isEmpty() ? issuesForPara(p, issues) : hits;
     }
 
     /** Issues whose notice paragraphs include {@code p}; all issues when Stage 1 did not link paragraphs. */
@@ -677,6 +731,45 @@ public class ReplyAssemblyService {
         return String.join("; ", parts);
     }
 
+    /** Tax period: matcher notice block, then the notice record, then the issues' extracted periods. */
+    private static String taxPeriod(MatchedNoticeInfo noticeInfo, DraftingAgent.DraftingInput input, List<MatchedIssue> issues) {
+        if (noticeInfo != null && noticeInfo.taxPeriod() != null && !noticeInfo.taxPeriod().isBlank()
+                && !"null".equalsIgnoreCase(noticeInfo.taxPeriod().trim())) {
+            return noticeInfo.taxPeriod().trim();
+        }
+        Object fromNotice = input != null && input.notice() != null ? input.notice().get("tax_period") : null;
+        if (fromNotice != null && !fromNotice.toString().isBlank()) return fromNotice.toString().trim();
+        Set<String> periods = new LinkedHashSet<>();
+        for (MatchedIssue issue : issues) {
+            Object p = issue.facts() != null ? issue.facts().get("period") : null;
+            if (p != null && !p.toString().isBlank() && !"null".equalsIgnoreCase(p.toString().trim())) periods.add(p.toString().trim());
+        }
+        return periods.isEmpty() ? null : String.join(", ", periods);
+    }
+
+    /** Date the client received the notice: from the notice record (intake/triage) or the issue facts; never inferred. */
+    private static String dateOfReceipt(DraftingAgent.DraftingInput input, List<MatchedIssue> issues) {
+        Map<String, Object> notice = input != null && input.notice() != null ? input.notice() : Map.of();
+        for (String key : List.of("date_of_receipt", "receipt_date")) {
+            Object v = notice.get(key);
+            if (v != null && !v.toString().isBlank()) return formatDateStr(v.toString().trim());
+        }
+        for (MatchedIssue issue : issues) {
+            Object v = issue.facts() != null ? issue.facts().get("date_of_receipt") : null;
+            if (v != null && !v.toString().isBlank() && !"null".equalsIgnoreCase(v.toString().trim())) {
+                return formatDateStr(v.toString().trim());
+            }
+        }
+        return null;
+    }
+
+    private static String orMissing(String value, String field, List<String> missingMarkers, List<String> flags) {
+        if (value != null && !value.isBlank()) return value;
+        addOnce(missingMarkers, field);
+        addOnce(flags, "warn:missing_" + field);
+        return "[[MISSING: " + field + "]]";
+    }
+
     private static String pendingMarker(int issueNo) {
         return "[[PENDING_AI: Issue " + issueNo + " — partial/new, written in Stage 3]]";
     }
@@ -725,9 +818,11 @@ public class ReplyAssemblyService {
                 return val;
             }
         }
+        // no fallback to another proceeding's template: placeholder + block flag
         String missingText = "[[MISSING: stage template for " + stage + "]]";
         addOnce(missingMarkers, missingText);
         addOnce(flags, "missing_stage_template_" + stage);
+        addOnce(flags, "block:stage_template_missing");
         return "<p>" + missingText + "</p>";
     }
 
@@ -815,7 +910,7 @@ public class ReplyAssemblyService {
         return "Notice under " + noticeSec;
     }
 
-    private String formatDueDateStr(String dateStr, List<String> missingMarkers) {
+    private String formatDueDateStr(String dateStr, String receiptDate, List<String> missingMarkers) {
         if (dateStr == null || dateStr.isBlank()) {
             addOnce(missingMarkers, "reply_due_date");
             return "[[MISSING: reply_due_date]]";
@@ -828,6 +923,9 @@ public class ReplyAssemblyService {
         Matcher days = Pattern.compile("(?i)(\\d+)\\s*days?(?:\\s+(?:from|of)\\s+(?:the\\s+)?(?:date\\s+of\\s+)?(service|receipt|issue))?").matcher(trimmed);
         if (days.find()) {
             String event = days.group(2) != null ? days.group(2).toLowerCase() : "receipt";
+            if ("receipt".equals(event) && receiptDate != null) {
+                return "Within " + days.group(1) + " days from receipt (date of receipt: " + receiptDate + ")";
+            }
             addOnce(missingMarkers, "date_of_" + event);
             return "Within " + days.group(1) + " days from " + event + " (date of " + event + ": [[MISSING: date_of_" + event + "]])";
         }

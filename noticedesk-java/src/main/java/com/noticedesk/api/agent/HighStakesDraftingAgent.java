@@ -7,6 +7,7 @@ import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.llm.LlmProvider;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -87,6 +88,17 @@ public class HighStakesDraftingAgent {
             String stageName,
             UUID noticeId
     ) {
+        return generateHighStakesDraft(matchingResult, input, stageName, noticeId, null);
+    }
+
+    /** @param budget per-notice call/cost limits (null = none); a refused call returns {@code null} */
+    public HighStakesResult generateHighStakesDraft(
+            MatchingResult matchingResult,
+            DraftingAgent.DraftingInput input,
+            String stageName,
+            UUID noticeId,
+            NoticeCallBudget budget
+    ) {
         String model = properties.getLlm() != null ? properties.getLlm().getModelHighStakes() : null;
         if (model == null || model.isBlank()) {
             throw new IllegalStateException("LLM_MODEL_HIGH_STAKES is not configured. Set environment variable LLM_MODEL_HIGH_STAKES.");
@@ -114,10 +126,10 @@ public class HighStakesDraftingAgent {
         try {
             String userPrompt = objectMapper.writeValueAsString(payload);
             LlmProvider llmProvider = llmFactory.getLlmForAgent("high_stakes");
-            // retried only after a max_tokens stop; unparseable output keeps the code-built sections
-            return WriterCall.run(llmProvider, apiUsageLogService, properties, "high_stakes", model,
-                    loadPrompt(), userPrompt, noticeId, false, null,
-                    response -> parseAndSanitize(response.content(), response.model() != null ? response.model() : model));
+            // a second failure keeps the code-built sections 01/03
+            return WriterCall.run(llmProvider, apiUsageLogService, properties, "high_stakes",
+                    "HighStakesDraftingAgent sections 01/03", model, loadPrompt(), null, userPrompt, noticeId, budget,
+                    response -> parseOrThrow(response.content(), response.model() != null ? response.model() : model));
         } catch (Exception e) {
             log.error("HighStakesDraftingAgent failed: {}", e.getMessage());
             return null;
@@ -125,16 +137,24 @@ public class HighStakesDraftingAgent {
     }
 
     HighStakesResult parseAndSanitize(String json, String model) {
-        if (json == null || json.isBlank()) return null;
         try {
-            Map<String, Object> map = AiOutputParser.readJsonObject(objectMapper, json);
-            String sec01 = HtmlSanitizer.sanitize(Objects.toString(map.get("section01_html"), ""));
-            String sec03 = HtmlSanitizer.sanitize(Objects.toString(map.get("section03_html"), ""));
-            return new HighStakesResult(true, sec01, sec03, AiOutputParser.citations(map), model, PROMPT_VERSION);
-        } catch (Exception e) {
+            return parseOrThrow(json, model);
+        } catch (IllegalArgumentException e) {
             log.warn("Failed to parse HighStakesDraftingAgent JSON: {}", e.getMessage());
             return null;
         }
+    }
+
+    /** @throws IllegalArgumentException (short message, no content) when the output is not usable */
+    HighStakesResult parseOrThrow(String json, String model) {
+        Map<String, Object> map = AiOutputParser.readJsonObject(objectMapper, json);
+        String sec01 = HtmlSanitizer.sanitize(Objects.toString(map.get("section01_html"), ""));
+        String sec03 = HtmlSanitizer.sanitize(Objects.toString(map.get("section03_html"), ""));
+        if (sec01.isBlank() && sec03.isBlank()) {
+            throw new IllegalArgumentException("section01_html and section03_html are both missing or empty (keys present: "
+                    + new TreeSet<>(map.keySet()) + ")");
+        }
+        return new HighStakesResult(true, sec01, sec03, AiOutputParser.citations(map), model, PROMPT_VERSION);
     }
 
     private HighStakesResult stubResult() {

@@ -115,14 +115,31 @@ public class AnthropicLlmProvider implements LlmProvider {
             int maxOutputTokens,
             String effort,
             boolean cacheSystemPrompt) {
-        return call(systemPrompt, userPrompt, targetModel, maxOutputTokens, 0.0, effort, cacheSystemPrompt);
+        return call(systemPrompt, null, userPrompt, targetModel, maxOutputTokens, 0.0, effort, cacheSystemPrompt);
+    }
+
+    @Override
+    public LlmResponse generateWithEffort(
+            String systemPrompt,
+            String cachedUserPrefix,
+            String userPrompt,
+            String targetModel,
+            int maxOutputTokens,
+            String effort,
+            boolean cacheSystemPrompt) {
+        return call(systemPrompt, cachedUserPrefix, userPrompt, targetModel, maxOutputTokens, 0.0, effort, cacheSystemPrompt);
     }
 
     private LlmResponse call(String systemPrompt, String userPrompt, String targetModel, int maxOutputTokens,
                              double temperature, String effort, boolean cacheSystemPrompt) {
+        return call(systemPrompt, null, userPrompt, targetModel, maxOutputTokens, temperature, effort, cacheSystemPrompt);
+    }
+
+    private LlmResponse call(String systemPrompt, String cachedUserPrefix, String userPrompt, String targetModel,
+                             int maxOutputTokens, double temperature, String effort, boolean cacheSystemPrompt) {
         try {
             String activeModel = (targetModel != null && !targetModel.isBlank()) ? targetModel.trim() : this.model;
-            ObjectNode body = buildRequestBody(systemPrompt, userPrompt, activeModel, maxOutputTokens,
+            ObjectNode body = buildRequestBody(systemPrompt, cachedUserPrefix, userPrompt, activeModel, maxOutputTokens,
                     temperature, effort, cacheSystemPrompt);
 
             String responseBody = restClient.post()
@@ -156,6 +173,15 @@ public class AnthropicLlmProvider implements LlmProvider {
      */
     ObjectNode buildRequestBody(String systemPrompt, String userPrompt, String activeModel, int maxOutputTokens,
                                 double temperature, String effort, boolean cacheSystemPrompt) {
+        return buildRequestBody(systemPrompt, null, userPrompt, activeModel, maxOutputTokens, temperature, effort, cacheSystemPrompt);
+    }
+
+    /**
+     * {@code cachedUserPrefix} (may be null) is sent as the first user content block with
+     * {@code cache_control}, so calls that share it (one per issue of the same notice) read it from cache.
+     */
+    ObjectNode buildRequestBody(String systemPrompt, String cachedUserPrefix, String userPrompt, String activeModel,
+                                int maxOutputTokens, double temperature, String effort, boolean cacheSystemPrompt) {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("model", activeModel);
         body.put("max_tokens", Math.min(maxOutputTokens, maxTokensCeiling));
@@ -176,7 +202,18 @@ public class AnthropicLlmProvider implements LlmProvider {
         ArrayNode messages = body.putArray("messages");
         ObjectNode userMsg = messages.addObject();
         userMsg.put("role", "user");
-        userMsg.put("content", userPrompt);
+        if (cachedUserPrefix != null && !cachedUserPrefix.isBlank()) {
+            ArrayNode content = userMsg.putArray("content");
+            ObjectNode prefixBlock = content.addObject();
+            prefixBlock.put("type", "text");
+            prefixBlock.put("text", cachedUserPrefix);
+            prefixBlock.putObject("cache_control").put("type", "ephemeral");
+            ObjectNode rest = content.addObject();
+            rest.put("type", "text");
+            rest.put("text", userPrompt);
+        } else {
+            userMsg.put("content", userPrompt);
+        }
 
         if (isEffortModel(activeModel)) {
             if (effort != null && !effort.isBlank()) {

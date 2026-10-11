@@ -79,6 +79,22 @@ public class AppProperties {
         private Integer maxTokensHighStakes = 16000;
         private Integer maxTokensHighStakesRetry = 24000;
 
+        /** Per-notice spend cap (INR) across all v7 model calls; once reached, remaining AI issues are left to the partner. */
+        private Double maxCostInrPerNotice = 60.0;
+        /** Per-notice limits for the high-stakes model. */
+        private HighStakesLimits highStakes = new HighStakesLimits();
+        /**
+         * Logs a truncated sample (400 chars) of an unparseable writer response. Off by default: the
+         * response can quote the notice. Enable only for the synthetic test bench.
+         */
+        private boolean debugLogRawOutput = false;
+
+        @Data
+        public static class HighStakesLimits {
+            /** Maximum high-stakes model calls (retries included) for one notice. */
+            private Integer maxCallsPerNotice = 6;
+        }
+
         /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes); "" when unset. */
         public String effortForAgent(String agent) {
             String v = switch (agent) {
@@ -111,7 +127,7 @@ public class AppProperties {
             private String apiKey;
             private String workspaceId;
             private String model = "";
-            private double timeoutSeconds = 180.0;
+            private double timeoutSeconds = 600.0;
             /**
              * Models that always think: they get output_config.effort and never thinking/temperature/
              * top_p/top_k. Other Anthropic models keep the legacy request shape.

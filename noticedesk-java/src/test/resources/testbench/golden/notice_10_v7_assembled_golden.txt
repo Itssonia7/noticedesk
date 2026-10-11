@@ -19,6 +19,7 @@ SECTION 3: 03 Factual Background
 ================================================================================
 M/s Horizon Electronics (GSTIN: 07QQQRR7890Q1Z6) is registered under the GST law in the State of Delhi.
 Notice reference NAPA/ND/2023-24/1010 dated 05-06-2023 pertains to Financial Year 2022-23.
+The notice covers the tax period 2022-23 and was received by the taxpayer on [[MISSING: date_of_receipt]].
 
 
 ================================================================================
@@ -95,7 +96,7 @@ Annexure A-4 | Copy of the DGAP investigation report, if received
 ================================================================================
 SECTION 12: 12 Prayer
 ================================================================================
-[DEV - not CA reviewed] PRAYER: It is humbly prayed that the proceedings initiated by notice NAPA/ND/2023-24/1010 dated 05-06-2023 under Section 171 be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.
+[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice NAPA/ND/2023-24/1010 dated 05-06-2023 under Section 171 read with Rule 133 of the CGST Rules, 2017 be dropped; that no amount be held to be profiteered or directed to be deposited in the Consumer Welfare Fund; and that no interest or penalty be imposed. It is further requested that an opportunity of personal hearing be granted before any adverse order is passed.
 
 
 ================================================================================
@@ -103,7 +104,7 @@ SECTION 13: 13 Internal Partner Note
 ================================================================================
 
 --- Internal Partner Review Note ---
-Notice: NAPA/ND/2023-24/1010 | Stage template: scn_73 | Section: Section 171
+Notice: NAPA/ND/2023-24/1010 | Stage template: anti_profiteering | Section: Section 171
 Matched Issues & Templates:
   * Issue #1: Match Status=none, Cards=[], Template=NONE (v0), Written by=AI new_issue
 Procedural Objection Options (Partner to Select):
@@ -118,14 +119,15 @@ CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=1, unanswered_issues=[
 CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
 CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
 CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
-CHECK_MARKERS_LIST | FAIL | block | {missing_count=2, missing_markers=[reasons_and_cost_data_for_base_price_revision, date_of_receipt], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_MARKERS_LIST | FAIL | block | {missing_count=3, missing_markers=[date_of_receipt, reasons_and_cost_data_for_base_price_revision, date_of_receipt], pending_ai_count=0, pending_ai_markers=[]}
 CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=6, unique_rendered_blocks=6}
-CHECK_PROCEEDING_CONSISTENT | FAIL | block | {notice_section=Section 171, problems=[stage template 'scn_73' does not match the notice provision Section 171; review Sections 12 and 15], stage=scn_73}
+CHECK_PROCEEDING_CONSISTENT | PASS | block | {notice_section=Section 171, problems=[], stage=anti_profiteering}
 CHECK_AI_CITATIONS_VERIFIED | PASS | block | {total=1, unverified=[]}
 CHECK_AI_CITATIONS_REMOVED | PASS | warn | {removed=[]}
+FLAG_MISSING_DATE_OF_RECEIPT | FAIL | warn | {flag=warn:missing_date_of_receipt}
 Missing Data Markers:
-  * reasons_and_cost_data_for_base_price_revision (severity: block)
   * date_of_receipt (severity: block)
+  * reasons_and_cost_data_for_base_price_revision (severity: block)
 Pending AI Markers: None
 
 
@@ -148,6 +150,6 @@ Documents Required from Client:
 ================================================================================
 SECTION 15: 15 Filing Checklist
 ================================================================================
-[DEV - not CA reviewed] FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.
+[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Price lists before and after the rate change 3. Product-wise computation workings 4. Authorisation Letter 5. Document Annexures.
 
 

@@ -104,12 +104,19 @@ noticedesk:
     max-tokens-new-issue-retry: ${LLM_MAX_TOKENS_NEW_ISSUE_RETRY:24000}
     max-tokens-high-stakes: ${LLM_MAX_TOKENS_HIGH_STAKES:16000}
     max-tokens-high-stakes-retry: ${LLM_MAX_TOKENS_HIGH_STAKES_RETRY:24000}
+    # Per-notice cost control. Once either limit is reached, the remaining AI issues get a
+    # [[PARTNER: ...]] placeholder and a block flag instead of another model call.
+    max-cost-inr-per-notice: ${LLM_MAX_COST_INR_PER_NOTICE:60}
+    high-stakes:
+      max-calls-per-notice: ${LLM_HIGH_STAKES_MAX_CALLS_PER_NOTICE:6}
+    # Logs a 400-char sample of an unparseable writer response (it can quote the notice): test bench only.
+    debug-log-raw-output: ${LLM_DEBUG_LOG_RAW_OUTPUT:false}
     stub-default-canned: ${STUB_DEFAULT_CANNED:acme_mh_asmt10}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:}
       workspace-id: ${ANTHROPIC_WORKSPACE_ID:}
       model: ${ANTHROPIC_MODEL:claude-opus-4-7}
-      timeout-seconds: ${ANTHROPIC_TIMEOUT_SECONDS:180.0}
+      timeout-seconds: ${ANTHROPIC_TIMEOUT_SECONDS:600.0}
       # Models that always think: they get output_config.effort and never thinking/temperature/top_p/top_k.
       effort-models: ${ANTHROPIC_EFFORT_MODELS:claude-sonnet-5-5,claude-opus-5-5}
       # Upper bound on any max_tokens sent to Anthropic.

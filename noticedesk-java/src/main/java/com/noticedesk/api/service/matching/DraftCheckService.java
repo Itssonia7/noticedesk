@@ -273,6 +273,28 @@ public class DraftCheckService {
     }
 
     /**
+     * Turns pipeline / assembly / template flags of the form {@code "<severity>:<name>"} (severity block,
+     * warn or info) into failed draft checks named {@code FLAG_<NAME>}; other flags are internal only.
+     */
+    public List<DraftCheckResult> flagChecks(Collection<String> flags) {
+        List<DraftCheckResult> out = new ArrayList<>();
+        if (flags == null) return out;
+        Set<String> seen = new HashSet<>();
+        for (String f : flags) {
+            if (f == null) continue;
+            int colon = f.indexOf(':');
+            if (colon <= 0) continue;
+            String severity = f.substring(0, colon).trim().toLowerCase(Locale.ROOT);
+            if (!Set.of("block", "warn", "info").contains(severity)) continue;
+            String name = "FLAG_" + f.substring(colon + 1).trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]+", "_");
+            if (seen.add(name)) {
+                out.add(new DraftCheckResult(name, severity, false, Map.of("flag", f)));
+            }
+        }
+        return out;
+    }
+
+    /**
      * Persists check results into draft_flags table in the database after draft creation.
      */
     public void persistDraftFlags(

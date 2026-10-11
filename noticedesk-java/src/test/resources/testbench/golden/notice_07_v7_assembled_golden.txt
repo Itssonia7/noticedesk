@@ -19,6 +19,7 @@ SECTION 3: 03 Factual Background
 ================================================================================
 M/s Apex Industrial Heavy Machinery (GSTIN: 24KKKLL5678K1Z3) is registered under the GST law in the State of Gujarat.
 Notice reference SCN/GJ/2023-24/707 dated 22-10-2023 pertains to Financial Year 2023-24.
+The notice covers the tax period 2023-24 and was received by the taxpayer on [[MISSING: date_of_receipt]].
 
 
 ================================================================================
@@ -115,10 +116,12 @@ CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=1, unanswered_issues=[
 CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
 CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
 CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
-CHECK_MARKERS_LIST | FAIL | block | {missing_count=3, missing_markers=[invoice_numbers_and_dates, goods_receipt_evidence, date_of_service], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_MARKERS_LIST | FAIL | block | {missing_count=4, missing_markers=[date_of_receipt, invoice_numbers_and_dates, goods_receipt_evidence, date_of_service], pending_ai_count=0, pending_ai_markers=[]}
 CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=5, unique_rendered_blocks=5}
 CHECK_PROCEEDING_CONSISTENT | PASS | block | {notice_section=Section 73, problems=[], stage=scn_73}
+FLAG_MISSING_DATE_OF_RECEIPT | FAIL | warn | {flag=warn:missing_date_of_receipt}
 Missing Data Markers:
+  * date_of_receipt (severity: block)
   * invoice_numbers_and_dates (severity: block)
   * goods_receipt_evidence (severity: block)
   * date_of_service (severity: block)

@@ -32,4 +32,21 @@ public interface LlmProvider {
             boolean cacheSystemPrompt) {
         return generateWithPromptCaching(systemPrompt, userPrompt, model, maxTokens, 0.0, cacheSystemPrompt);
     }
+
+    /**
+     * As {@link #generateWithEffort}, with a user-message prefix shared by several calls (e.g. the notice
+     * text sent once per issue). Providers with prompt caching mark the prefix cacheable; others send
+     * {@code cachedUserPrefix + "\n\n" + userPrompt}.
+     */
+    default LlmResponse generateWithEffort(
+            String systemPrompt,
+            String cachedUserPrefix,
+            String userPrompt,
+            String model,
+            int maxTokens,
+            String effort,
+            boolean cacheSystemPrompt) {
+        String user = cachedUserPrefix == null || cachedUserPrefix.isBlank() ? userPrompt : cachedUserPrefix + "\n\n" + userPrompt;
+        return generateWithEffort(systemPrompt, user, model, maxTokens, effort, cacheSystemPrompt);
+    }
 }

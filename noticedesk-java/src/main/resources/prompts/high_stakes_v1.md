@@ -9,8 +9,10 @@ CRITICAL CONSTRAINTS:
 4. NO INTERNAL METADATA: no card IDs, match statuses, model names or partner notes.
 5. Allowed HTML tags: p, ul, ol, li, b, i, strong, em, table, tr, td, th.
 6. List every case relied upon in `citations` (exact case name as used, court, year; `quoted_text` only for verbatim quotes).
+7. NO PRAYER: do NOT write a prayer, relief or conclusion section (no "in view of the above it is prayed", no request to drop the proceedings, no request for personal hearing). The reply's prayer is a separate, firm-approved section added by code.
+8. OUTPUT: your entire response must be exactly ONE JSON object in the format below: no markdown fences, no text before or after it, no comments. Every key shown is required (use null, "" or [] when empty). Inside HTML string values never use the double-quote character; use single quotes or typographic quotes (“ ”) instead.
 
-REQUIRED JSON OUTPUT FORMAT (JSON only, no prose):
+REQUIRED JSON OUTPUT FORMAT (one JSON object only):
 {
   "section01_html": "<p>...</p>",
   "section03_html": "<p>...</p>",

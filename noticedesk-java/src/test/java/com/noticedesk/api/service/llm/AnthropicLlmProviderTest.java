@@ -106,6 +106,28 @@ class AnthropicLlmProviderTest {
     // ---------------------------------------------------------------- request body
 
     @Test
+    void requestBody_cachedUserPrefix_isFirstContentBlockWithCacheControl() {
+        AnthropicLlmProvider p = providerFor("claude-opus-5-5");
+        ObjectNode body = p.buildRequestBody("system", "NOTICE CONTEXT ...", "ISSUE ...", "claude-opus-5-5", 8000, 0.0, "medium", true);
+
+        var content = body.path("messages").get(0).path("content");
+        assertTrue(content.isArray());
+        assertEquals(2, content.size());
+        assertEquals("NOTICE CONTEXT ...", content.get(0).path("text").asText());
+        assertEquals("ephemeral", content.get(0).path("cache_control").path("type").asText());
+        assertEquals("ISSUE ...", content.get(1).path("text").asText());
+        assertFalse(content.get(1).has("cache_control"), "the per-issue block is not cached");
+        assertEquals("ephemeral", body.path("system").get(0).path("cache_control").path("type").asText());
+        assertEquals("medium", body.path("output_config").path("effort").asText());
+        for (String banned : List.of("thinking", "temperature", "top_p", "top_k")) {
+            assertFalse(body.has(banned));
+        }
+
+        ObjectNode plain = p.buildRequestBody("system", null, "user", "claude-opus-5-5", 8000, 0.0, "medium", true);
+        assertEquals("user", plain.path("messages").get(0).path("content").asText(), "no prefix: plain string content as before");
+    }
+
+    @Test
     void requestBody_forThinkingModels_hasEffort_andNoSamplingOrThinkingParams() {
         for (String model : EFFORT_MODELS) {
             AnthropicLlmProvider p = providerFor(model);
