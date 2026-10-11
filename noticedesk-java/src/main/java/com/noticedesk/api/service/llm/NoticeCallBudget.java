@@ -60,6 +60,7 @@ public final class NoticeCallBudget {
         if (HIGH_STAKES.equals(agentKey)) highStakesCalls++;
         if (response != null) {
             String model = response.model() != null && !response.model().isBlank() ? response.model() : fallbackModel;
+            if (pricing != null && !pricing.hasPrice(model) && pricing.hasPrice(fallbackModel)) model = fallbackModel;
             addCost(model, response.inputTokensOrZero(), response.outputTokensOrZero(),
                     response.cacheReadTokensOrZero(), response.cacheWriteTokensOrZero());
         }

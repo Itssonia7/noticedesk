@@ -152,8 +152,8 @@ public class ClaudeOpusBatchRunnerTest {
         System.out.println("  Tokens: In=" + hrSteelDraft.inputTokens() + ", Out=" + hrSteelDraft.outputTokens());
         System.out.println("  Sections generated: " + hrSteelDraft.sections().size());
 
-        exportDraftText("../output/Reply_HR_Steel_SCN.txt", "JAVA BACKEND CLAUDE OPUS DRAFT: HR STEEL SCN", hrSteelDraft);
-        exportDraftDocx("../output/Reply_HR_Steel_SCN.docx", hrSteelInput, hrSteelDraft);
+        exportDraftText(outPath("Reply_HR_Steel_SCN.txt"), "JAVA BACKEND CLAUDE OPUS DRAFT: HR STEEL SCN", hrSteelDraft);
+        exportDraftDocx(outPath("Reply_HR_Steel_SCN.docx"), hrSteelInput, hrSteelDraft);
 
         // --- DOCUMENT 2: 1st RFD-08.pdf ---
         String rfdPath = testingFolder + "/1st RFD-08.pdf";
@@ -201,8 +201,8 @@ public class ClaudeOpusBatchRunnerTest {
         System.out.println("  Tokens: In=" + rfdDraft.inputTokens() + ", Out=" + rfdDraft.outputTokens());
         System.out.println("  Sections generated: " + rfdDraft.sections().size());
 
-        exportDraftText("../output/Reply_1st_RFD-08_Notice.txt", "JAVA BACKEND CLAUDE OPUS DRAFT: 1ST RFD-08 NOTICE", rfdDraft);
-        exportDraftDocx("../output/Reply_1st_RFD-08_Notice.docx", rfdInput, rfdDraft);
+        exportDraftText(outPath("Reply_1st_RFD-08_Notice.txt"), "JAVA BACKEND CLAUDE OPUS DRAFT: 1ST RFD-08 NOTICE", rfdDraft);
+        exportDraftDocx(outPath("Reply_1st_RFD-08_Notice.docx"), rfdInput, rfdDraft);
 
         // --- DOCUMENT 3: novel_crypto_gst_notice.pdf ---
         String cryptoPath = "../novel_crypto_gst_notice.pdf";
@@ -250,8 +250,8 @@ public class ClaudeOpusBatchRunnerTest {
         System.out.println("  Tokens: In=" + cryptoDraft.inputTokens() + ", Out=" + cryptoDraft.outputTokens());
         System.out.println("  Sections generated: " + cryptoDraft.sections().size());
 
-        exportDraftText("../output/Reply_Crypto_Notice.txt", "JAVA BACKEND CLAUDE OPUS DRAFT: NOVEL CRYPTO NOTICE", cryptoDraft);
-        exportDraftDocx("../output/Reply_Crypto_Notice.docx", cryptoInput, cryptoDraft);
+        exportDraftText(outPath("Reply_Crypto_Notice.txt"), "JAVA BACKEND CLAUDE OPUS DRAFT: NOVEL CRYPTO NOTICE", cryptoDraft);
+        exportDraftDocx(outPath("Reply_Crypto_Notice.docx"), cryptoInput, cryptoDraft);
 
 
         // Auto-cache novel drafts to RAG store
@@ -260,7 +260,7 @@ public class ClaudeOpusBatchRunnerTest {
         ragStoreService.cacheNovelDraft("Unprecedented Crypto Levy", "Reply for CryptoNode Systems", cryptoDraft.sections().get(0).bodyHtml());
 
         // Write summary report
-        writeReport("../output/NoticeDesk_Java_Opus_Execution_Report.txt", hrSteelInput, hrSteelDraft, rfdInput, rfdDraft, cryptoInput, cryptoDraft);
+        writeReport(outPath("NoticeDesk_Java_Opus_Execution_Report.txt"), hrSteelInput, hrSteelDraft, rfdInput, rfdDraft, cryptoInput, cryptoDraft);
 
         System.out.println("\n=======================================================");
         System.out.println("ALL DRAFTS SUCCESSFULLY GENERATED VIA CLAUDE OPUS!");
@@ -283,6 +283,17 @@ public class ClaudeOpusBatchRunnerTest {
         } catch (Exception e) {
             return "Extracted notice text for " + pdfPath;
         }
+    }
+
+    /**
+     * The tracked output/ folder only for a real E2E run; stub runs in a plain {@code mvn test} write to
+     * target/test-output/ so they never modify tracked files.
+     */
+    private static String outPath(String name) {
+        boolean e2e = "true".equalsIgnoreCase(System.getProperty("enable.e2e.tests")) || System.getenv("ENABLE_E2E_TESTS") != null;
+        File dir = new File(e2e ? "../output" : "target/test-output");
+        dir.mkdirs();
+        return new File(dir, name).getPath();
     }
 
     private void exportDraftText(String filepath, String title, GeneratedDraft draft) throws Exception {

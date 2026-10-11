@@ -1,0 +1,26 @@
+{
+  "id": "msg_fixture_new_011",
+  "type": "message",
+  "role": "assistant",
+  "model": "fixture-new-issue-model",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Synthetic fixture: reasoning summary withheld.",
+      "signature": "fixture-signature-not-real"
+    },
+    {
+      "type": "text",
+      "text": "{\"section04_html\": \"<p>The taxpayer was not a \"casual taxable person\" as defined, because the stall was a one-day exhibition sale below the threshold.</p>\", \"section05_html\": \"<ol><li>Para 3: Denied. The definition in Section 2(20) is not met.</li><li>Para 5(b): Denied. Section 129 applies to goods in transit, not to a stall.</li></ol>\", \"section06_html\": \"<p>Section 129 is confined to detention of goods in transit and cannot found a penalty for want of registration.</p>\", \"citations\": [], \"strength_note\": \"Moderate: depends on turnover evidence.\", \"documents\": [\"Sales register for the exhibition\", \"Stall allotment letter\"], \"summary_line\": \"No casual taxable person registration was required; Section 129 does not apply.\"}"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 4200,
+    "output_tokens": 1800,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 9000
+  },
+  "_fixture_note": "Synthetic new-issue writer output for bench notice-bench-011 (fake taxpayer); double quotes left unescaped inside section04_html."
+}

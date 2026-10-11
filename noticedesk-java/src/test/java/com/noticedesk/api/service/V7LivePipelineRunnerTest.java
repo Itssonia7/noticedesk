@@ -18,10 +18,14 @@ import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.TemplateFillService;
+import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.testsupport.BenchNoticeRows;
+import com.noticedesk.api.testsupport.LiveRunGuard;
 import com.noticedesk.api.testsupport.RunCostLedger;
 import com.noticedesk.api.testsupport.TestAppProperties;
 import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.fail;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.File;
@@ -55,15 +59,36 @@ public class V7LivePipelineRunnerTest {
             return;
         }
 
-        String modelMatching = Optional.ofNullable(System.getenv("LLM_MODEL_MATCHING")).orElse("claude-sonnet-5-5");
-        String modelPartial = Optional.ofNullable(System.getenv("LLM_MODEL_PARTIAL_DRAFTING")).orElse("claude-sonnet-5-5");
-        String modelNewIssue = Optional.ofNullable(System.getenv("LLM_MODEL_NEW_ISSUE")).orElse("claude-opus-5-5");
-        String modelHighStakes = Optional.ofNullable(System.getenv("LLM_MODEL_HIGH_STAKES")).orElse("claude-opus-5-5");
-        String ikToken = Optional.ofNullable(System.getenv("INDIANKANOON_API_TOKEN")).orElse("");
-        String citationProvider = (!ikToken.isBlank()) ? "indiankanoon" : "stub";
+        // ---- cost safeguards first: no call is made when any of these refuses the run
+        LiveRunGuard guard = LiveRunGuard.fromEnvironment();
+        LiveRunGuard.CommitCheck commit = guard.checkCommit(LiveRunGuard.gitHead());
+        System.out.println(commit.message());
+        if (!commit.allowed()) {
+            fail(commit.message());
+        }
+        if (Boolean.TRUE.equals(LiveRunGuard.gitDirty())) {
+            System.out.println("WARNING: tracked files have uncommitted changes; this run is not exactly commit " + commit.head());
+        }
 
         // pricing, effort and max_tokens come from application.yml (+ env overrides)
         AppProperties props = TestAppProperties.fromApplicationYml();
+
+        // models only from env / application.yml (e.g. LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES may point the
+        // writers at the cheaper matching model for a plumbing test)
+        String modelMatching = guard.model("LLM_MODEL_MATCHING", props.getLlm().getModelMatching());
+        String modelPartial = guard.model("LLM_MODEL_PARTIAL_DRAFTING", props.getLlm().getModelPartialDrafting());
+        String modelNewIssue = guard.model("LLM_MODEL_NEW_ISSUE", props.getLlm().getModelNewIssue());
+        String modelHighStakes = guard.model("LLM_MODEL_HIGH_STAKES", props.getLlm().getModelHighStakes());
+        List<String> unset = new ArrayList<>();
+        if (modelMatching == null) unset.add("LLM_MODEL_MATCHING");
+        if (modelPartial == null) unset.add("LLM_MODEL_PARTIAL_DRAFTING");
+        if (modelNewIssue == null) unset.add("LLM_MODEL_NEW_ISSUE");
+        if (modelHighStakes == null) unset.add("LLM_MODEL_HIGH_STAKES");
+        if (!unset.isEmpty()) {
+            fail("REFUSED: set " + String.join(", ", unset) + " (no model names are built into the runner)");
+        }
+        String ikToken = Optional.ofNullable(System.getenv("INDIANKANOON_API_TOKEN")).orElse("");
+        String citationProvider = (!ikToken.isBlank()) ? "indiankanoon" : "stub";
         props.getLlm().setProviderPrimary("anthropic");
         props.getLlm().getAnthropic().setApiKey(apiKey);
         String wsId = System.getenv("ANTHROPIC_WORKSPACE_ID");
@@ -81,12 +106,21 @@ public class V7LivePipelineRunnerTest {
         props.getMatching().setAllowDraftCards(true);
         // synthetic bench notices only: log a 400-char sample of any unparseable writer output
         props.getLlm().setDebugLogRawOutput(true);
+        // test caps (production defaults in application.yml are unchanged): per notice LIVE_MAX_NOTICE_COST_INR
+        BigDecimal noticeCap = guard.maxNoticeCostInr();
+        BigDecimal runCap = guard.maxRunCostInr();
+        props.getLlm().setMaxCostInrPerNotice(noticeCap.doubleValue());
+        guard.printSettings(System.out);
         System.out.printf("per-notice caps: high-stakes calls=%s, cost INR=%s%n",
                 props.getLlm().getHighStakes().getMaxCallsPerNotice(), props.getLlm().getMaxCostInrPerNotice());
+        System.out.printf("models: matching=%s partial=%s new_issue=%s high_stakes=%s%n",
+                modelMatching, modelPartial, modelNewIssue, modelHighStakes);
 
+        // an unpriced model would make every cost cap blind: refuse instead of warning
+        ApiUsageLogService pricingCheck = new ApiUsageLogService(null, props);
         for (String m : List.of(modelMatching, modelPartial, modelNewIssue, modelHighStakes)) {
-            if (props.getPricing().getModels().get(m) == null) {
-                System.err.println("WARNING: no price configured for " + m + " in application.yml; its calls show UNPRICED");
+            if (!pricingCheck.hasPrice(m)) {
+                fail("REFUSED: no price configured for model " + m + " under noticedesk.pricing.models in application.yml");
             }
         }
         for (String agent : List.of("matching", "partial_drafting", "new_issue", "high_stakes")) {
@@ -123,6 +157,7 @@ public class V7LivePipelineRunnerTest {
         CatalogueService catalogueService = new CatalogueService(jdbc.getJdbcTemplate(), props, om);
         ApiUsageLogService usageLogService = new ApiUsageLogService(jdbc, props);
         RunCostLedger ledger = RunCostLedger.attach(usageLogService, System.out);
+        guard.attach(usageLogService);
 
         IssueMatchingAgent matchingAgent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, jdbc, om);
         PartialDraftingAgent partialAgent = new PartialDraftingAgent(props, om, usageLogService, llmFactory);
@@ -158,6 +193,10 @@ public class V7LivePipelineRunnerTest {
                     "notice_10_nomatch_anti_profiteering.json"
             };
         }
+        if (guard.smoke()) {
+            targetNotices = Arrays.copyOf(targetNotices, 1);
+            System.out.println("LIVE_SMOKE=true: only " + targetNotices[0] + " is run");
+        }
 
         File resultsDir = new File("../testbench/results");
         if (!resultsDir.exists() && !resultsDir.mkdirs()) {
@@ -166,15 +205,19 @@ public class V7LivePipelineRunnerTest {
         }
 
         BigDecimal totalRun2Inr = BigDecimal.ZERO;
-        final BigDecimal INR_CAP = new BigDecimal("150.00");
+        Map<String, String> statusByNotice = new LinkedHashMap<>();
+        String abortReason = null;
 
         System.out.println("=== RUN 2: V7 LIVE PIPELINE EXECUTION REPORT ===");
 
         for (String noticeFile : targetNotices) {
-            if (totalRun2Inr.compareTo(INR_CAP) >= 0) {
-                System.err.println("SAFETY CAP REACHED: Run 2 spend " + totalRun2Inr + " INR exceeded INR 150 limit. Halting.");
+            BigDecimal remaining = runCap.subtract(totalRun2Inr);
+            if (remaining.signum() <= 0) {
+                System.err.println("SAFETY CAP REACHED: run spend " + totalRun2Inr + " INR reached the run cap of INR " + runCap + ". Halting.");
                 break;
             }
+            // a notice may spend at most the smaller of the notice cap and what is left of the run cap
+            props.getLlm().setMaxCostInrPerNotice(remaining.min(noticeCap).doubleValue());
 
             ClassPathResource resource = new ClassPathResource("testbench/notices/" + noticeFile);
             String jsonText;
@@ -216,7 +259,24 @@ public class V7LivePipelineRunnerTest {
 
             System.out.printf("%n--- Calls for %s ---%n", noticeId);
             int callCheckpoint = ledger.size();
-            DraftingPipelineResult result = pipelineService.runPipeline(input, tenantUuid, noticeUuid);
+            DraftingPipelineResult result;
+            try {
+                result = pipelineService.runPipeline(input, tenantUuid, noticeUuid);
+            } catch (MatchingFailedException e) {
+                // no scaffold draft: the notice is marked failed and the run moves on
+                BigDecimal spent = ledger.totalInrSince(callCheckpoint);
+                totalRun2Inr = totalRun2Inr.add(spent);
+                statusByNotice.put(noticeId, "FAILED (" + e.getMessage() + ")");
+                System.out.printf("Notice %s: FAILED - %s | cost %.4f INR%n", noticeId, e.getMessage(), spent.doubleValue());
+                if (guard.smoke()) break;
+                continue;
+            } catch (LlmFatalException e) {
+                BigDecimal spent = ledger.totalInrSince(callCheckpoint);
+                totalRun2Inr = totalRun2Inr.add(spent);
+                statusByNotice.put(noticeId, "ABORTED");
+                abortReason = e.getMessage();
+                break;
+            }
 
             // Model cost per notice from every billed call (failed attempts and retries included)
             double matchingInr = ledger.totalInrSince(callCheckpoint, "matching").doubleValue();
@@ -265,6 +325,9 @@ public class V7LivePipelineRunnerTest {
             System.out.printf("Writer Step: INR=%.4f%n", writerInr);
             System.out.printf("IndianKanoon Step: INR=%.4f%n", ikInr);
             System.out.printf("Total Notice Cost: %.4f INR%n", noticeTotalInr);
+            long blocking = result.checkResults() == null ? 0 : result.checkResults().stream()
+                    .filter(c -> !c.passed() && "block".equals(c.severity())).count();
+            statusByNotice.put(noticeId, "DRAFTED (" + blocking + " blocking checks failed)");
             System.out.printf("Citation Statuses: %s%n", citStatuses.isEmpty() ? "None" : citStatuses);
             System.out.printf("Flags: %s%n", allFlags);
             System.out.printf("Saved draft to: %s%n", draftFile.getAbsolutePath());
@@ -276,9 +339,15 @@ public class V7LivePipelineRunnerTest {
             }
         }
 
-        System.out.printf("%nTotal Run 2 Execution Cost: %.4f INR%n", totalRun2Inr.doubleValue());
+        System.out.printf("%n=== RUN SUMMARY (commit %s%s) ===%n", commit.head(), guard.smoke() ? ", SMOKE" : "");
+        statusByNotice.forEach((id, st) -> System.out.println("  " + id + ": " + st));
+        System.out.printf("Total Run 2 Execution Cost: %.4f INR (run cap INR %s)%n", totalRun2Inr.doubleValue(), runCap.toPlainString());
         System.out.printf("Billed model calls: %d (failed: %d, unpriced: %d) | model cost: %.4f INR%n",
                 ledger.size(), ledger.failedCalls(), ledger.unpricedCalls(), ledger.totalInr().doubleValue());
+        if (abortReason != null) {
+            System.err.println("LIVE RUN ABORTED: " + abortReason);
+            fail("LIVE RUN ABORTED: " + abortReason);
+        }
     }
 
     private static String findPattern(String text, String regex) {

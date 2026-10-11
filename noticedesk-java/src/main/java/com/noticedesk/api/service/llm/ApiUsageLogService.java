@@ -22,6 +22,7 @@ public class ApiUsageLogService {
     private final AppProperties properties;
 
     private final List<Consumer<UsageCall>> callListeners = new CopyOnWriteArrayList<>();
+    private final List<Consumer<CallOutcome>> outcomeListeners = new CopyOnWriteArrayList<>();
 
     public ApiUsageLogService(NamedParameterJdbcTemplate jdbcTemplate, AppProperties properties) {
         this.jdbcTemplate = jdbcTemplate;
@@ -47,9 +48,37 @@ public class ApiUsageLogService {
             BigDecimal costInr
     ) {}
 
+    /**
+     * Whether one model call attempt gave output the agent could use. {@code reason} is a short label
+     * (failure reason, exception class or validation error, never response text); null when usable.
+     */
+    public record CallOutcome(String step, int attempt, boolean usable, String reason) {}
+
     /** Registers a listener told about every call logged through {@link #logCall}. Used by eval/live runners. */
     public void addCallListener(Consumer<UsageCall> listener) {
         callListeners.add(listener);
+    }
+
+    /** Registers a listener told the outcome of every model call attempt (see {@link #reportOutcome}). */
+    public void addOutcomeListener(Consumer<CallOutcome> listener) {
+        outcomeListeners.add(listener);
+    }
+
+    /**
+     * Reported by the agents after each call attempt, including attempts that threw before a response.
+     * A listener may stop the run by throwing {@link LlmFatalException}; it is passed on to the agent.
+     */
+    public void reportOutcome(String step, int attempt, boolean usable, String reason) {
+        CallOutcome outcome = new CallOutcome(step, attempt, usable, reason);
+        for (Consumer<CallOutcome> l : outcomeListeners) {
+            try {
+                l.accept(outcome);
+            } catch (LlmFatalException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("call outcome listener failed: {}", e.getMessage());
+            }
+        }
     }
 
     /**
@@ -59,6 +88,8 @@ public class ApiUsageLogService {
     public void logCall(LlmResponse response, String fallbackModel, String step, int attempt, UUID tenantId, UUID noticeId) {
         if (response == null) return;
         String model = response.model() != null && !response.model().isBlank() ? response.model() : fallbackModel;
+        // price by the requested model when the id the API reports has no configured price
+        if (!hasPrice(model) && hasPrice(fallbackModel)) model = fallbackModel;
         String provider = response.providerName() != null ? response.providerName() : "anthropic";
         int in = response.inputTokensOrZero();
         int out = response.outputTokensOrZero();
@@ -151,11 +182,7 @@ public class ApiUsageLogService {
             throw new IllegalStateException("Unconfigured pricing model: null or empty model string");
         }
 
-        AppProperties.Pricing.ModelPrice modelPrice = null;
-        if (properties != null && properties.getPricing() != null && properties.getPricing().getModels() != null) {
-            modelPrice = properties.getPricing().getModels().get(model.trim());
-        }
-
+        AppProperties.Pricing.ModelPrice modelPrice = resolvePrice(model);
         if (modelPrice == null) {
             throw new IllegalStateException("Unconfigured pricing model: " + model + ". Please configure pricing in application.yml under noticedesk.pricing.models.");
         }
@@ -172,6 +199,28 @@ public class ApiUsageLogService {
         BigDecimal costInr = costUsd.multiply(rateInr).setScale(4, RoundingMode.HALF_UP);
 
         return new BigDecimal[]{costUsd.setScale(6, RoundingMode.HALF_UP), costInr};
+    }
+
+    /** True when {@link #calculateCost} can price {@code model}. */
+    public boolean hasPrice(String model) {
+        return model != null && !model.isBlank() && resolvePrice(model) != null;
+    }
+
+    /**
+     * Price for {@code model}: the exact key, else the longest configured key the model id extends with
+     * a dash (a dated snapshot id such as {@code <key>-20260101} returned by the API).
+     */
+    private AppProperties.Pricing.ModelPrice resolvePrice(String model) {
+        if (properties == null || properties.getPricing() == null || properties.getPricing().getModels() == null) return null;
+        java.util.Map<String, AppProperties.Pricing.ModelPrice> prices = properties.getPricing().getModels();
+        String m = model.trim();
+        AppProperties.Pricing.ModelPrice exact = prices.get(m);
+        if (exact != null) return exact;
+        String best = null;
+        for (String key : prices.keySet()) {
+            if (m.startsWith(key + "-") && (best == null || key.length() > best.length())) best = key;
+        }
+        return best != null ? prices.get(best) : null;
     }
 
     private BigDecimal calculateTokens(int tokens, double pricePerMillion) {

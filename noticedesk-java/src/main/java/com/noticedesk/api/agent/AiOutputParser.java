@@ -3,6 +3,7 @@ package com.noticedesk.api.agent;
 import com.fasterxml.jackson.core.JsonLocation;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
 
@@ -27,11 +28,16 @@ final class AiOutputParser {
      * @throws IllegalArgumentException with a short message (no response content) when no JSON object can be read
      */
     static Map<String, Object> readJsonObject(ObjectMapper objectMapper, String raw) {
+        return objectMapper.convertValue(readJsonTree(objectMapper, raw), new TypeReference<Map<String, Object>>() {});
+    }
+
+    /** As {@link #readJsonObject}, as a tree (used by the matcher). */
+    static JsonNode readJsonTree(ObjectMapper objectMapper, String raw) {
         String json = extractJsonObject(raw);
         JsonProcessingException first = null;
         for (int i = 0; i <= MAX_QUOTE_REPAIRS; i++) {
             try {
-                return objectMapper.readValue(json, new TypeReference<>() {});
+                return objectMapper.readTree(json);
             } catch (JsonProcessingException e) {
                 if (first == null) first = e;
                 String repaired = escapeStrayQuote(json, e);

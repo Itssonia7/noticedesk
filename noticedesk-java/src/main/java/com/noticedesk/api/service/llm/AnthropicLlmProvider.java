@@ -153,6 +153,9 @@ public class AnthropicLlmProvider implements LlmProvider {
                         if (code == 429 || code >= 500) {
                             throw new LlmTransientException("anthropic transient error: HTTP " + code + " " + errBody);
                         }
+                        // billing / auth errors: no retry can succeed
+                        LlmFatalException fatal = LlmFatalException.forHttpError(code, errBody);
+                        if (fatal != null) throw fatal;
                         throw new LlmException("anthropic error: HTTP " + code + " - " + errBody);
                     })
                     .body(String.class);

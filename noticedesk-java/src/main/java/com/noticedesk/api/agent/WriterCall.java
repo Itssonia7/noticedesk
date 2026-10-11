@@ -2,6 +2,7 @@ package com.noticedesk.api.agent;
 
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
+import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.service.llm.LlmProvider;
 import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
@@ -15,6 +16,8 @@ import java.util.function.Function;
  * <ul>
  *   <li>every call's usage is logged, including failed ones (they are billed);</li>
  *   <li>refusal or an exception (timeout, HTTP error): stop at once, no retry;</li>
+ *   <li>{@link LlmFatalException} (billing / auth error, live run aborted): thrown on to the caller;</li>
+ *   <li>the outcome of every attempt is reported to {@link ApiUsageLogService#reportOutcome};</li>
  *   <li>max_tokens: retry once with the agent's higher retry cap;</li>
  *   <li>no text block or output that fails parsing/validation: retry once, telling the model the
  *       validation error; a second failure stops (the caller leaves the issue to the partner);</li>
@@ -54,6 +57,8 @@ final class WriterCall {
                 if (budget != null) budget.recordCall(agentKey, null, model);
                 log.error("{} call failed attempt={} max_tokens={} error={}: {}", label, attempt, maxTokens,
                         e.getClass().getSimpleName(), e.getMessage());
+                if (e instanceof LlmFatalException fatal) throw fatal;   // billing / auth / run aborted
+                outcome(usage, agentKey, attempt, false, e.getClass().getSimpleName());
                 return null;
             }
             if (budget != null) budget.recordCall(agentKey, response, model);
@@ -63,13 +68,16 @@ final class WriterCall {
 
             if (response == null) {
                 log.warn("{} returned no response attempt={}", label, attempt);
+                outcome(usage, agentKey, attempt, false, "no_response");
                 return null;
             }
             if (response.refused()) {
                 log.warn("{} refused stop_reason={} attempt={}; not retrying", label, response.stopReason(), attempt);
+                outcome(usage, agentKey, attempt, false, LlmResponse.FAILURE_REFUSAL);
                 return null;
             }
             if (response.truncated()) {
+                outcome(usage, agentKey, attempt, false, LlmResponse.FAILURE_MAX_TOKENS);
                 log.warn("{} truncated stop_reason=max_tokens attempt={} max_tokens={} output_tokens={}",
                         label, attempt, maxTokens, response.outputTokensOrZero());
                 raiseCap = true;
@@ -77,6 +85,7 @@ final class WriterCall {
                 continue;
             }
             if (response.failed()) {
+                outcome(usage, agentKey, attempt, false, response.failureReason());
                 validationError = "the response contained no text output (" + response.failureReason() + ")";
                 log.warn("{} unusable output attempt={} failure={} stop_reason={}",
                         label, attempt, response.failureReason(), response.stopReason());
@@ -84,14 +93,22 @@ final class WriterCall {
             }
             try {
                 T parsed = parser.apply(response);
-                if (parsed != null) return parsed;
+                if (parsed != null) {
+                    outcome(usage, agentKey, attempt, true, null);
+                    return parsed;
+                }
                 validationError = "the JSON object did not contain the required fields";
             } catch (IllegalArgumentException e) {
                 validationError = e.getMessage();
             }
             logUnusable(label, attempt, response, validationError, properties);
+            outcome(usage, agentKey, attempt, false, "invalid_output");
         }
         return null;
+    }
+
+    private static void outcome(ApiUsageLogService usage, String agentKey, int attempt, boolean usable, String reason) {
+        if (usage != null) usage.reportOutcome(agentKey, attempt, usable, reason);
     }
 
     private static String retryInstruction(String validationError) {

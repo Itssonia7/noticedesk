@@ -87,4 +87,36 @@ class ApiUsagePricingTest {
         llm.setMaxTokensMatching(null);
         assertEquals(8000, llm.maxTokensForAgent("matching", false));
     }
+
+    @Test
+    void writerModelOverride_toAnotherConfiguredModel_isPriced() {
+        // e.g. LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES pointed at the matching model for a cheap plumbing run
+        String cheap = props.getPricing().getModels().keySet().iterator().next();
+        AppProperties p = TestAppProperties.fromApplicationYml();
+        p.getLlm().setModelNewIssue(cheap);
+        p.getLlm().setModelHighStakes(cheap);
+        ApiUsageLogService s = new ApiUsageLogService(null, p);
+        assertTrue(s.hasPrice(p.modelForAgent("new_issue", "anthropic")));
+        assertTrue(s.hasPrice(p.modelForAgent("high_stakes", "anthropic")));
+    }
+
+    @Test
+    void datedSnapshotId_isPricedAsItsBaseModel() {
+        String base = props.getPricing().getModels().keySet().iterator().next();
+        BigDecimal[] exact = service.calculateCost(base, IN, OUT, C_READ, C_WRITE);
+        BigDecimal[] dated = service.calculateCost(base + "-20991231", IN, OUT, C_READ, C_WRITE);
+        assertEquals(0, exact[1].compareTo(dated[1]));
+        assertFalse(service.hasPrice("unknown-model-x"));
+        assertFalse(service.hasPrice(base + "x"), "only a dash-separated suffix counts as a snapshot of the key");
+    }
+
+    @Test
+    void unpricedResponseModel_isPricedByTheRequestedModel() {
+        String requested = props.getPricing().getModels().keySet().iterator().next();
+        List<UsageCall> seen = new ArrayList<>();
+        service.addCallListener(seen::add);
+        service.logCall(new LlmResponse("{}", "alias-reported-by-api", "anthropic", IN, OUT), requested, "new_issue", 1, null, null);
+        assertEquals(requested, seen.get(0).model());
+        assertNotNull(seen.get(0).costInr());
+    }
 }

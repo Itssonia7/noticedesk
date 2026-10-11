@@ -147,7 +147,11 @@ class ScenariosTestingRunnerTest {
 
     private void exportTestSummary(String filename, String scenarioTitle, GeneratedDraft draft) {
         try {
-            File out = new File("../" + filename);
+            // tracked output/ only for an E2E run; a plain mvn test writes to target/ (never modifies tracked files)
+            boolean e2e = "true".equalsIgnoreCase(System.getenv("ENABLE_E2E_TESTS"))
+                    || "true".equalsIgnoreCase(System.getProperty("ENABLE_E2E_TESTS"));
+            File out = e2e ? new File("../" + filename) : new File("target/test-" + filename);
+            out.getParentFile().mkdirs();
             try (FileWriter writer = new FileWriter(out)) {
                 writer.write("=================================================================\n");
                 writer.write(scenarioTitle + "\n");

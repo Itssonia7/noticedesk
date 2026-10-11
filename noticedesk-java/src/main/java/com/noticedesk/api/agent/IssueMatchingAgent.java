@@ -7,6 +7,7 @@ import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.IssueCard;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
+import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.service.llm.LlmProvider;
 import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.service.matching.CatalogueService;
@@ -134,46 +135,65 @@ public class IssueMatchingAgent {
 
             try {
                 response = llm.generateWithEffort(systemPrompt, activeUserPrompt, modelName, maxTokens, effort, true);
-
-                // usage is billed whether or not the output is usable
-                totalInTokens += response.inputTokensOrZero();
-                totalOutTokens += response.outputTokensOrZero();
-                totalCacheReadTokens += response.cacheReadTokensOrZero();
-                totalCacheWriteTokens += response.cacheWriteTokensOrZero();
-                apiUsageLogService.logCall(response, modelName, "matching", attempt, tenantId, noticeId);
-
-                if (response.refused()) {
-                    log.warn("matching_refused stop_reason={} attempt={}", response.stopReason(), attempt);
-                    validationError = "Model declined the request (stop_reason=refusal)";
-                    break;   // the same prompt will be refused again
-                }
-                if (response.truncated()) {
-                    log.warn("matching_attempt_truncated stop_reason=max_tokens attempt={} max_tokens={}", attempt, maxTokens);
-                    validationError = "Output was truncated due to max_tokens limit.";
-                    raiseCap = true;
-                    continue;
-                }
-                if (response.failed()) {
-                    log.warn("matching_attempt_unusable failure={} stop_reason={} attempt={}",
-                            response.failureReason(), response.stopReason(), attempt);
-                    validationError = "Model returned no usable text output (" + response.failureReason() + ")";
-                    continue;
-                }
-
-                String cleanContent = sanitizeJsonContent(response.content());
-                jsonNode = objectMapper.readTree(cleanContent);
-
-                if (jsonNode.has("notice") && jsonNode.has("issues")) {
-                    validationError = null;
-                    break;
-                } else {
-                    validationError = "JSON missing required 'notice' or 'issues' keys";
-                }
-
+            } catch (LlmFatalException e) {
+                throw e;   // billing / auth error or live run aborted: no retry, no fallback result
             } catch (Exception e) {
                 log.warn("matching_attempt_failed attempt={} error={}", attempt, e.getMessage());
                 validationError = e.getMessage();
+                outcome(attempt, false, e.getClass().getSimpleName());
+                continue;
             }
+
+            if (response == null) {
+                validationError = "Model call returned no response";
+                outcome(attempt, false, "no_response");
+                continue;
+            }
+
+            // usage is billed whether or not the output is usable
+            totalInTokens += response.inputTokensOrZero();
+            totalOutTokens += response.outputTokensOrZero();
+            totalCacheReadTokens += response.cacheReadTokensOrZero();
+            totalCacheWriteTokens += response.cacheWriteTokensOrZero();
+            apiUsageLogService.logCall(response, modelName, "matching", attempt, tenantId, noticeId);
+
+            if (response.refused()) {
+                log.warn("matching_refused stop_reason={} attempt={}", response.stopReason(), attempt);
+                validationError = "Model declined the request (stop_reason=refusal)";
+                outcome(attempt, false, LlmResponse.FAILURE_REFUSAL);
+                break;   // the same prompt will be refused again
+            }
+            if (response.truncated()) {
+                log.warn("matching_attempt_truncated stop_reason=max_tokens attempt={} max_tokens={}", attempt, maxTokens);
+                validationError = "Output was truncated due to max_tokens limit.";
+                raiseCap = true;
+                outcome(attempt, false, LlmResponse.FAILURE_MAX_TOKENS);
+                continue;
+            }
+            if (response.failed()) {
+                log.warn("matching_attempt_unusable failure={} stop_reason={} attempt={}",
+                        response.failureReason(), response.stopReason(), attempt);
+                validationError = "Model returned no usable text output (" + response.failureReason() + ")";
+                outcome(attempt, false, response.failureReason());
+                continue;
+            }
+
+            try {
+                // fences / prose around the object are dropped; stray quotes inside strings are escaped
+                jsonNode = AiOutputParser.readJsonTree(objectMapper, response.content());
+            } catch (IllegalArgumentException e) {
+                log.warn("matching_attempt_failed attempt={} error={}", attempt, e.getMessage());
+                validationError = e.getMessage();
+                outcome(attempt, false, "invalid_json");
+                continue;
+            }
+            if (jsonNode.has("notice") && jsonNode.has("issues")) {
+                validationError = null;
+                outcome(attempt, true, null);
+                break;
+            }
+            validationError = "JSON missing required 'notice' or 'issues' keys";
+            outcome(attempt, false, "invalid_output");
         }
 
         if (jsonNode == null || validationError != null) {
@@ -290,18 +310,8 @@ public class IssueMatchingAgent {
         );
     }
 
-    private String sanitizeJsonContent(String content) {
-        if (content == null) return "{}";
-        String s = content.strip();
-        if (s.startsWith("```json")) {
-            s = s.substring(7);
-        } else if (s.startsWith("```")) {
-            s = s.substring(3);
-        }
-        if (s.endsWith("```")) {
-            s = s.substring(0, s.length() - 3);
-        }
-        return s.strip();
+    private void outcome(int attempt, boolean usable, String reason) {
+        if (apiUsageLogService != null) apiUsageLogService.reportOutcome("matching", attempt, usable, reason);
     }
 
     private String loadPromptTemplate() {

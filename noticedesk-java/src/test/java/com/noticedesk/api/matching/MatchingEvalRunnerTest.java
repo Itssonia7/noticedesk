@@ -9,9 +9,13 @@ import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.matching.CatalogueService;
+import com.noticedesk.api.service.llm.LlmFatalException;
+import com.noticedesk.api.testsupport.LiveRunGuard;
 import com.noticedesk.api.testsupport.RunCostLedger;
 import com.noticedesk.api.testsupport.TestAppProperties;
 import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.fail;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
@@ -37,6 +41,17 @@ class MatchingEvalRunnerTest {
             return;
         }
 
+        // ---- cost safeguards first: no call is made when any of these refuses the run
+        LiveRunGuard guard = LiveRunGuard.fromEnvironment();
+        LiveRunGuard.CommitCheck commit = guard.checkCommit(LiveRunGuard.gitHead());
+        System.out.println(commit.message());
+        if (!commit.allowed()) {
+            fail(commit.message());
+        }
+        if (Boolean.TRUE.equals(LiveRunGuard.gitDirty())) {
+            System.out.println("WARNING: tracked files have uncommitted changes; this run is not exactly commit " + commit.head());
+        }
+
         String apiKey = System.getenv("ANTHROPIC_API_KEY");
         String matchingModel = System.getenv("LLM_MODEL_MATCHING");
         if (matchingModel == null || matchingModel.isBlank()) {
@@ -60,9 +75,11 @@ class MatchingEvalRunnerTest {
         props.getLlm().setModelMatching(matchingModel);
         props.getMatching().setAllowDraftCards(true); // Allow dev draft cards for test bench evaluation
 
-        if (props.getPricing().getModels().get(matchingModel) == null) {
-            System.err.println("WARNING: no price configured for " + matchingModel + " in application.yml; costs will show UNPRICED");
+        if (!new ApiUsageLogService(null, props).hasPrice(matchingModel)) {
+            // an unpriced model would make the cost caps blind
+            fail("REFUSED: no price configured for model " + matchingModel + " under noticedesk.pricing.models in application.yml");
         }
+        guard.printSettings(System.out);
         System.out.println("Matching effort=" + props.getLlm().effortForAgent("matching")
                 + " max_tokens=" + props.getLlm().maxTokensForAgent("matching", false)
                 + " retry_max_tokens=" + props.getLlm().maxTokensForAgent("matching", true));
@@ -78,6 +95,8 @@ class MatchingEvalRunnerTest {
         CatalogueService catalogueService = new CatalogueService(jdbcTemplate, props, objectMapper);
         ApiUsageLogService usageLogService = new ApiUsageLogService(null, props);
         RunCostLedger ledger = RunCostLedger.attach(usageLogService, System.out);
+        guard.attach(usageLogService);
+        this.guard = guard;
         IssueMatchingAgent agent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, null, objectMapper);
 
         // Dummy set: the committed testbench (fake data). Private set: $PRIVATE_SEED_DIR/notices/*.json
@@ -88,10 +107,14 @@ class MatchingEvalRunnerTest {
             uniqueResources.putIfAbsent(res.getFilename(), res);
         }
         List<Resource> dummyNotices = new ArrayList<>(uniqueResources.values());
+        if (guard.smoke() && !dummyNotices.isEmpty()) {
+            dummyNotices = List.of(dummyNotices.get(0));
+            System.out.println("LIVE_SMOKE=true: only " + dummyNotices.get(0).getFilename() + " is run; private set skipped");
+        }
 
         List<Resource> privateNotices = new ArrayList<>();
         String privateSeedDir = System.getenv("PRIVATE_SEED_DIR");
-        if (privateSeedDir != null && !privateSeedDir.isBlank()) {
+        if (privateSeedDir != null && !privateSeedDir.isBlank() && !guard.smoke()) {
             File dir = new File(privateSeedDir, "notices");
             File[] files = dir.listFiles((d, name) -> name.endsWith(".json"));
             if (files != null) {
@@ -105,10 +128,11 @@ class MatchingEvalRunnerTest {
 
         BigDecimal[] spentInr = {BigDecimal.ZERO};
         ObjectNode dummySummary = evaluateSet("dummy", dummyNotices, false, agent, ledger, spentInr);
-        ObjectNode privateSummary = privateNotices.isEmpty() ? null
+        ObjectNode privateSummary = privateNotices.isEmpty() || abortReason != null ? null
                 : evaluateSet("private", privateNotices, true, agent, ledger, spentInr);
-        System.out.printf("Total billed calls: %d (failed: %d, unpriced: %d) | Total cost: %.4f INR%n",
-                ledger.size(), ledger.failedCalls(), ledger.unpricedCalls(), ledger.totalInr().doubleValue());
+        System.out.printf("Total billed calls: %d (failed: %d, unpriced: %d) | Total cost: %.4f INR (run cap INR %s, commit %s%s)%n",
+                ledger.size(), ledger.failedCalls(), ledger.unpricedCalls(), ledger.totalInr().doubleValue(),
+                guard.maxRunCostInr().toPlainString(), commit.head(), guard.smoke() ? ", SMOKE" : "");
 
         // Write timestamped JSON report to repo root testbench/results/
         File resultsDir = new File("../testbench/results");
@@ -129,7 +153,15 @@ class MatchingEvalRunnerTest {
 
         objectMapper.writerWithDefaultPrettyPrinter().writeValue(reportFile, summaryReport);
         System.out.println("Evaluation report written to: " + reportFile.getAbsolutePath());
+        if (abortReason != null) {
+            System.err.println("LIVE RUN ABORTED: " + abortReason);
+            fail("LIVE RUN ABORTED: " + abortReason);
+        }
     }
+
+    private LiveRunGuard guard;
+    /** Set when a billing / auth error or the consecutive-failure limit stopped the run. */
+    private String abortReason;
 
     /**
      * Evaluates one notice set. The returned JSON holds only notice IDs and metrics; for the private
@@ -158,14 +190,14 @@ class MatchingEvalRunnerTest {
 
         BigDecimal startInr = spentInr[0];      // the INR cap applies across both sets
         BigDecimal totalCostInr = startInr;
-        final BigDecimal INR_CAP = new BigDecimal("200.00");
+        final BigDecimal INR_CAP = guard != null ? guard.maxRunCostInr() : LiveRunGuard.DEFAULT_MAX_RUN_COST_INR;
 
         List<ObjectNode> noticeEvalResults = new ArrayList<>();
         List<WrongMatchInfo> wrongMatches = new ArrayList<>();
 
         for (Resource res : noticeList) {
             if (totalCostInr.compareTo(INR_CAP) >= 0) {
-                System.err.println("SAFETY CAP REACHED: Total spend " + totalCostInr + " INR exceeded INR 200 limit. Halting evaluation.");
+                System.err.println("SAFETY CAP REACHED: Total spend " + totalCostInr + " INR reached the run cap of INR " + INR_CAP + ". Halting evaluation.");
                 break;
             }
 
@@ -185,25 +217,24 @@ class MatchingEvalRunnerTest {
 
             System.out.println("Notice " + noticeId + ":");
             int callCheckpoint = ledger.size();
-            MatchingResult result = agent.matchNoticeWithOcrText(ocrText, docType, UUID.randomUUID(), UUID.randomUUID());
+            MatchingResult result;
+            try {
+                result = agent.matchNoticeWithOcrText(ocrText, docType, UUID.randomUUID(), UUID.randomUUID());
+            } catch (LlmFatalException e) {
+                // billing / auth error, or LIVE_MAX_CONSECUTIVE_FAILURES reached: stop the whole run now
+                totalCostInr = totalCostInr.add(ledger.totalInrSince(callCheckpoint));
+                abortReason = e.getMessage();
+                errorCallsCount++;
+                break;
+            }
 
             // every billed call for this notice (failed attempts and retries included)
             BigDecimal noticeInr = ledger.totalInrSince(callCheckpoint);
             totalCostInr = totalCostInr.add(noticeInr);
-
-            // Requirement 1: Stop immediately on billing/auth errors (credit balance, 400, 401, 403)
-            String flagStr = result.flags().toString().toLowerCase();
-            String missingStr = result.missingOrDoubtful().toString().toLowerCase();
             String whyStr = result.issues().stream().map(com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue::why).collect(java.util.stream.Collectors.joining(" ")).toLowerCase();
-            if (flagStr.contains("credit balance") || flagStr.contains("400") || flagStr.contains("401") || flagStr.contains("403")
-                    || missingStr.contains("credit balance") || missingStr.contains("400") || missingStr.contains("401") || missingStr.contains("403")
-                    || whyStr.contains("credit balance") || whyStr.contains("400") || whyStr.contains("401") || whyStr.contains("403")) {
-                // private notices: never print model text (it can quote the notice)
-                String errDetail = isPrivate ? "flags=" + result.flags()
-                        : "flags=" + result.flags() + " missing=" + result.missingOrDoubtful() + " why=" + whyStr;
-                System.err.println("FATAL BILLING / AUTH ERROR DETECTED for notice " + noticeId + ": " + errDetail);
-                throw new IllegalStateException("Halting evaluation runner due to API billing/auth error: " + errDetail);
-            }
+            // same inputs as the live pipeline: compare this hash with its matcher run when results differ
+            System.out.printf("  catalogue_hash=%s status=%s cost=%.4f INR%n", result.catalogueHash(),
+                    result.issues().stream().map(i -> i.status() + i.cardIds()).toList(), noticeInr.doubleValue());
 
             // Requirement 1: Failed/fallback match counted as an ERROR, never as correct "none"
             if (result.flags().contains("matching_failed") || result.flags().contains("matching_parse_failed")) {

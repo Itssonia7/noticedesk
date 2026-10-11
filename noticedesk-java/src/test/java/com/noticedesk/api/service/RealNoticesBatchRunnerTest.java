@@ -36,8 +36,18 @@ class RealNoticesBatchRunnerTest {
     private CitationVerificationAgent citationVerificationAgent;
     private DocxExportService docxExportService;
 
+    /**
+     * Writes into the tracked output/ folder and needs local real-notice files: never part of a plain
+     * {@code mvn test}. Runs only with ENABLE_E2E_TESTS=true, like the other runners.
+     */
+    private static boolean enabled() {
+        return "true".equalsIgnoreCase(System.getenv("ENABLE_E2E_TESTS"))
+                || "true".equalsIgnoreCase(System.getProperty("ENABLE_E2E_TESTS"));
+    }
+
     @BeforeEach
     void setUp() {
+        if (!enabled()) return;
         properties = new AppProperties();
         objectMapper = new ObjectMapper();
 
@@ -73,6 +83,10 @@ class RealNoticesBatchRunnerTest {
 
     @Test
     void testProcessRealNoticesFromTestDocumentsFolder() throws Exception {
+        if (!enabled()) {
+            System.out.println("Skipping RealNoticesBatchRunnerTest (ENABLE_E2E_TESTS not set to true)");
+            return;
+        }
         File outputDir = new File("../output");
         if (!outputDir.exists()) {
             outputDir.mkdirs();

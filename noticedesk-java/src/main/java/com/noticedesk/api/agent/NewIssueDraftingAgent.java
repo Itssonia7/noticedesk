@@ -7,6 +7,7 @@ import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
+import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.service.llm.LlmProvider;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.util.HtmlSanitizer;
@@ -145,6 +146,8 @@ public class NewIssueDraftingAgent {
                 log.warn("{} produced no usable output", label);
             }
             return result;
+        } catch (LlmFatalException e) {
+            throw e;   // billing / auth error or live run aborted: never a silent fallback
         } catch (Exception e) {
             log.error("{} execution failed: {}", label, e.getMessage());
             return null;

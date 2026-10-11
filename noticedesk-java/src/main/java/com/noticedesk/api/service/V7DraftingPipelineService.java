@@ -181,6 +181,12 @@ public class V7DraftingPipelineService {
 
         String fullOcrText = input != null && input.noticeOcrExcerpt() != null ? input.noticeOcrExcerpt() : "";
         MatchingResult matchingResult = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId);
+        String matchingFailure = matchingFailure(matchingResult);
+        if (matchingFailure != null) {
+            // no scaffold draft from a fallback issue: the notice fails here, before any writer call
+            log.error("v7 pipeline stopped for notice {}: {}", noticeId, matchingFailure);
+            throw new MatchingFailedException(matchingFailure);
+        }
         List<MatchedIssue> issues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
         if (matchingResult != null && properties != null && properties.getLlm() != null) {
             budget.addCost(properties.getLlm().getModelMatching(), matchingResult.inputTokens(), matchingResult.outputTokens(),
@@ -188,7 +194,8 @@ public class V7DraftingPipelineService {
         }
 
         persistIssueMatches(tenantId, noticeId, issues);
-        log.info("Stage 1 Issue Matching complete: matched {} issues", issues.size());
+        log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
+                issues.stream().map(i -> i.status() + i.cardIds()).toList(), matchingResult.catalogueHash());
 
         // ---- Stage 2: code template fill
         List<FilledTemplateResult> filledTemplates = new ArrayList<>();
@@ -357,6 +364,20 @@ public class V7DraftingPipelineService {
                 checkResults,
                 aiRecords
         );
+    }
+
+    /** Why Stage 1 gave no usable result (matcher fallback flags), or null when it did. */
+    static String matchingFailure(MatchingResult mr) {
+        if (mr == null) return "issue matching returned no result";
+        List<String> flags = mr.flags() != null ? mr.flags() : List.of();
+        for (String f : List.of("matching_failed", "matching_parse_failed")) {
+            if (flags.contains(f)) {
+                List<String> missing = mr.missingOrDoubtful() != null ? mr.missingOrDoubtful() : List.of();
+                String detail = missing.size() > 1 ? missing.get(1) : null;
+                return "issue matching failed (" + f + ")" + (detail != null ? ": " + detail : "");
+            }
+        }
+        return null;
     }
 
     /**

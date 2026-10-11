@@ -6,6 +6,7 @@ import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
+import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.service.llm.LlmProvider;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.util.HtmlSanitizer;
@@ -130,6 +131,8 @@ public class HighStakesDraftingAgent {
             return WriterCall.run(llmProvider, apiUsageLogService, properties, "high_stakes",
                     "HighStakesDraftingAgent sections 01/03", model, loadPrompt(), null, userPrompt, noticeId, budget,
                     response -> parseOrThrow(response.content(), response.model() != null ? response.model() : model));
+        } catch (LlmFatalException e) {
+            throw e;   // billing / auth error or live run aborted: never a silent fallback
         } catch (Exception e) {
             log.error("HighStakesDraftingAgent failed: {}", e.getMessage());
             return null;
