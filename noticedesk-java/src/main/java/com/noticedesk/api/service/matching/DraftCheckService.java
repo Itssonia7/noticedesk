@@ -176,10 +176,12 @@ public class DraftCheckService {
         Pattern pendingAiPattern = Pattern.compile("\\[\\[PENDING_AI: ([^\\]]+)\\]\\]");
 
         Matcher missingMatcher = missingPattern.matcher(fullReplyHtml);
-        List<String> missingMarkers = new ArrayList<>();
+        List<String> rawMissing = new ArrayList<>();
         while (missingMatcher.find()) {
-            missingMarkers.add(missingMatcher.group(1));
+            rawMissing.add(missingMatcher.group(1));
         }
+        // one entry per data item: keys normalised, synonyms merged, duplicates removed
+        List<String> missingMarkers = DraftTextCleanup.dedupeMarkerKeys(rawMissing);
 
         Matcher pendingMatcher = pendingAiPattern.matcher(fullReplyHtml);
         List<String> pendingAiMarkers = new ArrayList<>();
@@ -214,14 +216,16 @@ public class DraftCheckService {
                 Map.of("total_rendered_blocks", blockIds.size(), "unique_rendered_blocks", uniqueBlockIds.size())
         ));
 
-        // 8. CHECK_PROCEEDING_CONSISTENT (block): sections 01/02/12/14 must name the notice's own
-        //    provision, and the stage template must belong to the same proceeding.
+        // 8. CHECK_PROCEEDING_CONSISTENT (block): the code-built notice description (sections 01/02/14),
+        //    the prayer (12) and the filing checklist (15) must name the notice's own provision, and the stage
+        //    template must belong to the same proceeding. AI-written legal text and document lists are not
+        //    read: a Section 74 reply may rightly discuss Section 73 (e.g. the Section 75(2) fallback).
         if (noticeSection != null && !noticeSection.isBlank()) {
             List<String> problems = new ArrayList<>();
             boolean is73 = noticeSection.matches(".*\\b73\\b.*");
             boolean is74 = noticeSection.matches(".*\\b74A?\\b.*");
-            for (int secNum : new int[]{1, 2, 12, 14}) {
-                String text = getSectionHtml(sections, secNum);
+            for (int secNum : new int[]{1, 2, 12, 14, 15}) {
+                String text = withoutFreeText(getSectionHtml(sections, secNum));
                 if (!is73 && SECTION_73_PROCEEDING.matcher(text).find()) {
                     problems.add("section " + secNum + " refers to Section 73 but the notice is under " + noticeSection);
                 }
@@ -331,6 +335,15 @@ public class DraftCheckService {
                 log.warn("Failed to persist draft_flag '{}': {}", check.checkName(), e.getMessage());
             }
         }
+    }
+
+    private static final Pattern FREE_TEXT = Pattern.compile(
+            Pattern.quote(ReplyAssemblyService.FREE_TEXT_START) + ".*?" + Pattern.quote(ReplyAssemblyService.FREE_TEXT_END),
+            Pattern.DOTALL);
+
+    /** The code-built text of a section: AI text and gathered lists (marked by the assembly) removed. */
+    static String withoutFreeText(String html) {
+        return html == null ? "" : FREE_TEXT.matcher(html).replaceAll(" ");
     }
 
     private String getSectionHtml(List<AssembledSection> sections, int secNum) {

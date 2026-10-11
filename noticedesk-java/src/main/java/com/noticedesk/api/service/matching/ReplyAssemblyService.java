@@ -34,14 +34,26 @@ import java.util.regex.Pattern;
 @Slf4j
 public class ReplyAssemblyService {
 
+    /** "Para 3: ...", "Para 3(c): ...", "Paragraph 3.1 - ..." inside an &lt;li&gt;; group 2 = sub-para label. */
     private static final Pattern PARA_LI = Pattern.compile(
-            "<li>\\s*(?:<(?:strong|b)>)?\\s*Para(?:graph)?\\s*(\\d+)\\s*[:.]?\\s*(?:</(?:strong|b)>)?\\s*[:.\\-–—]?\\s*(.*?)</li>",
+            "<li>\\s*(?:<(?:strong|b)>)?\\s*Para(?:graph)?\\s*(\\d+)((?:\\s*\\(\\s*[a-z0-9]{1,5}\\s*\\)|\\.\\d+)*)"
+            + "\\s*[:.]?\\s*(?:</(?:strong|b)>)?\\s*[:.\\-–—]?\\s*(.*?)</li>",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     /** para_map keys that name a paragraph category (values = notice paragraph numbers). */
     private static final Set<String> PARA_CATEGORIES = Set.of("record", "issue", "demand", "directions");
     /** Other para_map keys are notice paragraph numbers ("3", "3.1", "Para 3"; values = issue numbers). */
     private static final Pattern PARA_KEY = Pattern.compile("(?i)^\\s*(?:para(?:graph)?\\.?\\s*)?(\\d{1,3})\\b");
     private static final Pattern STAGE_PLACEHOLDER = Pattern.compile("\\{\\{\\s*([a-z_.]+)\\s*\\}\\}");
+    /**
+     * Wraps AI text and gathered document lists in the sections the proceeding-consistency check reads
+     * (01, 14), so it judges only the code-built notice description and the stage template (DraftCheckService).
+     */
+    public static final String FREE_TEXT_START = "<!-- free-text -->";
+    public static final String FREE_TEXT_END = "<!-- /free-text -->";
+    /** Word budget for the high-stakes narrative in Section 01; the rest moves to Section 03. */
+    static final int EXEC_SUMMARY_MAX_WORDS = 150;
+    /** An issue bullet in Section 01 longer than this keeps only its first sentence. */
+    static final int SUMMARY_BULLET_MAX_WORDS = 40;
 
     private final JdbcTemplate jdbcTemplate;
     private final AppProperties properties;
@@ -71,7 +83,7 @@ public class ReplyAssemblyService {
     /** One piece of sanitised AI HTML for section 4, 5 or 6, optionally anchored after a template block. */
     public record AiFragment(int section, String afterBlock, String html) {}
 
-    /** Stage 3 output for one issue. {@code writer} is "partial" or "new_issue" (internal only). */
+    /** Stage 3 output for one issue. {@code writer} is "partial", "new_issue" or "high_stakes" (internal only). */
     public record AiIssueContent(
             int issueNo,
             String writer,
@@ -190,8 +202,15 @@ public class ReplyAssemblyService {
              .append(" issued under ").append(noticeSec)
              .append(" for GSTIN ").append(gstin)
              .append(". Total Demand Amount: ").append(totalDemand).append(".</p>");
+        String sec01Overflow = "";
         if (highStakes != null && highStakes.section01Html() != null && !highStakes.section01Html().isBlank()) {
-            sec01.append(highStakes.section01Html());
+            DraftTextCleanup.WordSplit split = DraftTextCleanup.limitWords(highStakes.section01Html(), EXEC_SUMMARY_MAX_WORDS);
+            sec01.append(freeText(split.kept()));
+            sec01Overflow = split.overflow();
+            if (!sec01Overflow.isBlank()) {
+                notes.add("High-stakes executive summary was longer than " + EXEC_SUMMARY_MAX_WORDS + " words ("
+                        + DraftTextCleanup.wordCount(highStakes.section01Html()) + "); the rest was moved to the end of Section 03.");
+            }
         }
         sec01.append("<ul>");
         for (MatchedIssue issue : matchedIssues) {
@@ -213,7 +232,7 @@ public class ReplyAssemblyService {
                         addOnce(pendingAiMarkers, "PENDING_AI: Issue " + issue.issueNo());
                         addOnce(assemblyFlags, "pending_ai_writer");
                     } else if (c.summaryLine() != null && !c.summaryLine().isBlank()) {
-                        sec01.append(c.summaryLine());
+                        sec01.append(freeText(oneLineSummary(c.summaryLine())));
                     } else {
                         sec01.append("Grounds of defence are set out at para {{ref:ISSUE-").append(issue.issueNo()).append("}}.");
                     }
@@ -254,6 +273,9 @@ public class ReplyAssemblyService {
              .append(".</p>");
         if (highStakes != null && highStakes.section03Html() != null && !highStakes.section03Html().isBlank()) {
             sec03.append(highStakes.section03Html());
+        }
+        if (!sec01Overflow.isBlank()) {
+            sec03.append(sec01Overflow);   // executive-summary narrative beyond the Section 01 word budget
         }
         rawSections.add(new AssembledSection(3, "03 Factual Background", sec03.toString()));
 
@@ -364,11 +386,10 @@ public class ReplyAssemblyService {
         for (FilledTemplateResult ft : templateMap.values()) {
             if (ft != null && ft.proceduralObjectionOptions() != null) procOptions.addAll(ft.proceduralObjectionOptions());
         }
-        procOptions.add("Check whether an opportunity of personal hearing has been offered (Section 75(4)).");
-        if (noticeSec.matches(".*\\b73\\b.*")) {
-            procOptions.add("Verify the limitation period under Section 73(10).");
-        } else if (noticeSec.matches(".*\\b74A?\\b.*")) {
-            procOptions.add("Verify the limitation period under Section 74(10).");
+        procOptions.addAll(proceduralOptionsForStage(normalizedStage, noticeSec));
+        if (StageDetector.ANTI_PROFITEERING.equals(normalizedStage)) {
+            // Section 73/74/75 adjudication points do not apply to a Section 171 proceeding
+            procOptions.removeIf(o -> ADJUDICATION_PROVISION.matcher(o).find());
         }
         for (String o : procOptions) sec13.append("<li>").append(o).append("</li>");
         sec13.append("</ul>");
@@ -393,9 +414,9 @@ public class ReplyAssemblyService {
         if (documents.isEmpty()) {
             sec14.append("<p>[[PARTNER: list the documents required from the client]]</p>");
         } else {
-            sec14.append("<ol>");
+            sec14.append(FREE_TEXT_START).append("<ol>");
             for (String d : documents) sec14.append("<li>").append(d).append("</li>");
-            sec14.append("</ol>");
+            sec14.append("</ol>").append(FREE_TEXT_END);
         }
         rawSections.add(new AssembledSection(14, "14 Client Summary", sec14.toString()));
 
@@ -420,6 +441,41 @@ public class ReplyAssemblyService {
         }
 
         return new AssembledReplyResult(finalSections, finalSourceMap, assemblyFlags, missingMarkers, pendingAiMarkers);
+    }
+
+    private static final Pattern ADJUDICATION_PROVISION = Pattern.compile("(?i)\\b(?:75\\s*\\(\\s*4\\s*\\)|73\\s*\\(\\s*10\\s*\\)|74A?\\s*\\(\\s*10\\s*\\))");
+
+    /**
+     * Code-built procedural objection options for the partner note. Anti-profiteering (Section 171)
+     * proceedings follow Rules 129-133, not the Section 73/74/75 adjudication provisions.
+     */
+    static List<String> proceduralOptionsForStage(String stage, String noticeSec) {
+        List<String> out = new ArrayList<>();
+        if (StageDetector.ANTI_PROFITEERING.equals(stage)) {
+            out.add("Check whether a copy of the DGAP investigation report and the evidence relied upon was supplied, with an opportunity to file objections (Rule 133).");
+            out.add("Check whether an opportunity of hearing was given before the order, if requested in writing (Rule 133(2)).");
+            out.add("Verify the time limits for the DGAP investigation (Rule 129(6)) and for the order (Rule 133(1)).");
+            return out;
+        }
+        out.add("Check whether an opportunity of personal hearing has been offered (Section 75(4)).");
+        if (noticeSec.matches(".*\\b73\\b.*")) {
+            out.add("Verify the limitation period under Section 73(10).");
+        } else if (noticeSec.matches(".*\\b74A?\\b.*")) {
+            out.add("Verify the limitation period under Section 74(10).");
+        }
+        return out;
+    }
+
+    private static String freeText(String html) {
+        return html == null || html.isBlank() ? "" : FREE_TEXT_START + html + FREE_TEXT_END;
+    }
+
+    /** One line per issue in Section 01: a long AI summary keeps its first sentence (Section 04 has the rest). */
+    static String oneLineSummary(String summary) {
+        String s = summary.trim();
+        if (DraftTextCleanup.wordCount(s) <= SUMMARY_BULLET_MAX_WORDS) return s;
+        Matcher m = Pattern.compile("^.+?[.;](?=\\s+[A-Z(]|\\s*$)", Pattern.DOTALL).matcher(s);
+        return m.find() ? m.group() : s;
     }
 
     // ------------------------------------------------------------------ Section 04 / 06 issue bodies
@@ -566,7 +622,7 @@ public class ReplyAssemblyService {
         int noticeParas = NoticeParagraphs.count(input != null ? input.noticeOcrExcerpt() : null);
 
         // AI para replies, keyed by notice paragraph number
-        Map<Integer, List<String>> aiParaReplies = new TreeMap<>();
+        Map<Integer, List<ParaReply>> aiParaReplies = new TreeMap<>();
         for (MatchedIssue issue : issues) {
             AiIssueContent c = ai.get(issue.issueNo());
             if (c == null || c.fragments() == null) continue;
@@ -577,9 +633,9 @@ public class ReplyAssemblyService {
                 while (m.find()) {
                     any = true;
                     int p = Integer.parseInt(m.group(1));
-                    String text = m.group(2).trim();
+                    String text = m.group(3).trim();
                     if (p >= 1 && !text.isEmpty()) {
-                        aiParaReplies.computeIfAbsent(p, k -> new ArrayList<>()).add(text);
+                        aiParaReplies.computeIfAbsent(p, k -> new ArrayList<>()).add(new ParaReply(subParaLabel(m.group(2)), text));
                     }
                 }
                 if (!any) {
@@ -587,7 +643,7 @@ public class ReplyAssemblyService {
                 }
             }
         }
-        int aiMax = aiParaReplies.isEmpty() ? 0 : ((TreeMap<Integer, List<String>>) aiParaReplies).lastKey();
+        int aiMax = aiParaReplies.isEmpty() ? 0 : ((TreeMap<Integer, List<ParaReply>>) aiParaReplies).lastKey();
 
         int known = Math.max(matcherMax, noticeParas);
         int paraCount = Math.max(known, aiMax);
@@ -611,7 +667,7 @@ public class ReplyAssemblyService {
         for (int p = 1; p <= paraCount; p++) {
             sb.append("<li><strong>Para ").append(p).append(":</strong> ");
             if (aiParaReplies.containsKey(p)) {
-                sb.append(String.join(" ", aiParaReplies.get(p)));
+                sb.append(mergeParaReplies(aiParaReplies.get(p)));
             } else if (paraToIssues.containsKey(p)) {
                 sb.append(denialWithRefs(issuesByNumber(paraToIssues.get(p), p, issues)));
             } else if (issueParas.contains(p)) {
@@ -629,6 +685,65 @@ public class ReplyAssemblyService {
         }
         sb.append("</ol>");
         return sb.toString();
+    }
+
+    /** One AI reply to a notice paragraph; {@code subPara} is "(c)" / ".1", or "" for the whole paragraph. */
+    record ParaReply(String subPara, String text) {}
+
+    private static String subParaLabel(String raw) {
+        return raw == null ? "" : raw.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Merges the replies of several issues to one notice paragraph: whole-paragraph replies first, then
+     * sub-paragraph replies in sub-para order ((a), (b), (c) / .1, .2), each starting as its own sentence
+     * ("Sub-para (c): ..."). A sentence already given for this paragraph is not repeated.
+     */
+    static String mergeParaReplies(List<ParaReply> replies) {
+        List<ParaReply> ordered = new ArrayList<>();
+        for (ParaReply r : replies) if (r.subPara().isEmpty()) ordered.add(r);
+        List<ParaReply> labelled = new ArrayList<>();
+        for (ParaReply r : replies) if (!r.subPara().isEmpty()) labelled.add(r);
+        labelled.sort(Comparator.comparing(ParaReply::subPara, ReplyAssemblyService::compareSubPara));   // stable
+        ordered.addAll(labelled);
+
+        Set<String> seen = new HashSet<>();
+        List<String> parts = new ArrayList<>();
+        Map<String, Integer> labelPart = new HashMap<>();
+        for (ParaReply r : ordered) {
+            StringBuilder kept = new StringBuilder();
+            for (String sentence : r.text().split("(?<=[.;!?])\\s+(?=[A-Z(\\[<])")) {
+                String key = sentence.replaceAll("<[^>]+>", " ").toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
+                if (key.isEmpty() || !seen.add(key)) continue;
+                if (kept.length() > 0) kept.append(' ');
+                kept.append(sentence.trim());
+            }
+            if (kept.length() == 0) continue;
+            String body = endSentence(kept.toString());
+            if (r.subPara().isEmpty()) {
+                parts.add(body);
+            } else if (labelPart.containsKey(r.subPara())) {      // two issues on the same sub-para: one entry
+                int i = labelPart.get(r.subPara());
+                parts.set(i, parts.get(i) + " " + body);
+            } else {
+                labelPart.put(r.subPara(), parts.size());
+                parts.add("Sub-para " + r.subPara() + ": " + body);
+            }
+        }
+        return String.join(" ", parts);
+    }
+
+    private static int compareSubPara(String a, String b) {
+        String na = a.replaceAll("[^a-z0-9]", "");
+        String nb = b.replaceAll("[^a-z0-9]", "");
+        if (na.matches("\\d+") && nb.matches("\\d+")) return Integer.compare(Integer.parseInt(na), Integer.parseInt(nb));
+        return na.length() != nb.length() ? Integer.compare(na.length(), nb.length()) : na.compareTo(nb);
+    }
+
+    private static String endSentence(String s) {
+        String t = s.trim();
+        String plain = t.replaceAll("(?:</[a-z]+>\\s*)+$", "");
+        return plain.matches("(?s).*[.;:!?)\\]]$") ? t : t + ".";
     }
 
     /** The matched issues with the given numbers; falls back to {@link #issuesForPara} when none match. */
@@ -694,7 +809,8 @@ public class ReplyAssemblyService {
                 for (String d : c.documents()) docs.putIfAbsent(d.trim().toLowerCase(), d.trim());
             }
         }
-        return new ArrayList<>(docs.values());
+        // the same document listed by several issues (or worded slightly differently) is listed once
+        return DraftTextCleanup.dedupeDocuments(new ArrayList<>(docs.values()));
     }
 
     // ------------------------------------------------------------------ Helpers

@@ -25,6 +25,7 @@ import com.noticedesk.api.model.matching.ReplyTemplate;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.service.matching.DraftCheckService;
+import com.noticedesk.api.service.matching.DraftTextCleanup;
 import com.noticedesk.api.service.matching.PrayerStripper;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AiFragment;
@@ -432,7 +433,8 @@ public class V7DraftingPipelineService {
                     notes.add("Issue #" + issue.issueNo() + ": AI text for section " + a.section() + " ignored (writers may only add to 04/05/06).");
                 }
             }
-            return new IssueAiOutput(issue, "partial", frags, nn(r.citations()), nn(r.documents()), r.summaryLine(), null,
+            // the partner note's "Written by" names the model tier that wrote the issue
+            return new IssueAiOutput(issue, highStakes ? "high_stakes" : "partial", frags, nn(r.citations()), nn(r.documents()), r.summaryLine(), null,
                     r.model(), r.promptVersion());
         }
 
@@ -450,7 +452,7 @@ public class V7DraftingPipelineService {
         if (r.section04Html() != null && !r.section04Html().isBlank()) frags.add(new AiFragment(4, null, HtmlSanitizer.sanitize(r.section04Html())));
         if (r.section05Html() != null && !r.section05Html().isBlank()) frags.add(new AiFragment(5, null, HtmlSanitizer.sanitize(r.section05Html())));
         if (r.section06Html() != null && !r.section06Html().isBlank()) frags.add(new AiFragment(6, null, HtmlSanitizer.sanitize(r.section06Html())));
-        return new IssueAiOutput(issue, "new_issue", frags, nn(r.citations()), nn(r.documents()), r.summaryLine(),
+        return new IssueAiOutput(issue, highStakes ? "high_stakes" : "new_issue", frags, nn(r.citations()), nn(r.documents()), r.summaryLine(),
                 r.strengthNote(), r.model(), r.promptVersion());
     }
 
@@ -523,14 +525,13 @@ public class V7DraftingPipelineService {
               .append("</td></tr>");
         }
         sb.append("</table>");
-        // every [[MISSING: x]] in the draft (code-built and AI-written), plus code markers such as stage templates
-        Set<String> missing = new LinkedHashSet<>();
+        // every [[MISSING: x]] in the draft (code-built and AI-written), plus code markers such as stage templates;
+        // keys normalised so "Date of Service" / "date_of_service_of_notice" are listed once
+        List<String> missing = new ArrayList<>();
         Matcher mm = MISSING_MARKER.matcher(String.join("\n", sectionsHtml));
-        while (mm.find()) missing.add(mm.group(1).trim());
-        for (String m : assemblyResult.missingMarkers()) {
-            missing.add(m.replaceAll("^\\[\\[MISSING: |\\]\\]$", ""));
-        }
-        appendMarkerList(sb, "Missing Data Markers", new ArrayList<>(missing));
+        while (mm.find()) missing.add(mm.group(1));
+        missing.addAll(assemblyResult.missingMarkers());
+        appendMarkerList(sb, "Missing Data Markers", DraftTextCleanup.dedupeMarkerKeys(missing));
         appendMarkerList(sb, "Pending AI Markers", assemblyResult.pendingAiMarkers());
         return sb.toString();
     }

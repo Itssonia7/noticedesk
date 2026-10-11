@@ -328,6 +328,70 @@ class V7Stage3PipelineTest {
         verify(partialAgent).generatePartialDrafting(any(), any(), any(), anyString(), any(), eq(true), any());
         verify(newIssueAgent).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), eq(true), any());
         assertTrue(section(r, 13).contains("High-stakes mode active"));
+        // the partner note names the high-stakes writer for the AI issues it wrote
+        assertTrue(section(r, 13).contains("Issue #3: Match Status=none, Cards=[], Template=NONE (v0), Written by=AI high_stakes"),
+                section(r, 13));
+        assertFalse(section(r, 13).contains("Written by=AI new_issue"));
+    }
+
+    @Test
+    void section74Reply_mentioningSection73InAiText_isNotAProceedingMismatch() {
+        // s.74 notice: the AI legitimately discusses the Section 75(2) fallback to Section 73
+        when(highStakesAgent.isHighStakesActive(eq("Section 74"), anyString(), any())).thenReturn(true);
+        when(highStakesAgent.generateHighStakesDraft(any(), any(), anyString(), any(), any()))
+                .thenReturn(new HighStakesResult(true,
+                        "<p>Even if fraud is not proved, Section 75(2) only permits a redetermination under Section 73, "
+                                + "and the penalty under Section 73(9) is far lower.</p>",
+                        "<p>Background.</p>", List.of(), "test-model-hs", "high_stakes_v1"));
+        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any()))
+                .thenReturn(new NewIssueDraftingResult(3, "<p>Ground.</p>", "", "<p>Submission.</p>", List.of(), null,
+                        List.of("Copy of the order under Section 73 for the earlier year"),
+                        "Under Section 75(2) the demand can at most be redetermined under Section 73.", "m", "new_issue_v2"));
+        assembly.registerInMemoryStageTemplate(new StageTemplate("scn_74", 1, null, null, "active",
+                Map.of("12", "<p>Prayer: drop the proceedings under {{notice.section}}.</p>", "15", "<p>Checklist for {{notice.section}}.</p>"),
+                null, null, null));
+
+        DraftingPipelineResult r = pipeline.runPipeline(input("Section 74"));
+
+        assertTrue(section(r, 1).contains("Section 73"), "AI text kept as written");
+        DraftCheckResult c = r.checkResults().stream().filter(x -> x.checkName().equals("CHECK_PROCEEDING_CONSISTENT")).findFirst().orElseThrow();
+        assertTrue(c.passed(), String.valueOf(c.details()));
+    }
+
+    @Test
+    void section74Reply_withASection73Prayer_isStillAMismatch() {
+        assembly.registerInMemoryStageTemplate(new StageTemplate("scn_74", 1, null, null, "active",
+                Map.of("12", "<p>Prayer: drop the proceedings under Section 73.</p>", "15", "<p>Checklist.</p>"), null, null, null));
+
+        DraftingPipelineResult r = pipeline.runPipeline(input("Section 74"));
+
+        DraftCheckResult c = r.checkResults().stream().filter(x -> x.checkName().equals("CHECK_PROCEEDING_CONSISTENT")).findFirst().orElseThrow();
+        assertFalse(c.passed());
+        assertTrue(c.details().toString().contains("section 12 refers to Section 73"), String.valueOf(c.details()));
+    }
+
+    @Test
+    void matchingFailure_stopsTheNotice_noScaffoldNoWriterCall() {
+        MatchingResult failed = new MatchingResult(new MatchedNoticeInfo(null, null, null, null, null, null, null, null),
+                List.of(new MatchedIssue(1, "none", List.of(), "Matching failed: invalid JSON", List.of(), Map.of(), List.of(),
+                        List.of("matching_failed"))),
+                Map.of(), List.of("matching_failed", "invalid JSON at line 1 column 2"), List.of("matching_failed"), "h", 10, 5, 0, 0);
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any())).thenReturn(failed);
+
+        MatchingFailedException e = assertThrows(MatchingFailedException.class, () -> pipeline.runPipeline(input("Section 73")));
+
+        assertTrue(e.getMessage().contains("matching_failed") && e.getMessage().contains("invalid JSON"), e.getMessage());
+        verifyNoInteractions(partialAgent, newIssueAgent);
+        verify(highStakesAgent, never()).generateHighStakesDraft(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void fatalWriterError_propagates_noFurtherWriterCalls() {
+        when(partialAgent.generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any()))
+                .thenThrow(new LlmFatalException("Anthropic billing error (HTTP 400): credit balance is too low"));
+
+        assertThrows(LlmFatalException.class, () -> pipeline.runPipeline(input("Section 73")));
+        verifyNoInteractions(newIssueAgent);
     }
 
     @Test
