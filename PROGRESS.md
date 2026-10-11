@@ -68,9 +68,68 @@ Last updated: 11-10-2026
   rows, so it needed no change.
 - **Answer key**: notice 007 -> none, 009 -> none, 015 -> full (CARD-009); CARD-004 summary tightened.
 
+## (b3) Cost safeguards (`f558ef6`)
+
+About Rs 350 was lost in live test runs that kept calling the API after the code had failed, ran
+stale code, or could not parse a response. Now:
+
+- **Fail fast**: HTTP 400 "credit balance is too low", 401 and 403 are fatal (`LlmFatalException`):
+  never retried, never turned into a fallback result; the run stops with a one-line reason. Both
+  live runners also stop after `LIVE_MAX_CONSECUTIVE_FAILURES` (default 2) failed or unusable calls
+  in a row (truncated, refused, no text, bad JSON, exception).
+- **Failed matching**: the notice is marked FAILED with the reason; no scaffold draft and no writer
+  call (`MatchingFailedException`; in production the drafting job fails).
+- **Version check**: both runners print `git rev-parse HEAD`; with `LIVE_EXPECTED_COMMIT` set (7+
+  characters, prefix match) a different HEAD is refused. No git: a warning, the run continues.
+  Uncommitted changes in tracked files print a warning.
+- **Smoke mode**: `LIVE_SMOKE=true` runs the first notice only and prints its cost and status.
+- **Test caps**: Rs 50 per run (`LIVE_MAX_RUN_COST_INR`), Rs 30 per notice (`LIVE_MAX_NOTICE_COST_INR`,
+  applied by the runners only; each notice also gets at most what is left of the run cap).
+  Production defaults in `application.yml` are unchanged (Rs 60 per notice).
+- **Models**: the runners take models only from `LLM_MODEL_*` / `application.yml` (none built in) and
+  refuse a model with no price, since its cost would bypass every cap. For a cheap plumbing run,
+  point the writers at the matching model, e.g. `LLM_MODEL_NEW_ISSUE` and `LLM_MODEL_HIGH_STAKES` set
+  to the same value as `LLM_MODEL_MATCHING`; pricing follows the override. A dated snapshot id
+  returned by the API (`<model>-YYYYMMDD`) is priced as its base model.
+- **Offline replay tests** (`LlmFixtureReplayTest`, fixtures in `src/test/resources/llm-fixtures/`):
+  synthetic Messages API responses (thinking block first, then text; max_tokens; unescaped quotes
+  inside a JSON string; billing and auth errors) are served by a local HTTP server, and the matcher
+  and all three writers run end-to-end through the real Anthropic provider. Zero API cost. The
+  matcher now uses the writers' JSON reader (fences, prose and stray quotes handled).
+- **No tracked files touched by `mvn test`**: `RealNoticesBatchRunnerTest` runs only with
+  `ENABLE_E2E_TESTS=true`; the stub-mode Scenarios / ClaudeOpusBatch runners write to `target/`
+  (they still write to `output/` in an E2E run).
+
+## (b4) Draft cleanup (`5bd1be1`, CA review of notices 002, 007, 010)
+
+- **Documents (10 / 11 / 14)**: listed once across issues; duplicates after normalising case,
+  whitespace and punctuation are removed, and a narrower entry ("GSTR-3B returns for April 2020 to
+  March 2021") is merged into a wider one ("Copies of all GSTR-3B and GSTR-1 returns for ..."),
+  keeping the first position.
+- **Missing markers**: keys normalised (lower case, underscores) and de-duplicated in the Missing
+  Data Markers list and `CHECK_MARKERS_LIST`; "date of service of notice" / "date and mode of
+  service" -> `date_of_service`; `date_of_receipt` stays separate.
+- **Para-wise reply (05)**: replies of several issues to the same notice paragraph are merged,
+  ordered by sub-para ("Sub-para (a): ... Sub-para (c): ..."), repeated sentences dropped.
+  Unmapped paragraphs keep the PARTNER placeholder.
+- **High-stakes executive summary (01)**: AI narrative capped at 150 words plus one line per issue;
+  the rest moves to the end of Section 03 (noted in Section 13), nothing dropped.
+- **CHECK_PROCEEDING_CONSISTENT**: reads only the code-built notice description (01 / 02 / 14), the
+  prayer (12) and the filing checklist (15); AI legal text may discuss Section 73 in a Section 74
+  reply (Section 75(2) fallback, Section 73(9) comparison).
+- **Partner note**: "Written by" shows `high_stakes` for issues the high-stakes writer wrote;
+  anti-profiteering notices get Rule 133 / DGAP report points instead of Section 75(4) / 73(10) /
+  74(10).
+- **Matching eval vs live pipeline (notice 002)**: both send the same prompt, notice text, notice
+  type (`scn_74`), effort and max_tokens. They can differ in the catalogue (the live runner reloads
+  the dev seeds first; the eval runner uses the DB as it is) and the model is not deterministic
+  (effort models take no temperature). Both runners now print the catalogue hash and the match
+  statuses so two runs can be compared.
+
 ## (c) Verification
 
-- Offline unit suite: **168 tests, 0 failures, 1 error** (no live API calls; all models and IndianKanoon mocked). The error is the legacy `RealNoticesBatchRunnerTest`, which needs local real-notice files and failed before these changes too.
+- Offline unit suite (`mvn test`): **204 tests, 0 failures, 0 errors** (no live API calls; all models
+  and IndianKanoon mocked or served from local fixtures). A plain `mvn test` no longer modifies `output/`.
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
   - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.
@@ -78,8 +137,9 @@ Last updated: 11-10-2026
 
 ## (d) Open items
 
-1. **First live trial run**: set `LLM_MODEL_PARTIAL_DRAFTING`, `LLM_MODEL_NEW_ISSUE`,
-   `LLM_MODEL_HIGH_STAKES`, `INDIANKANOON_API_TOKEN`; draft a few notices with the real models.
+1. **Next live run**: smoke run first (`LIVE_SMOKE=true`, `LIVE_EXPECTED_COMMIT` set), then Run 2
+   on notices 01, 04, 06, 11, 10 (`V7_LIVE_NOTICES`). Set `LLM_MODEL_MATCHING`,
+   `LLM_MODEL_PARTIAL_DRAFTING`, `LLM_MODEL_NEW_ISSUE`, `LLM_MODEL_HIGH_STAKES`, `INDIANKANOON_API_TOKEN`.
 2. **CA-approved content**: real issue cards, reply templates and stage templates (prayer, filing
    checklist). All current templates are marked "[DEV - not CA reviewed]". Approved content goes in
    `$PRIVATE_SEED_DIR`, not the repo (see `docs/PRIVATE_DATA.md`).
