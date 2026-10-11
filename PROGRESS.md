@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 10-10-2026
+Last updated: 11-10-2026
 
 ---
 
@@ -34,9 +34,43 @@ Last updated: 10-10-2026
 - **Database**: V26 rewritten (the original could never apply); V27 allows the new citation statuses.
   V23 to V27 tested on Postgres 16.
 
+## (b2) Live-run fixes (first live run on `0816a44`)
+
+- **Para-wise reply (notice 010)**: the matcher returns `para_map` as paragraph -> issues (`{"3": [1]}`);
+  assembly read it as category -> paragraphs, so a 5-paragraph notice printed only Para 1. Both forms
+  are now read, and the paragraph count is the largest of the matcher map, the numbered paragraphs in
+  the notice text and the AI replies. AI replies are never dropped; a reply beyond the notice gets a warn flag.
+- **Tax period (notice 002)**: one `PeriodNormalizer` reads "April 2020 to March 2021", "Apr-2020 to
+  Mar-2021", "FY 2020-21", "F.Y. 2020-2021", "01.04.2020 to 31.03.2021", "July 2019", "07/2019" and
+  FY ranges. The template version in force on the period's START date is used; a period crossing a
+  version boundary gets a warn flag. (CARD-002 itself has no dev reply template, so it still goes to the AI writer.)
+- **High-stakes writer (notice 002)**: JSON is extracted from fences/prose and unescaped quotes inside
+  HTML are repaired; one retry that quotes the validation error, then the issue gets
+  `[[PARTNER: AI draft failed — write manually]]` + block flag. Logs name the high-stakes model correctly.
+  Likely causes of the 4/4 failures: double quotes inside HTML strings (Jackson "Unexpected character
+  ('i')") and calls ending in the old 180 s timeout (now 600 s). Unusable responses log their shape;
+  `LLM_DEBUG_LOG_RAW_OUTPUT=true` (live runner only) also logs a 400-char sample.
+- **Cost control**: `LLM_HIGH_STAKES_MAX_CALLS_PER_NOTICE` (6) and `LLM_MAX_COST_INR_PER_NOTICE` (60);
+  past either cap the remaining AI issues get the PARTNER placeholder + block flag, no call. The notice
+  text is sent as a cached prefix block, so the 2nd and later issues of a notice read it from cache.
+- **Duplicate prayer (notice 010)**: writer prompts forbid a prayer; code removes a trailing AI prayer
+  (info flag). Section 12 is the only prayer.
+- **Citations**: de-duplicated (case name, reporter citation, section / notification / circular number)
+  before IndianKanoon checks and the citation list.
+- **Stage templates**: stage now follows the notice's section (171 -> `anti_profiteering`, 74A -> `scn_74a`,
+  74 -> `scn_74`, 73 -> `scn_73`) over the triage label. Dev seeds (DRAFT, partner to review) added for
+  `scn_74`, `scn_74a`, `anti_profiteering`. A stage with no template gets a placeholder + block flag,
+  never `scn_73`.
+- **Tax period / date of receipt**: printed in Section 03 from the matcher / notice record
+  (`notices.receipt_date`); `[[MISSING: ...]]` + warn flag when absent.
+- **Runners**: the live runner inserts synthetic notice rows (tenant set for RLS) before the run and loads
+  the dev seeds (skipped when `PRIVATE_SEED_DIR` is set). The matching eval runner writes no notice-linked
+  rows, so it needed no change.
+- **Answer key**: notice 007 -> none, 009 -> none, 015 -> full (CARD-009); CARD-004 summary tightened.
+
 ## (c) Verification
 
-- Offline unit suite: **72 tests, 0 failures** (no live API calls; all models and IndianKanoon mocked).
+- Offline unit suite: **168 tests, 0 failures, 1 error** (no live API calls; all models and IndianKanoon mocked). The error is the legacy `RealNoticesBatchRunnerTest`, which needs local real-notice files and failed before these changes too.
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
   - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.
@@ -49,8 +83,8 @@ Last updated: 10-10-2026
 2. **CA-approved content**: real issue cards, reply templates and stage templates (prayer, filing
    checklist). All current templates are marked "[DEV - not CA reviewed]". Approved content goes in
    `$PRIVATE_SEED_DIR`, not the repo (see `docs/PRIVATE_DATA.md`).
-3. **Stage templates for other proceedings**: only `asmt_10` and `scn_73` exist. Anti-profiteering
-   (Section 171) and others fall back to `scn_73` and are blocked by the consistency check.
+3. **Stage templates for other proceedings**: `asmt_10`, `scn_73`, and DRAFT `scn_74`, `scn_74a`,
+   `anti_profiteering` exist (dev text, partner to review). Other stages get a placeholder + block flag.
 4. **Re-run the Stage 1 matching benchmark** with the live model (now reports dummy and private sets
    separately).
 5. **Partner review of the golden drafts**, including three legal points in `notice_10`: Section 171(3A)
