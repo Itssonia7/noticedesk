@@ -7,7 +7,7 @@
     "issues": [
       {
         "issue_no": 1,
-        "status": "partial",
+        "status": "full",
         "card_ids": ["CARD-009"],
         "key_facts": {
           "period": "2022-23",

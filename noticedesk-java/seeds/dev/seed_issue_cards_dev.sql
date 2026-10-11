@@ -31,7 +31,7 @@ VALUES
  'TPL-SEC164-01', 'draft'),
 
 ('CARD-004', 1, 'Section 16(5) Statutory Relaxation of ITC Time-Bar for FY 2017-18 to 2020-21',
- '[DEV - not CA reviewed] Retrospective statutory relaxation under Section 16(5) allowing ITC claims for FY 2017-18, 2018-19, 2019-20, and 2020-21 in returns filed up to 30th November 2021.',
+ '[DEV - not CA reviewed] Section 16(4) time-bar demand for ITC of FY 2017-18, 2018-19, 2019-20 or 2020-21 that is protected by the retrospective Section 16(5) relaxation: ITC of those four years is allowed if claimed in any GSTR-3B filed on or before the fixed date 30-11-2021. Match ONLY when the notice FY is one of those four years and the GSTR-3B claiming the ITC was filed by 30-11-2021. The 30-11-2021 date is the special Section 16(5) cut-off, NOT the general "30th November following the end of the financial year" due date (that general due date belongs to CARD-003).',
  '["04 Issue-wise Response", "05 Para-wise Reply", "09 Ground 2"]'::jsonb,
  '2017-07-01', '2021-03-31', '["asmt_10", "drc_01a", "scn_73", "scn_74"]'::jsonb,
  '["section 16(5)", "retrospective relaxation", "fy 2017-18", "fy 2018-19", "fy 2019-20", "fy 2020-21"]'::jsonb,

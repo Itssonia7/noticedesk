@@ -7,8 +7,8 @@
     "issues": [
       {
         "issue_no": 1,
-        "status": "partial",
-        "card_ids": ["CARD-006"],
+        "status": "none",
+        "card_ids": [],
         "key_facts": {
           "period": "2023-24",
           "amount": 400000.0,
