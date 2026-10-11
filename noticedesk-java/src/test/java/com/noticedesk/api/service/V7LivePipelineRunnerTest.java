@@ -18,6 +18,7 @@ import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.TemplateFillService;
+import com.noticedesk.api.testsupport.BenchNoticeRows;
 import com.noticedesk.api.testsupport.RunCostLedger;
 import com.noticedesk.api.testsupport.TestAppProperties;
 import org.junit.jupiter.api.Test;
@@ -78,6 +79,10 @@ public class V7LivePipelineRunnerTest {
         props.getCitation().setProvider(citationProvider);
         props.getCitation().setIndiankanoonApiToken(ikToken);
         props.getMatching().setAllowDraftCards(true);
+        // synthetic bench notices only: log a 400-char sample of any unparseable writer output
+        props.getLlm().setDebugLogRawOutput(true);
+        System.out.printf("per-notice caps: high-stakes calls=%s, cost INR=%s%n",
+                props.getLlm().getHighStakes().getMaxCallsPerNotice(), props.getLlm().getMaxCostInrPerNotice());
 
         for (String m : List.of(modelMatching, modelPartial, modelNewIssue, modelHighStakes)) {
             if (props.getPricing().getModels().get(m) == null) {
@@ -92,13 +97,27 @@ public class V7LivePipelineRunnerTest {
 
         ObjectMapper om = new ObjectMapper();
 
-        org.springframework.jdbc.datasource.DriverManagerDataSource ds = new org.springframework.jdbc.datasource.DriverManagerDataSource();
+        // one connection for the whole run, so the RLS tenant set below applies to every insert
+        org.springframework.jdbc.datasource.SingleConnectionDataSource ds = new org.springframework.jdbc.datasource.SingleConnectionDataSource(
+                "jdbc:postgresql://127.0.0.1:5432/noticedesk_dev", "noticedesk", "noticedesk", true);
         ds.setDriverClassName("org.postgresql.Driver");
-        ds.setUrl("jdbc:postgresql://127.0.0.1:5432/noticedesk_dev");
-        ds.setUsername("noticedesk");
-        ds.setPassword("noticedesk");
         org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate jdbc =
                 new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(ds);
+        UUID tenantUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
+        BenchNoticeRows.setTenant(jdbc.getJdbcTemplate(), tenantUuid);
+        // dev issue cards + reply/stage templates (scn_74, scn_74a, anti_profiteering included). Skipped when
+        // PRIVATE_SEED_DIR is set: the dev upserts must never overwrite a private catalogue.
+        String privateSeedDir = System.getenv("PRIVATE_SEED_DIR");
+        if (privateSeedDir == null || privateSeedDir.isBlank()) {
+            java.sql.Connection conn = ds.getConnection();   // the single shared connection: not closed here
+            for (String seed : List.of("seeds/dev/seed_issue_cards_dev.sql", "seeds/dev/seed_reply_and_stage_templates_dev.sql")) {
+                org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(conn,
+                        new org.springframework.core.io.FileSystemResource(seed));
+            }
+            System.out.println("Dev seeds loaded (issue cards, reply and stage templates)");
+        } else {
+            System.out.println("PRIVATE_SEED_DIR set: dev seeds not loaded");
+        }
 
         LlmFactory llmFactory = new LlmFactory(props);
         CatalogueService catalogueService = new CatalogueService(jdbc.getJdbcTemplate(), props, om);
@@ -119,13 +138,13 @@ public class V7LivePipelineRunnerTest {
 
         V7DraftingPipelineService pipelineService = new V7DraftingPipelineService(
                 matchingAgent, jdbc, om, fillService, assemblyService, checkService,
-                partialAgent, newIssueAgent, highStakesAgent, citationAgent
+                partialAgent, newIssueAgent, highStakesAgent, citationAgent, props, usageLogService
         );
 
         String[] targetNotices = new String[]{
+                "notice_02_fullmatch_sec74.json",
                 "notice_07_partial_novel_machinery.json",
-                "notice_10_nomatch_anti_profiteering.json",
-                "notice_02_fullmatch_sec74.json"
+                "notice_10_nomatch_anti_profiteering.json"
         };
 
         File resultsDir = new File("../testbench/results");
@@ -173,8 +192,9 @@ public class V7LivePipelineRunnerTest {
             noticeMap.put("issue_date", date);
             noticeMap.put("section", section);
 
-            UUID tenantUuid = UUID.fromString("11111111-1111-1111-1111-111111111111");
             UUID noticeUuid = UUID.nameUUIDFromBytes(noticeId.getBytes(StandardCharsets.UTF_8));
+            // issue_matches.notice_id references notices: create the synthetic notice row first
+            BenchNoticeRows.ensureNotice(jdbc.getJdbcTemplate(), tenantUuid, noticeUuid, noticeId, gstin, clientName, docType, fy);
 
             DraftingAgent.DraftingInput input = new DraftingAgent.DraftingInput(
                     noticeUuid, "formal", null, clientName, null, null, "Regular", gstin, state,
