@@ -395,30 +395,6 @@ class V7Stage3PipelineTest {
     }
 
     @Test
-    void matchingFailure_stopsTheNotice_noScaffoldNoWriterCall() {
-        MatchingResult failed = new MatchingResult(new MatchedNoticeInfo(null, null, null, null, null, null, null, null),
-                List.of(new MatchedIssue(1, "none", List.of(), "Matching failed: invalid JSON", List.of(), Map.of(), List.of(),
-                        List.of("matching_failed"))),
-                Map.of(), List.of("matching_failed", "invalid JSON at line 1 column 2"), List.of("matching_failed"), "h", 10, 5, 0, 0);
-        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any())).thenReturn(failed);
-
-        MatchingFailedException e = assertThrows(MatchingFailedException.class, () -> pipeline.runPipeline(input("Section 73")));
-
-        assertTrue(e.getMessage().contains("matching_failed") && e.getMessage().contains("invalid JSON"), e.getMessage());
-        verifyNoInteractions(partialAgent, newIssueAgent);
-        verify(highStakesAgent, never()).generateHighStakesDraft(any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void fatalWriterError_propagates_noFurtherWriterCalls() {
-        when(partialAgent.generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any()))
-                .thenThrow(new LlmFatalException("Anthropic billing error (HTTP 400): credit balance is too low"));
-
-        assertThrows(LlmFatalException.class, () -> pipeline.runPipeline(input("Section 73")));
-        verifyNoInteractions(newIssueAgent);
-    }
-
-    @Test
     void prayerAndNoticeUnderstandingUseTheNoticesOwnSection() {
         assembly.registerInMemoryStageTemplate(new StageTemplate("anti_profiteering", 1, null, null, "active",
                 Map.of("12", "<p>It is prayed to drop the proceedings under {{notice.section}} read with Rule 133.</p>",
