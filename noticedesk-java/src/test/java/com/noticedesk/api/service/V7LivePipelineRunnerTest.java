@@ -141,11 +141,23 @@ public class V7LivePipelineRunnerTest {
                 partialAgent, newIssueAgent, highStakesAgent, citationAgent, props, usageLogService
         );
 
-        String[] targetNotices = new String[]{
-                "notice_02_fullmatch_sec74.json",
-                "notice_07_partial_novel_machinery.json",
-                "notice_10_nomatch_anti_profiteering.json"
-        };
+        String envNotices = System.getenv("V7_LIVE_NOTICES");
+        if (envNotices == null || envNotices.isBlank()) {
+            envNotices = System.getProperty("V7_LIVE_NOTICES");
+        }
+        String[] targetNotices;
+        if (envNotices != null && !envNotices.isBlank()) {
+            targetNotices = Arrays.stream(envNotices.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toArray(String[]::new);
+        } else {
+            targetNotices = new String[]{
+                    "notice_02_fullmatch_sec74.json",
+                    "notice_07_partial_novel_machinery.json",
+                    "notice_10_nomatch_anti_profiteering.json"
+            };
+        }
 
         File resultsDir = new File("../testbench/results");
         if (!resultsDir.exists() && !resultsDir.mkdirs()) {
