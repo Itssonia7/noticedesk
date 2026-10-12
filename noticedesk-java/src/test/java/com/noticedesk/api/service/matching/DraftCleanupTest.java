@@ -140,6 +140,51 @@ class DraftCleanupTest {
         assertFalse(c.passed());
     }
 
+    @Test
+    void longFreeTextMarkers_areShownInTheirOriginalWording_dedupedByKey() {
+        String longText = "List of supplier invoices forming the differential ITC of Rs. 1,00,000/-";
+        assertEquals(List.of(longText, "Date of Service", "date_of_receipt"), DraftTextCleanup.dedupeMarkers(List.of(
+                "[[MISSING: " + longText + "]]", "list of  supplier invoices forming the differential ITC of Rs. 1,00,000/-",
+                "Date of Service", "date_of_service_of_notice", "date and mode of service", "date_of_receipt")));
+    }
+
+    @Test
+    void checkMarkersList_andMissingDataMarkers_showReadableText() {
+        String longText = "List of supplier invoices forming the differential ITC of Rs. 1,00,000/-";
+        AssembledReplyResult r = new AssembledReplyResult(List.of(
+                new AssembledSection(4, "04", "<p>Enclose [[MISSING: " + longText + "]].</p>"),
+                new AssembledSection(6, "06", "<p>See [[MISSING: list of supplier invoices forming the differential itc of rs. 1,00,000/-]].</p>")),
+                List.of(), List.of(), List.of(), List.of());
+        MatchingResult mr = new MatchingResult(null, List.of(), Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0);
+
+        DraftCheckResult c = new DraftCheckService(null).runAllChecks(mr, r).stream()
+                .filter(x -> x.checkName().equals("CHECK_MARKERS_LIST")).findFirst().orElseThrow();
+        assertEquals(List.of(longText), c.details().get("missing_markers"));
+        assertEquals(1, c.details().get("missing_count"));
+    }
+
+    // ---------------------------------------------------------------- amounts rendered once
+
+    @Test
+    void duplicatedCurrencyPrefix_isCollapsed() {
+        assertEquals("discrepancy of Rs 1,00,000 in GSTR-2B", TemplateFillService.collapseDuplicateCurrency("discrepancy of Rs Rs 1,00,000 in GSTR-2B"));
+        assertEquals("of Rs 1,00,000", TemplateFillService.collapseDuplicateCurrency("of Rs. Rs 1,00,000"));
+        assertEquals("of Rs 1,00,000", TemplateFillService.collapseDuplicateCurrency("of INR Rs 1,00,000"));
+        assertEquals("of Rs 1,00,000", TemplateFillService.collapseDuplicateCurrency("of ₹ Rs 1,00,000"));
+        assertEquals("of Rs -5,000", TemplateFillService.collapseDuplicateCurrency("of Rs Rs -5,000"));
+        // single prefixes and ordinary words are untouched
+        assertEquals("Rs 1,00,000 and Rs. 500 for Members Rs 5", TemplateFillService.collapseDuplicateCurrency("Rs 1,00,000 and Rs. 500 for Members Rs 5"));
+        assertEquals("Rs. or INR", TemplateFillService.collapseDuplicateCurrency("Rs. or INR"));
+    }
+
+    @Test
+    void templateWithRsBeforeAmountPlaceholder_rendersTheAmountOnce() {
+        TemplateFillService fill = new TemplateFillService(null, null, new com.fasterxml.jackson.databind.ObjectMapper());
+        var res = fill.fillTextPlaceholders("<p>discrepancy of Rs {{issue.amount_tax}} and Rs. {{issue.amount_tax}}; total {{issue.amount_tax}}.</p>",
+                List.of("issue.amount_tax"), Map.of("issue.amount_tax", 100000.0), "TPL-T");
+        assertEquals("<p>discrepancy of Rs 1,00,000 and Rs 1,00,000; total Rs 1,00,000.</p>", res.html());
+    }
+
     // ---------------------------------------------------------------- B3 para-wise reply
 
     @Test

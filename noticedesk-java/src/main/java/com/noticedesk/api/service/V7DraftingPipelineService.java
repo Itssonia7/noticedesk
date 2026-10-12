@@ -547,12 +547,13 @@ public class V7DraftingPipelineService {
         }
         sb.append("</table>");
         // every [[MISSING: x]] in the draft (code-built and AI-written), plus code markers such as stage templates;
-        // keys normalised so "Date of Service" / "date_of_service_of_notice" are listed once
+        // de-duplicated by normalised key so "Date of Service" / "date_of_service_of_notice" are listed once,
+        // in the wording of the first occurrence
         List<String> missing = new ArrayList<>();
         Matcher mm = MISSING_MARKER.matcher(String.join("\n", sectionsHtml));
         while (mm.find()) missing.add(mm.group(1));
         missing.addAll(assemblyResult.missingMarkers());
-        appendMarkerList(sb, "Missing Data Markers", DraftTextCleanup.dedupeMarkerKeys(missing));
+        appendMarkerList(sb, "Missing Data Markers", DraftTextCleanup.dedupeMarkers(missing));
         appendMarkerList(sb, "Pending AI Markers", assemblyResult.pendingAiMarkers());
         return sb.toString();
     }

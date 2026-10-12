@@ -340,7 +340,8 @@ public class TemplateFillService {
         }
         matcher.appendTail(sb);
 
-        return new BlockFillResult(sb.toString(), missingVars, flags);
+        // a template written "Rs {{issue.amount_tax}}" must not print "Rs Rs 1,00,000"
+        return new BlockFillResult(collapseDuplicateCurrency(sb.toString()), missingVars, flags);
     }
 
     /**
@@ -383,6 +384,20 @@ public class TemplateFillService {
         }
 
         return val.toString();
+    }
+
+    /** A currency prefix (Rs / Rs. / INR / ₹) directly followed by another one and an amount. */
+    private static final Pattern DUPLICATE_CURRENCY =
+            Pattern.compile("(?i)(?:\\bRs\\.?|\\bINR|₹)\\s*(?=(?:Rs\\.?|INR|₹)\\s*-?\\d)");
+
+    /**
+     * Renders an amount once: drops a currency prefix written in the template text when the filled value
+     * ({@link #formatIndianCurrency}, "Rs 1,00,000") carries its own, e.g. "Rs Rs 1,00,000" / "Rs. Rs 1,00,000"
+     * / "INR Rs 1,00,000" -> "Rs 1,00,000".
+     */
+    public static String collapseDuplicateCurrency(String text) {
+        if (text == null || text.isEmpty()) return text;
+        return DUPLICATE_CURRENCY.matcher(text).replaceAll("");
     }
 
     public static String formatIndianCurrency(BigDecimal amount) {

@@ -918,7 +918,7 @@ public class ReplyAssemblyService {
             m.appendReplacement(sb, Matcher.quoteReplacement(val));
         }
         m.appendTail(sb);
-        return sb.toString();
+        return TemplateFillService.collapseDuplicateCurrency(sb.toString());
     }
 
     private String getStageSectionOrMissing(

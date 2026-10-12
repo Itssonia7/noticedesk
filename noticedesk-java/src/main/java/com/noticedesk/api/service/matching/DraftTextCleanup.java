@@ -6,7 +6,7 @@ import java.util.regex.Pattern;
 
 /**
  * Code-only clean-up of assembled draft text: document lists merged across issues, [[MISSING: x]]
- * marker keys normalised, and the high-stakes executive summary kept to a word budget.
+ * markers de-duplicated by a normalised key (shown in their original wording), and the high-stakes executive summary kept to a word budget.
  */
 public final class DraftTextCleanup {
 
@@ -124,6 +124,24 @@ public final class DraftTextCleanup {
                 .replaceAll("^_|_$", "");
         if (DATE_OF_SERVICE.matcher(k).matches()) return "date_of_service";
         return k;
+    }
+
+    /**
+     * Markers for display: one per data item, de-duplicated by {@link #normaliseMarkerKey} (synonyms merged),
+     * each shown as the original human-readable text of its first occurrence ("[[MISSING: ...]]" wrapper
+     * removed, whitespace collapsed). The normalised key is used only to find duplicates.
+     */
+    public static List<String> dedupeMarkers(Collection<String> markers) {
+        Map<String, String> firstText = new LinkedHashMap<>();
+        if (markers != null) {
+            for (String m : markers) {
+                String key = normaliseMarkerKey(m);
+                if (key.isEmpty() || firstText.containsKey(key)) continue;
+                String text = m.trim().replaceAll("^\\[\\[\\s*MISSING:\\s*|\\s*\\]\\]$", "").replaceAll("\\s+", " ").trim();
+                firstText.put(key, text);
+            }
+        }
+        return new ArrayList<>(firstText.values());
     }
 
     /** Normalised, de-duplicated marker keys in first-seen order. */

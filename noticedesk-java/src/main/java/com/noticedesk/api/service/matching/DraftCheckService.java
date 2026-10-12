@@ -180,8 +180,8 @@ public class DraftCheckService {
         while (missingMatcher.find()) {
             rawMissing.add(missingMatcher.group(1));
         }
-        // one entry per data item: keys normalised, synonyms merged, duplicates removed
-        List<String> missingMarkers = DraftTextCleanup.dedupeMarkerKeys(rawMissing);
+        // one entry per data item (normalised key, synonyms merged), shown in its first original wording
+        List<String> missingMarkers = DraftTextCleanup.dedupeMarkers(rawMissing);
 
         Matcher pendingMatcher = pendingAiPattern.matcher(fullReplyHtml);
         List<String> pendingAiMarkers = new ArrayList<>();
