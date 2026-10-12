@@ -14,8 +14,9 @@ import java.math.BigDecimal;
  * {@link #refusalReason(String, String, long, int)} with the call's prompt size and the max_tokens it is
  * about to send. The call is refused when {@code spent + worst case > cap}, where the worst case is
  * <ul>
- *   <li>input: {@code ceil(prompt characters / 3)} tokens (conservative: English/legal text runs about 4
- *       characters per token), every token priced at the higher of the input and cache-write prices, so
+ *   <li>input: {@code ceil(prompt characters / 2)} tokens (conservative: English/legal text runs about 4
+ *       characters per token, but a live matching call estimated at about 5,900 tokens with 3 characters per
+ *       token used about 7,770), every token priced at the higher of the input and cache-write prices, so
  *       a prompt that is written to the cache is covered too;</li>
  *   <li>output: the full max_tokens of the call (thinking included) at the output price.</li>
  * </ul>
@@ -26,7 +27,7 @@ public final class NoticeCallBudget {
 
     public static final String HIGH_STAKES = "high_stakes";
     /** Characters per token assumed when estimating a prompt's input tokens (deliberately low = conservative). */
-    public static final int CHARS_PER_TOKEN = 3;
+    public static final int CHARS_PER_TOKEN = 2;
 
     private final int maxHighStakesCalls;
     private final BigDecimal maxCostInr;

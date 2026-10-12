@@ -79,10 +79,17 @@ class HardCostCapTest {
     void worstCase_isMaxTokensAtOutputPrice_plusInputAtTheHigherOfInputAndCacheWrite() {
         // claude-opus-5-5: output $20/M, cache write $5/M (> input $4/M), INR 88 per USD
         assertEquals(0, new BigDecimal("28.16").compareTo(NoticeCallBudget.worstCaseInr(pricing, OPUS, 0, 16000)));
-        // 30,000 chars -> 10,000 tokens at $5/M = $0.05 = INR 4.40, + INR 28.16
-        assertEquals(0, new BigDecimal("32.56").compareTo(NoticeCallBudget.worstCaseInr(pricing, OPUS, 30_000, 16000)));
-        assertEquals(10_000, NoticeCallBudget.estimateInputTokens(30_000));
+        // 30,000 chars -> 15,000 tokens (2 chars per token) at $5/M = $0.075 = INR 6.60, + INR 28.16
+        assertEquals(0, new BigDecimal("34.76").compareTo(NoticeCallBudget.worstCaseInr(pricing, OPUS, 30_000, 16000)));
+        assertEquals(2, NoticeCallBudget.CHARS_PER_TOKEN);
+        assertEquals(15_000, NoticeCallBudget.estimateInputTokens(30_000));
         assertEquals(1, NoticeCallBudget.estimateInputTokens(1));
+        assertEquals(1, NoticeCallBudget.estimateInputTokens(2));
+        assertEquals(2, NoticeCallBudget.estimateInputTokens(3));
+        assertEquals(0, NoticeCallBudget.estimateInputTokens(0));
+        // live matching call (cached catalogue): ~15,540 prompt chars used ~7,770 input tokens; the
+        // estimate must not be below the actual count
+        assertTrue(NoticeCallBudget.estimateInputTokens(15_540) >= 7_770);
         assertNull(NoticeCallBudget.worstCaseInr(pricing, "unpriced-model", 0, 100));
     }
 
