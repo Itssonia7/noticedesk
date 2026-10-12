@@ -16,6 +16,7 @@ import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.DraftCheckService;
+import com.noticedesk.api.service.matching.GstStateCodes;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.TemplateFillService;
 import com.noticedesk.api.service.llm.LlmFatalException;
@@ -38,12 +39,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class V7LivePipelineRunnerTest {
-
-    private static final Map<String, String> STATE_BY_CODE = Map.of(
-            "07", "Delhi",
-            "24", "Gujarat",
-            "27", "Maharashtra"
-    );
 
     @Test
     void runV7LivePipelineRun2() throws Exception {
@@ -236,7 +231,7 @@ public class V7LivePipelineRunnerTest {
             String date = findPattern(ocr, "\\nDate:\\s*(\\d{2}-\\d{2}-\\d{4})");
             String clientName = findPattern(ocr, "To,\\s*\\n(M/s [^\\n]+)");
             String gstin = findPattern(ocr, "GSTIN:\\s*([0-9A-Z]{15})");
-            String state = STATE_BY_CODE.getOrDefault(gstin.substring(0, 2), "Unknown State");
+            String state = GstStateCodes.nameForGstin(gstin).orElse(null);   // null -> [[MISSING: state]] in assembly
             String fy = findPattern(ocr, "Financial Year:\\s*(\\S+)");
             String section = findPattern(ocr, "(?:Show Cause Notice|Notice) under (Section \\d+[A-Z]?)");
 

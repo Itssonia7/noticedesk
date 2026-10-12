@@ -96,6 +96,17 @@ INSERT INTO stage_templates (
         "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} alleging that the benefit of a tax rate reduction or input tax credit was not passed on to recipients. Reply required before the due date.</p>",
         "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Price lists before and after the rate change 3. Product-wise computation workings 4. Authorisation Letter 5. Document Annexures.</p>"
     }'::jsonb
+),
+-- Show cause notice under a provision other than 73/74/74A/171 (e.g. Section 27 / 63 / 129).
+-- Neutral wording only: no Section 73/74-specific limitation or Section 75(4) references.
+(
+    'generic_scn', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for copies of the documents, reports and statements relied upon in the notice, and for cross-examination of the persons whose statements are relied upon.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} be dropped in full and that no tax, interest, penalty or other amount be demanded. It is further requested that an opportunity of personal hearing be granted before any adverse order is passed.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} proposing action against the taxpayer. Reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Authorisation Letter 3. Document Annexures 4. Request for copies of relied-upon documents (if not supplied).</p>"
+    }'::jsonb
 )
 ON CONFLICT (stage, version) DO UPDATE SET
     sections = EXCLUDED.sections;

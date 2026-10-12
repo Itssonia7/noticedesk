@@ -259,9 +259,12 @@ public class ReplyAssemblyService {
 
         // ---------------------------------------------------------------- Section 03
         StringBuilder sec03 = new StringBuilder();
-        String state = input != null && input.registrationStateName() != null && !input.registrationStateName().isBlank()
-                ? input.registrationStateName() : "[[MISSING: registration_state]]";
-        if (state.startsWith("[[MISSING")) addOnce(missingMarkers, "registration_state");
+        String state = registrationState(input);
+        if (state == null) {
+            state = "[[MISSING: state]]";
+            addOnce(missingMarkers, "state");
+            addOnce(assemblyFlags, "warn:missing_state");
+        }
         sec03.append("<p>").append(clientName).append(" (GSTIN: ").append(gstin)
              .append(") is registered under the GST law in the State of ").append(state).append(".</p>");
         sec03.append("<p>Notice reference ").append(noticeRef).append(" dated ").append(noticeDate)
@@ -387,8 +390,9 @@ public class ReplyAssemblyService {
             if (ft != null && ft.proceduralObjectionOptions() != null) procOptions.addAll(ft.proceduralObjectionOptions());
         }
         procOptions.addAll(proceduralOptionsForStage(normalizedStage, noticeSec));
-        if (StageDetector.ANTI_PROFITEERING.equals(normalizedStage)) {
-            // Section 73/74/75 adjudication points do not apply to a Section 171 proceeding
+        if (StageDetector.ANTI_PROFITEERING.equals(normalizedStage) || StageDetector.GENERIC_SCN.equals(normalizedStage)) {
+            // Section 73/74/75 adjudication points do not apply to a Section 171 proceeding, and are not
+            // assumed for a notice under some other provision (e.g. Section 63 / 129)
             procOptions.removeIf(o -> ADJUDICATION_PROVISION.matcher(o).find());
         }
         for (String o : procOptions) sec13.append("<li>").append(o).append("</li>");
@@ -447,7 +451,8 @@ public class ReplyAssemblyService {
 
     /**
      * Code-built procedural objection options for the partner note. Anti-profiteering (Section 171)
-     * proceedings follow Rules 129-133, not the Section 73/74/75 adjudication provisions.
+     * proceedings follow Rules 129-133, not the Section 73/74/75 adjudication provisions; a generic show
+     * cause notice (provision other than 73/74/74A/171) gets neutral options only.
      */
     static List<String> proceduralOptionsForStage(String stage, String noticeSec) {
         List<String> out = new ArrayList<>();
@@ -455,6 +460,12 @@ public class ReplyAssemblyService {
             out.add("Check whether a copy of the DGAP investigation report and the evidence relied upon was supplied, with an opportunity to file objections (Rule 133).");
             out.add("Check whether an opportunity of hearing was given before the order, if requested in writing (Rule 133(2)).");
             out.add("Verify the time limits for the DGAP investigation (Rule 129(6)) and for the order (Rule 133(1)).");
+            return out;
+        }
+        if (StageDetector.GENERIC_SCN.equals(stage)) {
+            out.add("Check whether an opportunity of personal hearing has been offered before any adverse order.");
+            out.add("Verify the time limit, if any, prescribed for the proceeding under " + noticeSec + ".");
+            out.add("Check whether the notice states the provision, the grounds and the computation of the amount proposed.");
             return out;
         }
         out.add("Check whether an opportunity of personal hearing has been offered (Section 75(4)).");
@@ -877,6 +888,17 @@ public class ReplyAssemblyService {
             }
         }
         return null;
+    }
+
+    /**
+     * State of registration: the registration record's name unless it is blank or a placeholder such as
+     * "Unknown State", else the name for the GSTIN's state code. Null when neither gives a real name.
+     */
+    static String registrationState(DraftingAgent.DraftingInput input) {
+        if (input == null) return null;
+        String recorded = input.registrationStateName();
+        if (!GstStateCodes.isPlaceholderName(recorded)) return recorded.trim();
+        return GstStateCodes.nameForGstin(input.registrationIdentifier()).orElse(null);
     }
 
     private static String orMissing(String value, String field, List<String> missingMarkers, List<String> flags) {

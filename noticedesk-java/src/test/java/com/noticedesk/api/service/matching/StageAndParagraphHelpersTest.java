@@ -23,6 +23,13 @@ class StageAndParagraphHelpersTest {
             "NULL              | rfd_08  | rfd_08",
             "NULL              | NULL    | unknown",
             "Section 16        | NULL    | unknown",
+            "Section 27        | scn_73  | generic_scn",
+            "Section 63        | scn_73  | generic_scn",
+            "Section 129       | scn     | generic_scn",
+            "'Section 27 / Section 63 / Section 129' | scn_73 | generic_scn",
+            "Section 122       | scn_74  | generic_scn",
+            "NULL              | scn_73  | scn_73",
+            "Section 63        | asmt_10 | asmt_10",
     })
     void detectsStage(String section, String triage, String expected) {
         assertEquals(expected, StageDetector.detect(section, triage));
