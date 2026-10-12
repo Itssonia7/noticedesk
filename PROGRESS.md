@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 12-10-2026
+Last updated: 12-10-2026 (cache-aware cost estimate, provisional templates, citation-only runner)
 
 ---
 
@@ -175,10 +175,57 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   ~5,900 vs actual ~7,770 at 3). Worst cases rise slightly (e.g. Opus new_issue at 16,000 max_tokens
   about Rs 30).
 
+## (b7) Cache-aware cost estimate, provisional templates, citation-only runner
+
+- **Cache-aware worst case** (`NoticeCallBudget.estimate`, `PromptCacheRegistry`): the hard cap priced the
+  whole prompt (rules + ~330k-character catalogue) at the cache-write rate on every call, so one Sonnet
+  matching call was estimated at about Rs 36 + Rs 7.04 output and refused under the test caps even when
+  the catalogue was already cached. The estimate is now split: the cacheable prefix (system prompt +
+  catalogue; for the writers system prompt + notice prefix) is priced at the cache-READ rate when this
+  process wrote or read the same prefix hash for the same model within the cache's warm window (5 min
+  TTL minus 30 s), else at cache-write (first call of a run); the per-call part at the input rate
+  (`CHARS_PER_TOKEN=2`); output = max_tokens x output price. The token count the API reports for the
+  prefix (cache_creation / cache_read tokens) is recorded on the first call and reused for later
+  estimates of the same prefix. `[call-check]` logs the breakdown (`prefix_tokens`, `prefix_pricing`,
+  `prefix_INR`, `per_call_INR`, `output_INR`). Sonnet 5.5 matching on an 83,000-token catalogue at
+  max_tokens 8000: first call Rs 25.30 (prefix Rs 18.26 cache-write + Rs 7.04 output), later calls
+  Rs 8.50 (prefix Rs 1.46 cache-read + Rs 7.04), plus the notice text at the input rate (about Rs 1.76
+  for a 20,000-character notice). A Rs 12 notice cap refuses the first call and allows the next.
+- **AI section -> provisional template** (`ProvisionalTemplateService`, `TemplateScrubber`, V28): an
+  approved `ai_issue_sections` row becomes a 'draft' issue card (`NDK-AI-nnn`, or a new version of the
+  card given in the request) and a 'provisional' `reply_templates` row whose blocks are the section's
+  04/05/06 paragraphs with every notice-specific value replaced by a placeholder (`{{client.legal_name}}`,
+  `{{client.gstin}}`, `{{notice.reference}}`, `{{notice.issue_date}}`, `{{issue.amount_tax}}`,
+  `{{issue.period}}`, `{{issue.<fact>}}` for identifying / numeric facts, `{{notice.total_demand_amount}}`),
+  in every form the writers use (Rs 4,82,310/-, 482310, 4.82 lakh, 15.10.2023, 15th October 2023,
+  FY 2022-23, April 2022 to March 2023, M/s ABC Pvt. Ltd. / ABC Private Limited). A value that is still
+  present afterwards refuses the promotion (nothing written). Citations are carried per block with their
+  check status, documents from Section 10; provenance (source section, notice, tenant, approver, time)
+  on the card, the template and the section. Idempotent: a second promotion returns the existing
+  template. Endpoints `POST /api/v7/ai-sections/{id}/promote` (body `{approvedBy, cardId?}`) and
+  `GET /api/v7/ai-sections?noticeId=` (tenant from the auth claims, RLS tenant set for the transaction).
+  Matching sees promoted cards when `CATALOGUE_INCLUDE_PROVISIONAL=true` (default); `TemplateFillService`
+  uses 'provisional' templates like 'active' and adds the info flag `FLAG_PROVISIONAL_TEMPLATE`; the
+  partner note shows "Template status=PROVISIONAL". `notice.reference` is now a fill variable.
+  Note: issue_cards / reply_templates are the global catalogue (no tenant, no RLS), so a promoted
+  template is shared by every tenant of the deployment: hence the strict placeholder replacement.
+- **IndianKanoon cost and failures**: each v7 search / fragment call is logged at
+  `INDIANKANOON_COST_INR_PER_SEARCH` / `_FRAGMENT` (default 0, set from the firm's plan; step
+  `ik_search` / `ik_fragment` in api_usage_logs and the run ledger) and counted against the per-notice
+  cap; past the cap the remaining citations are NOT_CHECKED with `IK_COST_CAP_REACHED`. HTTP 401 / 403 /
+  429 from IndianKanoon throw `IndianKanoonFatalException` (an `LlmFatalException`): the run stops
+  instead of silently marking citations NOT_CHECKED.
+- **Citation-only live runner** (`CitationCheckRunnerTest`, `ENABLE_E2E_TESTS=true` +
+  `INDIANKANOON_API_TOKEN`): runs the citation agent only (no model calls) on `CITATION_CHECK_LIST`
+  ("case|court|year;...") or five defaults (Hindustan Steel 1969, CIT v Vatika Township 2014, Whirlpool
+  v Registrar of Trade Marks 1998, Mangalore Chemicals 1991, one invented name that must be NOT_FOUND)
+  and prints the status per citation, the IndianKanoon call count and the cost.
+
 ## (c) Verification
 
-- Offline unit suite (`mvn clean test`): **255 tests, 0 failures, 0 errors** (no live API calls; all models
+- Offline unit suite (`mvn clean test`): **273 tests, 0 failures, 0 errors** (no live API calls; all models
   and IndianKanoon mocked or served from local fixtures). A plain `mvn test` no longer modifies `output/`.
+  V23 to V28 applied on Postgres 16.
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
   - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.
@@ -203,6 +250,9 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
    `RealNoticesBatchRunnerTest.java`): decide whether to remove them and clean history.
 7. **Enable the privacy hook in every clone**: `git config core.hooksPath .githooks`.
 8. **Merge to main and switch `DRAFTING_PIPELINE=v7`** once items 1 to 5 are done.
+9. **Provisional templates**: review the first promoted templates (`reply_templates.status='provisional'`)
+   and either set them 'active' (with the card) or retire them; set `INDIANKANOON_COST_INR_PER_*` from
+   the IndianKanoon plan; run `CitationCheckRunnerTest` once the token exists.
 
 ---
 

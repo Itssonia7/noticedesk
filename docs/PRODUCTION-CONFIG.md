@@ -159,7 +159,18 @@ Used by: `app/agents/citation_verification.py`.
 ```bash
 CITATION_PROVIDER=indiankanoon
 INDIANKANOON_API_TOKEN=your-token-here
+# real per-call prices from your IndianKanoon plan (INR); 0 = logged but free.
+# Every v7 search / fragment call is logged in api_usage_logs (step ik_search / ik_fragment)
+# at this price and counted against LLM_MAX_COST_INR_PER_NOTICE; past the cap the remaining
+# citations are NOT_CHECKED (block flag). HTTP 401 / 403 / 429 from IndianKanoon stop the run.
+INDIANKANOON_COST_INR_PER_SEARCH=0
+INDIANKANOON_COST_INR_PER_FRAGMENT=0
 ```
+
+Citation-only live check (no model calls): `ENABLE_E2E_TESTS=true INDIANKANOON_API_TOKEN=... mvn test
+-Dtest=CitationCheckRunnerTest` prints the status of five well-known citations (one invented, must be
+NOT_FOUND), the IndianKanoon call count and the configured cost. `CITATION_CHECK_LIST="case|court|year;..."`
+overrides the list.
 
 ### 3.3 Verify
 

@@ -98,6 +98,10 @@ Key `.env` defaults (already stub-mode, no API keys required to run):
 - `LLM_PROVIDER_PRIMARY=stub` — set to `anthropic` + `ANTHROPIC_API_KEY=sk-ant-...` for real draft generation
 - `OCR_PROVIDER_PRIMARY=stub` — set to `google_doc_ai` or `azure_doc_intel` for real OCR
 - `CITATION_PROVIDER=stub` — set to `indiankanoon` + `INDIANKANOON_API_TOKEN=...` for real citation verification
+- `INDIANKANOON_COST_INR_PER_SEARCH=0` / `INDIANKANOON_COST_INR_PER_FRAGMENT=0` — real INR price of one IndianKanoon
+  search / fragment call (set from your IndianKanoon plan); logged per call and counted against the per-notice cost cap
+- `CATALOGUE_INCLUDE_PROVISIONAL=true` — v7 matching also sees issue cards / reply templates promoted from an approved
+  AI issue section (`POST /api/v7/ai-sections/{id}/promote`); set `false` to match against CA-approved content only
 - `AUTH_PROVIDER=dev` — dev header bypass, only works when `ENVIRONMENT=development`
 
 Run tests:
