@@ -43,10 +43,10 @@ final class WriterCall {
         for (int attempt = 1; attempt <= 2; attempt++) {
             int maxTokens = properties.getLlm().maxTokensForAgent(agentKey, raiseCap);
             String prompt = validationError != null ? userPrompt + retryInstruction(validationError) : userPrompt;
-            // hard cap: worst case of exactly this call (prompt as sent, max_tokens as sent) must fit the budget
-            String refusal = budget != null
-                    ? budget.refusalReason(agentKey, model, promptChars(systemPrompt, cachedUserPrefix, prompt), maxTokens)
-                    : null;
+            // hard cap: worst case of exactly this call (prompt as sent, max_tokens as sent) must fit the budget;
+            // system prompt + cached notice prefix form the cacheable prefix, the issue prompt the per-call part
+            NoticeCallBudget.Prompt shape = NoticeCallBudget.Prompt.of(model, cacheablePrefix(systemPrompt, cachedUserPrefix), prompt);
+            String refusal = budget != null ? budget.refusalReason(agentKey, shape, maxTokens) : null;
             if (refusal != null) {
                 log.warn("{} not called (attempt={}): {}", label, attempt, refusal);
                 return null;
@@ -65,8 +65,12 @@ final class WriterCall {
                 outcome(usage, agentKey, attempt, false, e.getClass().getSimpleName());
                 return null;
             }
-            if (budget != null) budget.recordCall(agentKey, response, model);
+            if (budget != null) budget.recordCall(agentKey, response, model, shape);
             if (usage != null) {
+                if (budget == null && response != null && usage.promptCache() != null) {
+                    int cacheTokens = response.cacheWriteTokensOrZero() + response.cacheReadTokensOrZero();
+                    if (cacheTokens > 0) usage.promptCache().recordUse(model, shape.prefixHash(), cacheTokens);
+                }
                 usage.logCall(response, model, agentKey, attempt, null, noticeId);
             }
 
@@ -109,6 +113,12 @@ final class WriterCall {
             outcome(usage, agentKey, attempt, false, "invalid_output");
         }
         return null;
+    }
+
+    /** The text the provider caches for a writer call: the system prompt and (when sent) the notice prefix. */
+    static String cacheablePrefix(String systemPrompt, String cachedUserPrefix) {
+        String sys = systemPrompt != null ? systemPrompt : "";
+        return cachedUserPrefix != null && !cachedUserPrefix.isBlank() ? sys + cachedUserPrefix : sys;
     }
 
     /** Characters sent as input: system prompt, cached user prefix and user prompt. */

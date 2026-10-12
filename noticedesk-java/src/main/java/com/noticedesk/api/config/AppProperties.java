@@ -28,6 +28,7 @@ public class AppProperties {
     private Matching matching = new Matching();
     private Pricing pricing = new Pricing();
     private Citation citation = new Citation();
+    private Catalogue catalogue = new Catalogue();
 
     public boolean isDevAuthAllowed() {
         return "development".equals(environment) && "dev".equals(auth.getProvider());
@@ -159,6 +160,16 @@ public class AppProperties {
     }
 
     @Data
+    public static class Catalogue {
+        /**
+         * Whether matching sees provisional content: 'draft' issue cards promoted from an approved AI issue
+         * section (and their 'provisional' reply templates). Default true in development so a promoted
+         * template is reused on the next similar notice; set false to match against CA-approved cards only.
+         */
+        private boolean includeProvisional = true;
+    }
+
+    @Data
     public static class Pricing {
         private double inrPerUsd = 88.0;
         private java.util.Map<String, ModelPrice> models = new java.util.HashMap<>();
@@ -268,6 +279,14 @@ public class AppProperties {
         private String indiankanoonApiToken;
         private int maxCallsPerDraft = 15;
         private int cacheTtlDays = 30;
+        private IndianKanoon indiankanoon = new IndianKanoon();
+
+        /** Real per-call prices of the IndianKanoon API; 0 until set from the firm's IndianKanoon plan. */
+        @Data
+        public static class IndianKanoon {
+            private double costInrPerSearch = 0.0;
+            private double costInrPerFragment = 0.0;
+        }
     }
 
     @Data

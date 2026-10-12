@@ -132,6 +132,12 @@ noticedesk:
       timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:180.0}
   matching:
     allow-draft-cards: ${ALLOW_DRAFT_CARDS:false}
+  catalogue:
+    # Provisional content = 'draft' issue cards promoted from an approved AI issue section (card ids
+    # NDK-AI-nnn or a new draft version of an existing card) and their 'provisional' reply templates.
+    # true (default): matching sees them, so a promoted template is reused on the next similar notice,
+    # with the info flag FLAG_PROVISIONAL_TEMPLATE in the partner note. false: CA-approved cards only.
+    include-provisional: ${CATALOGUE_INCLUDE_PROVISIONAL:true}
   pricing:
     inr-per-usd: 88.0
     models:
@@ -229,6 +235,12 @@ noticedesk:
     indiankanoon-api-token: ${INDIANKANOON_API_TOKEN:}
     cache-ttl-days: ${CITATION_CACHE_TTL_DAYS:30}
     max-calls-per-draft: ${IK_MAX_CALLS_PER_DRAFT:15}
+    indiankanoon:
+      # Real INR price of one IndianKanoon search / document-fragment call: set from your IndianKanoon
+      # plan. Logged per call (api_usage_logs, step ik_search / ik_fragment) and counted against the
+      # per-notice cost cap. 0 = calls are logged but cost nothing.
+      cost-inr-per-search: ${INDIANKANOON_COST_INR_PER_SEARCH:0}
+      cost-inr-per-fragment: ${INDIANKANOON_COST_INR_PER_FRAGMENT:0}
   embedding:
     provider: ${EMBEDDING_PROVIDER:stub}
     model: ${EMBEDDING_MODEL:gemini-embedding-001}

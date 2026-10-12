@@ -23,6 +23,13 @@ public class ApiUsageLogService {
 
     private final List<Consumer<UsageCall>> callListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<CallOutcome>> outcomeListeners = new CopyOnWriteArrayList<>();
+    /** Process-wide view of the provider's prompt cache (see {@link PromptCacheRegistry}); one per service bean. */
+    private final PromptCacheRegistry promptCache = new PromptCacheRegistry();
+
+    /** Provider / model labels under which IndianKanoon calls are logged (priced from {@code noticedesk.citation}). */
+    public static final String IK_PROVIDER = "indiankanoon";
+    public static final String IK_SEARCH = "ik_search";
+    public static final String IK_FRAGMENT = "ik_fragment";
 
     public ApiUsageLogService(NamedParameterJdbcTemplate jdbcTemplate, AppProperties properties) {
         this.jdbcTemplate = jdbcTemplate;
@@ -53,6 +60,11 @@ public class ApiUsageLogService {
      * (failure reason, exception class or validation error, never response text); null when usable.
      */
     public record CallOutcome(String step, int attempt, boolean usable, String reason) {}
+
+    /** The prompt-cache registry shared by every {@link NoticeCallBudget} that prices with this service. */
+    public PromptCacheRegistry promptCache() {
+        return promptCache;
+    }
 
     /** Registers a listener told about every call logged through {@link #logCall}. Used by eval/live runners. */
     public void addCallListener(Consumer<UsageCall> listener) {
@@ -138,9 +150,20 @@ public class ApiUsageLogService {
             UUID noticeId) {
         try {
             BigDecimal[] costs = calculateCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
-            BigDecimal costUsd = costs[0];
-            BigDecimal costInr = costs[1];
+            insertUsageRow(provider, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, step,
+                    tenantId, noticeId, costs[0], costs[1]);
+            log.info("Logged API Usage: step={} provider={} model={} in={} out={} cacheRead={} cacheWrite={} costInr={}",
+                    step, provider, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costs[1]);
+        } catch (Exception e) {
+            log.error("Failed to log API usage for model: {}", model, e);
+        }
+    }
 
+    private void insertUsageRow(String provider, String model, int inputTokens, int outputTokens, int cacheReadTokens,
+                                int cacheWriteTokens, String step, UUID tenantId, UUID noticeId,
+                                BigDecimal costUsd, BigDecimal costInr) {
+        if (jdbcTemplate == null) return;
+        try {
             String sql = """
                     INSERT INTO api_usage_logs (
                         id, tenant_id, notice_id, provider, model, step,
@@ -166,15 +189,49 @@ public class ApiUsageLogService {
                     .addValue("cacheWriteTokens", cacheWriteTokens)
                     .addValue("costUsd", costUsd)
                     .addValue("costInr", costInr);
-
-            if (jdbcTemplate != null) {
-                jdbcTemplate.update(sql, params);
-            }
-            log.info("Logged API Usage: step={} provider={} model={} in={} out={} cacheRead={} cacheWrite={} costInr={}",
-                    step, provider, model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costInr);
+            jdbcTemplate.update(sql, params);
         } catch (Exception e) {
-            log.error("Failed to log API usage for model: {}", model, e);
+            log.error("Failed to insert api_usage_logs row for step {}", step, e);
         }
+    }
+
+    /**
+     * Configured INR cost of one IndianKanoon call: {@code citation.indiankanoon.cost-inr-per-search} for
+     * {@link #IK_SEARCH}, {@code cost-inr-per-fragment} for {@link #IK_FRAGMENT}. Zero until set from the
+     * firm's IndianKanoon plan.
+     */
+    public BigDecimal indianKanoonCostInr(String kind) {
+        AppProperties.Citation c = properties != null ? properties.getCitation() : null;
+        AppProperties.Citation.IndianKanoon ik = c != null ? c.getIndiankanoon() : null;
+        double v = ik == null ? 0.0 : IK_FRAGMENT.equals(kind) ? ik.getCostInrPerFragment() : ik.getCostInrPerSearch();
+        return v > 0 ? BigDecimal.valueOf(v).setScale(4, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+    }
+
+    /**
+     * Logs one IndianKanoon call ({@link #IK_SEARCH} or {@link #IK_FRAGMENT}) at its configured INR cost: a
+     * usage row with the cost and one {@link UsageCall} to the listeners (so a run ledger shows it). Returns
+     * the cost so the caller can count it against the per-notice cap.
+     */
+    public BigDecimal logIndianKanoonCall(String kind, UUID tenantId, UUID noticeId) {
+        BigDecimal inr = indianKanoonCostInr(kind);
+        double rate = (properties != null && properties.getPricing() != null) ? properties.getPricing().getInrPerUsd() : 88.0;
+        BigDecimal usd = rate > 0 ? inr.divide(BigDecimal.valueOf(rate), 6, RoundingMode.HALF_UP) : BigDecimal.ZERO;
+        insertUsageRow(IK_PROVIDER, kind, 1, 0, 0, 0, kind, tenantId, noticeId, usd, inr);
+        log.info("Logged API Usage: step={} provider={} calls=1 costInr={}", kind, IK_PROVIDER, inr.toPlainString());
+        UsageCall call = new UsageCall(kind, 1, IK_PROVIDER, kind, "ok", null, 1, 0, 0, 0, usd, inr);
+        for (Consumer<UsageCall> l : callListeners) {
+            try {
+                l.accept(call);
+            } catch (Exception e) {
+                log.warn("usage call listener failed: {}", e.getMessage());
+            }
+        }
+        return inr;
+    }
+
+    /** The configured price of {@code model} (exact key or dated snapshot of a key), or null. */
+    public AppProperties.Pricing.ModelPrice modelPrice(String model) {
+        return model != null ? resolvePrice(model) : null;
     }
 
     public BigDecimal[] calculateCost(String model, int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens) {

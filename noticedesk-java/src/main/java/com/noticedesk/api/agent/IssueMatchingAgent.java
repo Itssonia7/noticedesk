@@ -147,10 +147,10 @@ public class IssueMatchingAgent {
             int maxTokens = properties.getLlm().maxTokensForAgent("matching", raiseCap);
             jsonNode = null;
 
-            // hard cap: worst case of exactly this call (prompt and max_tokens as sent) must fit the budget
-            String refusal = budget != null
-                    ? budget.refusalReason("matching", modelName, (long) systemPrompt.length() + activeUserPrompt.length(), maxTokens)
-                    : null;
+            // hard cap: worst case of exactly this call (prompt and max_tokens as sent) must fit the budget;
+            // the system prompt (rules + catalogue) is the cacheable prefix, the notice text the per-call part
+            NoticeCallBudget.Prompt shape = NoticeCallBudget.Prompt.of(modelName, systemPrompt, activeUserPrompt);
+            String refusal = budget != null ? budget.refusalReason("matching", shape, maxTokens) : null;
             if (refusal != null) {
                 log.error("matching_not_called attempt={} noticeId={}: {}", attempt, noticeId, refusal);
                 return createFallbackResult(FLAG_COST_CAP, refusal, catalogueHash, totalInTokens, totalOutTokens,
@@ -181,7 +181,13 @@ public class IssueMatchingAgent {
             totalOutTokens += response.outputTokensOrZero();
             totalCacheReadTokens += response.cacheReadTokensOrZero();
             totalCacheWriteTokens += response.cacheWriteTokensOrZero();
-            if (budget != null) budget.recordCall("matching", response, modelName);
+            if (budget != null) {
+                budget.recordCall("matching", response, modelName, shape);
+            } else if (apiUsageLogService != null && apiUsageLogService.promptCache() != null) {
+                // no budget: still remember the catalogue's measured token count and that it is cached now
+                int cacheTokens = response.cacheWriteTokensOrZero() + response.cacheReadTokensOrZero();
+                if (cacheTokens > 0) apiUsageLogService.promptCache().recordUse(modelName, shape.prefixHash(), cacheTokens);
+            }
             apiUsageLogService.logCall(response, modelName, "matching", attempt, tenantId, noticeId);
 
             if (response.refused()) {
