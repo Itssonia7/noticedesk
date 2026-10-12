@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 11-10-2026
+Last updated: 12-10-2026
 
 ---
 
@@ -133,7 +133,7 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
 
 - **Hard caps**: before every billed call (matching, partial, new_issue, high_stakes; first attempt
   and retry) `NoticeCallBudget` computes the call's worst case and refuses it when
-  `spent + worst case > cap`. Worst case = estimated input tokens (`ceil(characters / 3)` of system
+  `spent + worst case > cap`. Worst case = estimated input tokens (`ceil(characters / 2)` of system
   prompt + catalogue / notice prefix + user prompt, each token at the higher of the input and
   cache-write price) + the call's max_tokens (the value actually sent, retry cap included) at the
   output price, in INR from `noticedesk.pricing`. With a cap set, an unpriced model is refused.
@@ -156,9 +156,28 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   as the date-of-service variants merged), but the Missing Data Markers list and
   `CHECK_MARKERS_LIST` show the original wording of the first occurrence.
 
+## (b6) Live-run fixes (bench notices 004, 006, 010, 011)
+
+- **State name (011)**: "State of Unknown State" came from a 3-code lookup. `GstStateCodes` has every
+  GST state code (01-38, 97, 99; 25/26 both = Dadra and Nagar Haveli and Daman and Diu). A blank or
+  placeholder state is taken from the GSTIN; an unknown code prints `[[MISSING: state]]` + warn flag.
+- **Stage (011, Sections 27 / 63 / 129)**: an SCN under a provision other than 73/74/74A/171 now gets
+  stage `generic_scn` (DRAFT dev template, neutral prayer and checklist, no Section 73/75(4) wording;
+  neutral procedural options). It no longer falls back to `scn_73`.
+- **Repeated paragraph (004)**: the partial prompt forbids restating an anchored block, and code drops
+  an AI paragraph with token Jaccard >= 0.6 against a reused block (info flag
+  `ai_paragraph_restates_template_block`, note in Section 13).
+- **Issue splitting (001, 010)**: matching prompt rules: one issue per ground; consequential interest /
+  penalty stays in the main issue unless it is the only demand or is challenged on its own ground;
+  every numbered paragraph goes in `para_map`. Matching effort default `low` -> `medium`. Answer keys
+  unchanged (all 15 already follow the rule); the eval runner also reports issue-count match.
+- **Cost estimate**: input tokens now estimated at 2 characters per token (live matching call: estimate
+  ~5,900 vs actual ~7,770 at 3). Worst cases rise slightly (e.g. Opus new_issue at 16,000 max_tokens
+  about Rs 30).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn clean test`): **217 tests, 0 failures, 0 errors** (no live API calls; all models
+- Offline unit suite (`mvn clean test`): **255 tests, 0 failures, 0 errors** (no live API calls; all models
   and IndianKanoon mocked or served from local fixtures). A plain `mvn test` no longer modifies `output/`.
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
@@ -174,9 +193,9 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
    checklist). All current templates are marked "[DEV - not CA reviewed]". Approved content goes in
    `$PRIVATE_SEED_DIR`, not the repo (see `docs/PRIVATE_DATA.md`).
 3. **Stage templates for other proceedings**: `asmt_10`, `scn_73`, and DRAFT `scn_74`, `scn_74a`,
-   `anti_profiteering` exist (dev text, partner to review). Other stages get a placeholder + block flag.
+   `anti_profiteering`, `generic_scn` exist (dev text, partner to review). Other stages get a placeholder + block flag.
 4. **Re-run the Stage 1 matching benchmark** with the live model (now reports dummy and private sets
-   separately).
+   separately; now also issue-count match, to confirm the new splitting rules).
 5. **Partner review of the golden drafts**, including three legal points in `notice_10`: Section 171(3A)
    effective date, transfer of anti-profiteering to CCI from 01-12-2022, and the Reckitt Benckiser
    wording in para 6.2.
