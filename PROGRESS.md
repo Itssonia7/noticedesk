@@ -126,9 +126,39 @@ stale code, or could not parse a response. Now:
   (effort models take no temperature). Both runners now print the catalogue hash and the match
   statuses so two runs can be compared.
 
+## (b5) Hard cost caps and two output fixes
+
+The smoke run (notice cap Rs 5) spent Rs 13.19: matching cost Rs 2.61, then an Opus new_issue call
+was allowed because only money already spent was checked, and it cost Rs 10.58. Now:
+
+- **Hard caps**: before every billed call (matching, partial, new_issue, high_stakes; first attempt
+  and retry) `NoticeCallBudget` computes the call's worst case and refuses it when
+  `spent + worst case > cap`. Worst case = estimated input tokens (`ceil(characters / 3)` of system
+  prompt + catalogue / notice prefix + user prompt, each token at the higher of the input and
+  cache-write price) + the call's max_tokens (the value actually sent, retry cap included) at the
+  output price, in INR from `noticedesk.pricing`. With a cap set, an unpriced model is refused.
+  Applies in production (`llm.max-cost-inr-per-notice`) and in both live runners, where each notice
+  gets the smaller of `LIVE_MAX_NOTICE_COST_INR` and what is left of `LIVE_MAX_RUN_COST_INR`.
+  Every check logs a `[call-check]` (or `[call-refused]`) line with the estimate.
+- **Refusals**: a refused writer call leaves `[[PARTNER: AI draft skipped — cost cap]]` and the
+  `FLAG_AI_BUDGET_EXHAUSTED` block flag; a refused matching call fails the notice
+  (`matching_cost_cap`) and the live runners stop.
+- **Minimum caps** (current config): Opus 5.5 new_issue at 16,000 max_tokens has a worst case of
+  about Rs 29 (Rs 28.16 output + about Rs 1 input); its retry at 24,000 about Rs 43. Sonnet 5.5
+  matching at 8,000 max_tokens: Rs 7.04 output + input. A Rs 5 notice cap now refuses matching
+  itself; one matching call + one Opus new_issue call needs a notice cap of about Rs 32+ (the
+  default test cap of Rs 30 is not enough).
+- **"Rs Rs"**: a template written `Rs {{issue.amount_tax}}` printed "Rs Rs 1,00,000". Filled
+  template and stage-template text now drop a currency prefix (Rs / Rs. / INR / ₹) that directly
+  precedes the filled "Rs X" value. The three dev reply templates use this pattern; the stage
+  templates have no amount placeholders.
+- **Readable missing markers**: markers are still de-duplicated by the normalised key (synonyms such
+  as the date-of-service variants merged), but the Missing Data Markers list and
+  `CHECK_MARKERS_LIST` show the original wording of the first occurrence.
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`): **204 tests, 0 failures, 0 errors** (no live API calls; all models
+- Offline unit suite (`mvn clean test`): **217 tests, 0 failures, 0 errors** (no live API calls; all models
   and IndianKanoon mocked or served from local fixtures). A plain `mvn test` no longer modifies `output/`.
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
