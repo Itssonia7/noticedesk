@@ -113,7 +113,7 @@ class PeriodNormalizerTest {
         TemplateFillService.TemplateSelection sel = serviceWithTwoVersions().selectTemplate("CARD-X", "the audit period");
         assertNull(sel.template());
         assertEquals("period could not be normalised", sel.reason());
-        assertEquals("no active or draft template exists for the card",
+        assertEquals("no active, provisional or draft template exists for the card",
                 serviceWithTwoVersions().selectTemplate("CARD-NONE", "FY 2020-21").reason());
     }
 }

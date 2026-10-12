@@ -113,6 +113,12 @@ public class TemplateFillService {
             allFlags.add(PERIOD_CROSSES_TEMPLATE_VERSION_FLAG);
         }
 
+        if (isProvisional(template)) {
+            log.info("Issue #{} filled from PROVISIONAL template {} v{} (promoted from an AI section; partner to confirm)",
+                    issue.issueNo(), template.templateId(), template.version());
+            allFlags.add(FLAG_PROVISIONAL_TEMPLATE);
+        }
+
         int paraCounter = 1;
 
         for (TemplateBlock block : template.blocks()) {
@@ -178,6 +184,20 @@ public class TemplateFillService {
     public static final String PERIOD_CROSSES_TEMPLATE_VERSION_FLAG = "warn:period_crosses_template_version";
 
     /**
+     * Draft flag (info, check FLAG_PROVISIONAL_TEMPLATE) raised when the issue was filled from a
+     * 'provisional' reply template: one promoted from an approved AI issue section, not yet CA-reviewed.
+     * The partner note names the template so the partner can confirm or retire it.
+     */
+    public static final String FLAG_PROVISIONAL_TEMPLATE = "info:provisional_template";
+
+    /** Template status of a template promoted from an AI issue section. */
+    public static final String STATUS_PROVISIONAL = "provisional";
+
+    public static boolean isProvisional(ReplyTemplate t) {
+        return t != null && STATUS_PROVISIONAL.equalsIgnoreCase(t.status());
+    }
+
+    /**
      * Result of template version selection.
      *
      * @param template               the version in force on the period's start date, or null
@@ -189,7 +209,7 @@ public class TemplateFillService {
     public record TemplateSelection(ReplyTemplate template, PeriodNormalizer.Period period,
                                     boolean crossesVersionBoundary, String reason) {}
 
-    /** Selects the active (or, when allowed, draft) template version for the card that is in force for the period. */
+    /** Selects the active / provisional (or, when allowed, draft) template version for the card that is in force for the period. */
     public ReplyTemplate selectTemplateForCardAndPeriod(String cardId, String period) {
         return selectTemplate(cardId, period).template();
     }
@@ -205,7 +225,7 @@ public class TemplateFillService {
         List<ReplyTemplate> candidates = loadTemplatesForCard(cardId, allowDraft);
         if (candidates.isEmpty()) {
             return new TemplateSelection(null, null, false,
-                    "no " + (allowDraft ? "active or draft" : "active") + " template exists for the card");
+                    "no " + (allowDraft ? "active, provisional or draft" : "active or provisional") + " template exists for the card");
         }
 
         Optional<PeriodNormalizer.Period> parsed = PeriodNormalizer.parse(period);
@@ -240,7 +260,8 @@ public class TemplateFillService {
 
         if (inMemoryTemplates.containsKey(cardId)) {
             for (ReplyTemplate t : inMemoryTemplates.get(cardId)) {
-                if ("active".equalsIgnoreCase(t.status()) || (allowDraft && "draft".equalsIgnoreCase(t.status()))) {
+                // 'provisional' (promoted from an AI section) is usable like 'active'; the fill adds an info flag
+                if ("active".equalsIgnoreCase(t.status()) || isProvisional(t) || (allowDraft && "draft".equalsIgnoreCase(t.status()))) {
                     list.add(t);
                 }
             }
@@ -254,7 +275,7 @@ public class TemplateFillService {
                     FROM reply_templates
                     WHERE card_id = ? AND status IN (%s)
                     ORDER BY version DESC
-                    """.formatted(allowDraft ? "'active', 'draft'" : "'active'");
+                    """.formatted(allowDraft ? "'active', 'provisional', 'draft'" : "'active', 'provisional'");
             try {
                 List<ReplyTemplate> dbTemplates = jdbcTemplate.query(sql, (rs, rowNum) -> {
                     String tId = rs.getString("template_id");
@@ -472,6 +493,11 @@ public class TemplateFillService {
         // tax period: matcher notice block first, else the issue's own period
         if (!map.containsKey("notice.tax_period") && map.get("issue.period") != null) {
             map.put("notice.tax_period", map.get("issue.period"));
+        }
+        // notice.reference (used by promoted templates and the stage templates): notice number, else DIN
+        if (!map.containsKey("notice.reference")) {
+            Object ref = map.get("notice.notice_number") != null ? map.get("notice.notice_number") : map.get("notice.din");
+            if (ref != null && !ref.toString().isBlank()) map.put("notice.reference", ref);
         }
 
         return map;

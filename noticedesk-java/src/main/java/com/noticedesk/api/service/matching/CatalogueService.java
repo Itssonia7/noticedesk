@@ -25,26 +25,28 @@ public class CatalogueService {
     private final ObjectMapper objectMapper;
 
     /**
-     * Loads cards from issue_cards table according to configuration.
-     * If allowDraftCards is true, loads 'active' and 'draft' cards; otherwise loads ONLY 'active' cards.
-     * Cards are deterministically sorted by card_id ASC, version DESC to ensure prompt caching stability.
+     * Loads the cards matching may see, deterministically sorted by card_id ASC, version DESC (prompt
+     * caching stability):
+     * <ul>
+     *   <li>'active' cards always;</li>
+     *   <li>every 'draft' card when {@code matching.allow-draft-cards} is true (dev seeds);</li>
+     *   <li>otherwise 'draft' cards promoted from an approved AI issue section (provisional content) only
+     *       when {@code catalogue.include-provisional} is true (the default).</li>
+     * </ul>
      */
     public List<IssueCard> getActiveCards() {
-        boolean allowDraft = properties != null && properties.getMatching() != null && properties.getMatching().isAllowDraftCards();
-
-        String sql = """
-                SELECT card_id, version, title, summary, sections, period_from, period_to,
-                       stages, keywords, not_this_if, template_id, status, reviewed_by, reviewed_at, created_at
-                FROM issue_cards
-                WHERE status IN (%s)
-                ORDER BY card_id ASC, version DESC
-                """.formatted(allowDraft ? "'active', 'draft'" : "'active'");
-
         if (jdbcTemplate == null) {
             return List.of();
         }
-
-        return jdbcTemplate.query(sql, (rs, rowNum) -> {
+        String sql = """
+                SELECT card_id, version, title, summary, sections, period_from, period_to,
+                       stages, keywords, not_this_if, template_id, status, reviewed_by, reviewed_at, created_at,
+                       source_ai_section_id
+                FROM issue_cards
+                WHERE status IN ('active', 'draft')
+                ORDER BY card_id ASC, version DESC
+                """;
+        List<IssueCard> rows = jdbcTemplate.query(sql, (rs, rowNum) -> {
             String cardId = rs.getString("card_id");
             int version = rs.getInt("version");
             String title = rs.getString("title");
@@ -60,10 +62,40 @@ public class CatalogueService {
             String reviewedBy = rs.getString("reviewed_by");
             OffsetDateTime reviewedAt = rs.getObject("reviewed_at", OffsetDateTime.class);
             OffsetDateTime createdAt = rs.getObject("created_at", OffsetDateTime.class);
+            Object source = rs.getObject("source_ai_section_id");
 
             return new IssueCard(cardId, version, title, summary, sections, periodFrom, periodTo,
-                    stages, keywords, notThisIf, templateId, status, reviewedBy, reviewedAt, createdAt);
+                    stages, keywords, notThisIf, templateId, status, reviewedBy, reviewedAt, createdAt,
+                    source != null ? source.toString() : null);
         });
+        return visibleCards(rows, allowDraftCards(), includeProvisional());
+    }
+
+    /** {@code matching.allow-draft-cards}: every draft card is visible (development seeds). */
+    public boolean allowDraftCards() {
+        return properties != null && properties.getMatching() != null && properties.getMatching().isAllowDraftCards();
+    }
+
+    /** {@code catalogue.include-provisional}: draft cards promoted from AI sections are visible (default true). */
+    public boolean includeProvisional() {
+        return properties == null || properties.getCatalogue() == null || properties.getCatalogue().isIncludeProvisional();
+    }
+
+    /** The cards of {@code loaded} that matching may see under the two toggles (see {@link #getActiveCards}). */
+    public static List<IssueCard> visibleCards(List<IssueCard> loaded, boolean allowDraft, boolean includeProvisional) {
+        List<IssueCard> out = new ArrayList<>();
+        for (IssueCard c : loaded) {
+            if (c == null || c.status() == null) continue;
+            if (isVisible(c, allowDraft, includeProvisional)) out.add(c);
+        }
+        return out;
+    }
+
+    static boolean isVisible(IssueCard card, boolean allowDraft, boolean includeProvisional) {
+        String status = card.status().trim().toLowerCase(Locale.ROOT);
+        if ("active".equals(status)) return true;
+        if (!"draft".equals(status)) return false;
+        return allowDraft || (includeProvisional && card.isProvisional());
     }
 
     /**

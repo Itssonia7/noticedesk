@@ -380,6 +380,9 @@ public class ReplyAssemblyService {
             if (ft != null && ft.cardId() != null && ft.flags() != null && ft.flags().contains("no_template_available")) {
                 sec13.append(", Note=No template available for card ").append(ft.cardId());
             }
+            if (ft != null && ft.flags() != null && ft.flags().contains(TemplateFillService.FLAG_PROVISIONAL_TEMPLATE)) {
+                sec13.append(", Template status=PROVISIONAL (promoted from an approved AI section, not CA-reviewed: partner to confirm or retire)");
+            }
             sec13.append("</li>");
         }
         sec13.append("</ul>");
