@@ -533,9 +533,15 @@ public class ReplyAssemblyService {
                 }
 
                 List<FilledBlock> blocks = new ArrayList<>();
+                List<String> reusedBlockTexts = new ArrayList<>();
                 if (ft != null && ft.blocks() != null) {
-                    for (FilledBlock fb : ft.blocks()) if (fb.section() == secNum) blocks.add(fb);
+                    for (FilledBlock fb : ft.blocks()) {
+                        if (fb.section() == secNum) blocks.add(fb);
+                        if (anchors != null && anchors.contains(fb.blockId())) reusedBlockTexts.add(fb.filledHtml());
+                    }
                 }
+                // An AI paragraph that restates a reused template block is dropped: the block already says it
+                frags = dropAiRestatements(frags, reusedBlockTexts, issue.issueNo(), secNum, flags, notes);
                 Set<String> blockIds = new HashSet<>();
                 blocks.forEach(b -> blockIds.add(b.blockId()));
 
@@ -564,6 +570,25 @@ public class ReplyAssemblyService {
                 }
             }
         }
+    }
+
+    /** Fragments with every paragraph that restates a reused template block removed (info flag + note). */
+    static List<AiFragment> dropAiRestatements(List<AiFragment> frags, List<String> reusedBlockTexts, int issueNo, int secNum,
+                                               List<String> flags, List<String> notes) {
+        if (reusedBlockTexts.isEmpty()) return frags;
+        List<AiFragment> out = new ArrayList<>();
+        int dropped = 0;
+        for (AiFragment f : frags) {
+            ParagraphOverlap.Filtered r = ParagraphOverlap.dropRestatements(f.html(), reusedBlockTexts, ParagraphOverlap.RESTATEMENT_THRESHOLD);
+            dropped += r.dropped();
+            if (r.html() != null && !r.html().isBlank()) out.add(new AiFragment(f.section(), f.afterBlock(), r.html()));
+        }
+        if (dropped > 0) {
+            addOnce(flags, "info:ai_paragraph_restates_template_block");
+            notes.add("Issue #" + issueNo + ": " + dropped + " AI paragraph(s) in section " + secNum
+                    + " removed because they restated a template block already printed.");
+        }
+        return out;
     }
 
     private void appendTemplateBlock(StringBuilder sb, int secNum, FilledBlock fb, FilledTemplateResult ft, int[] sub,
