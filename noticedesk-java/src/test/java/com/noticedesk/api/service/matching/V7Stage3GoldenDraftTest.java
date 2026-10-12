@@ -286,7 +286,7 @@ class V7Stage3GoldenDraftTest {
         }
         MatchedNoticeInfo info = new MatchedNoticeInfo(n.reference(), null, n.date(), n.replyWithin(), n.financialYear(),
                 n.financialYear(), n.totalDemand(), null);
-        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any()))
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any()))
                 .thenReturn(new MatchingResult(info, issues, paraMap, List.of(), List.of(), "hash-" + n.noticeId(), 100, 100, 0, 0));
     }
 

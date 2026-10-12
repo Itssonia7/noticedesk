@@ -7,6 +7,7 @@ import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.llm.LlmFatalException;
@@ -97,6 +98,7 @@ class MatchingEvalRunnerTest {
         RunCostLedger ledger = RunCostLedger.attach(usageLogService, System.out);
         guard.attach(usageLogService);
         this.guard = guard;
+        this.pricing = usageLogService;
         IssueMatchingAgent agent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, null, objectMapper);
 
         // Dummy set: the committed testbench (fake data). Private set: $PRIVATE_SEED_DIR/notices/*.json
@@ -160,6 +162,7 @@ class MatchingEvalRunnerTest {
     }
 
     private LiveRunGuard guard;
+    private ApiUsageLogService pricing;
     /** Set when a billing / auth error or the consecutive-failure limit stopped the run. */
     private String abortReason;
 
@@ -219,7 +222,11 @@ class MatchingEvalRunnerTest {
             int callCheckpoint = ledger.size();
             MatchingResult result;
             try {
-                result = agent.matchNoticeWithOcrText(ocrText, docType, UUID.randomUUID(), UUID.randomUUID());
+                // hard cap: each attempt is refused before the call when its worst case would not fit
+                BigDecimal noticeCap = guard != null ? guard.noticeCapFor(totalCostInr) : INR_CAP.subtract(totalCostInr);
+                ApiUsageLogService prices = pricing != null ? pricing : new ApiUsageLogService(null, TestAppProperties.fromApplicationYml());
+                NoticeCallBudget budget = new NoticeCallBudget(Integer.MAX_VALUE, noticeCap.max(BigDecimal.ZERO), prices);
+                result = agent.matchNoticeWithOcrText(ocrText, docType, UUID.randomUUID(), UUID.randomUUID(), budget);
             } catch (LlmFatalException e) {
                 // billing / auth error, or LIVE_MAX_CONSECUTIVE_FAILURES reached: stop the whole run now
                 totalCostInr = totalCostInr.add(ledger.totalInrSince(callCheckpoint));
@@ -235,6 +242,13 @@ class MatchingEvalRunnerTest {
             // same inputs as the live pipeline: compare this hash with its matcher run when results differ
             System.out.printf("  catalogue_hash=%s status=%s cost=%.4f INR%n", result.catalogueHash(),
                     result.issues().stream().map(i -> i.status() + i.cardIds()).toList(), noticeInr.doubleValue());
+
+            if (result.flags().contains(IssueMatchingAgent.FLAG_COST_CAP)) {
+                totalNotices--;
+                totalCalls--;
+                System.err.println("RUN STOPPED: matching call refused by the run cost cap (no call made): " + result.missingOrDoubtful());
+                break;
+            }
 
             // Requirement 1: Failed/fallback match counted as an ERROR, never as correct "none"
             if (result.flags().contains("matching_failed") || result.flags().contains("matching_parse_failed")) {

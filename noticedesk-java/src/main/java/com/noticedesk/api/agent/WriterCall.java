@@ -21,7 +21,8 @@ import java.util.function.Function;
  *   <li>max_tokens: retry once with the agent's higher retry cap;</li>
  *   <li>no text block or output that fails parsing/validation: retry once, telling the model the
  *       validation error; a second failure stops (the caller leaves the issue to the partner);</li>
- *   <li>no call is made once the notice's {@link NoticeCallBudget} refuses it.</li>
+ *   <li>no call (first attempt or retry) is made when the notice's {@link NoticeCallBudget} refuses it,
+ *       including when the call's worst-case cost would take the notice over its cost cap.</li>
  * </ul>
  * The parser throws {@link IllegalArgumentException} with a short validation message on bad output.
  */
@@ -40,13 +41,16 @@ final class WriterCall {
         String validationError = null;
 
         for (int attempt = 1; attempt <= 2; attempt++) {
-            String refusal = budget != null ? budget.refusalReason(agentKey) : null;
+            int maxTokens = properties.getLlm().maxTokensForAgent(agentKey, raiseCap);
+            String prompt = validationError != null ? userPrompt + retryInstruction(validationError) : userPrompt;
+            // hard cap: worst case of exactly this call (prompt as sent, max_tokens as sent) must fit the budget
+            String refusal = budget != null
+                    ? budget.refusalReason(agentKey, model, promptChars(systemPrompt, cachedUserPrefix, prompt), maxTokens)
+                    : null;
             if (refusal != null) {
                 log.warn("{} not called (attempt={}): {}", label, attempt, refusal);
                 return null;
             }
-            int maxTokens = properties.getLlm().maxTokensForAgent(agentKey, raiseCap);
-            String prompt = validationError != null ? userPrompt + retryInstruction(validationError) : userPrompt;
 
             LlmResponse response;
             try {
@@ -105,6 +109,13 @@ final class WriterCall {
             outcome(usage, agentKey, attempt, false, "invalid_output");
         }
         return null;
+    }
+
+    /** Characters sent as input: system prompt, cached user prefix and user prompt. */
+    static long promptChars(String... parts) {
+        long n = 0;
+        for (String p : parts) if (p != null) n += p.length();
+        return n;
     }
 
     private static void outcome(ApiUsageLogService usage, String agentKey, int attempt, boolean usable, String reason) {

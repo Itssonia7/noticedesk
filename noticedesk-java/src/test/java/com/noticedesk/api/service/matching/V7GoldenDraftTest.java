@@ -99,7 +99,7 @@ class V7GoldenDraftTest {
                 List.of(), List.of(), "hash-06", 100, 100, 0, 0
         );
 
-        Mockito.when(mockMatchingAgent.matchNoticeWithOcrText(Mockito.anyString(), Mockito.anyString(), Mockito.any(), Mockito.any()))
+        Mockito.when(mockMatchingAgent.matchNoticeWithOcrText(Mockito.anyString(), Mockito.anyString(), Mockito.any(), Mockito.any(), Mockito.any()))
                 .thenReturn(matchingResult);
 
         DraftingInput input = new DraftingInput(

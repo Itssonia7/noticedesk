@@ -77,6 +77,7 @@ public class V7DraftingPipelineService {
 
     /** Client-facing placeholder for an AI issue the writer could not (or was not allowed to) write. */
     public static final String AI_FAILED_PLACEHOLDER = "[[PARTNER: AI draft failed — write manually]]";
+    public static final String AI_SKIPPED_COST_CAP_PLACEHOLDER = "[[PARTNER: AI draft skipped — cost cap]]";
 
     @Autowired
     public V7DraftingPipelineService(
@@ -144,9 +145,18 @@ public class V7DraftingPipelineService {
 
         /** The issue is left to the partner: a [[PARTNER]] placeholder in sections 04 and 06, no model output. */
         static IssueAiOutput partnerPlaceholder(MatchedIssue issue) {
-            String p = "<p>" + AI_FAILED_PLACEHOLDER + "</p>";
-            return new IssueAiOutput(issue, "none (AI draft failed)", List.of(new AiFragment(4, null, p), new AiFragment(6, null, p)),
-                    List.of(), List.of(), AI_FAILED_PLACEHOLDER, null, null, null, true);
+            return partnerPlaceholder(issue, AI_FAILED_PLACEHOLDER, "none (AI draft failed)");
+        }
+
+        /** As {@link #partnerPlaceholder(MatchedIssue)} when the per-notice budget refused the writer call. */
+        static IssueAiOutput costCapPlaceholder(MatchedIssue issue) {
+            return partnerPlaceholder(issue, AI_SKIPPED_COST_CAP_PLACEHOLDER, "none (AI draft skipped, cost cap)");
+        }
+
+        private static IssueAiOutput partnerPlaceholder(MatchedIssue issue, String marker, String writer) {
+            String p = "<p>" + marker + "</p>";
+            return new IssueAiOutput(issue, writer, List.of(new AiFragment(4, null, p), new AiFragment(6, null, p)),
+                    List.of(), List.of(), marker, null, null, null, true);
         }
     }
 
@@ -181,18 +191,16 @@ public class V7DraftingPipelineService {
         Set<String> stageFlags = new LinkedHashSet<>();
 
         String fullOcrText = input != null && input.noticeOcrExcerpt() != null ? input.noticeOcrExcerpt() : "";
-        MatchingResult matchingResult = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId);
+        // the matching agent checks each attempt against the budget and records what it spends
+        MatchingResult matchingResult = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, budget);
         String matchingFailure = matchingFailure(matchingResult);
         if (matchingFailure != null) {
             // no scaffold draft from a fallback issue: the notice fails here, before any writer call
             log.error("v7 pipeline stopped for notice {}: {}", noticeId, matchingFailure);
-            throw new MatchingFailedException(matchingFailure);
+            throw new MatchingFailedException(matchingFailure,
+                    matchingResult != null && matchingResult.flags() != null && matchingResult.flags().contains(IssueMatchingAgent.FLAG_COST_CAP));
         }
         List<MatchedIssue> issues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
-        if (matchingResult != null && properties != null && properties.getLlm() != null) {
-            budget.addCost(properties.getLlm().getModelMatching(), matchingResult.inputTokens(), matchingResult.outputTokens(),
-                    matchingResult.cacheReadTokens(), matchingResult.cacheWriteTokens());
-        }
 
         persistIssueMatches(tenantId, noticeId, issues);
         log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
@@ -230,8 +238,11 @@ public class V7DraftingPipelineService {
             if (refusal != null) {
                 notes.add("High-stakes sections 01/03 not written (" + refusal + "); they contain the code-built facts only.");
             } else {
+                int refusalsBefore = budget.budgetRefusals();
                 hsResult = highStakesDraftingAgent.generateHighStakesDraft(matchingResult, input, noticeType, noticeId, budget);
-                if (hsResult == null) {
+                if (hsResult == null && budget.budgetRefusals() > refusalsBefore) {
+                    notes.add("High-stakes sections 01/03 not written (" + budget.lastRefusal() + "); they contain the code-built facts only.");
+                } else if (hsResult == null) {
                     notes.add("High-stakes writer returned no usable output; sections 01/03 contain the code-built facts only.");
                 }
             }
@@ -368,10 +379,10 @@ public class V7DraftingPipelineService {
     }
 
     /** Why Stage 1 gave no usable result (matcher fallback flags), or null when it did. */
-    static String matchingFailure(MatchingResult mr) {
+    public static String matchingFailure(MatchingResult mr) {
         if (mr == null) return "issue matching returned no result";
         List<String> flags = mr.flags() != null ? mr.flags() : List.of();
-        for (String f : List.of("matching_failed", "matching_parse_failed")) {
+        for (String f : List.of(IssueMatchingAgent.FLAG_COST_CAP, "matching_failed", "matching_parse_failed")) {
             if (flags.contains(f)) {
                 List<String> missing = mr.missingOrDoubtful() != null ? mr.missingOrDoubtful() : List.of();
                 String detail = missing.size() > 1 ? missing.get(1) : null;
@@ -399,9 +410,19 @@ public class V7DraftingPipelineService {
         if (refusal != null) {
             notes.add("Issue #" + issue.issueNo() + ": not sent to the AI writer (" + refusal + "); left to the partner.");
             flags.add("block:ai_budget_exhausted");
-            return IssueAiOutput.partnerPlaceholder(issue);
+            return NoticeCallBudget.isCallCountRefusal(refusal) ? IssueAiOutput.partnerPlaceholder(issue) : IssueAiOutput.costCapPlaceholder(issue);
         }
-        IssueAiOutput out = callIssueWriter(issue, ft, mr, fullOcrText, stage, noticeId, highStakes, notes, budget, usePartial);
+        int refusalsBefore = budget.budgetRefusals();
+        List<String> writerNotes = new ArrayList<>();
+        IssueAiOutput out = callIssueWriter(issue, ft, mr, fullOcrText, stage, noticeId, highStakes, writerNotes, budget, usePartial);
+        if (out == null && budget.budgetRefusals() > refusalsBefore) {
+            // the writer's own pre-call check refused the (first or retry) call: worst case over the cap
+            String why = budget.lastRefusal();
+            notes.add("Issue #" + issue.issueNo() + ": AI writer call not made (" + why + "); left to the partner.");
+            flags.add("block:ai_budget_exhausted");
+            return NoticeCallBudget.isCallCountRefusal(why) ? IssueAiOutput.partnerPlaceholder(issue) : IssueAiOutput.costCapPlaceholder(issue);
+        }
+        notes.addAll(writerNotes);
         if (out == null) {
             flags.add("block:ai_draft_failed");
             return IssueAiOutput.partnerPlaceholder(issue);

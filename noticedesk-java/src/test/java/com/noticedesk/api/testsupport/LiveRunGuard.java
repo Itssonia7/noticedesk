@@ -20,7 +20,9 @@ import java.util.function.Function;
  *       start with it (stale code costs money);</li>
  *   <li>smoke mode: {@code LIVE_SMOKE=true} runs the first notice only;</li>
  *   <li>caps: {@code LIVE_MAX_RUN_COST_INR} (default 50) per run, {@code LIVE_MAX_NOTICE_COST_INR}
- *       (default 30) per notice;</li>
+ *       (default 30) per notice. Both are hard caps: each notice's {@code NoticeCallBudget} gets
+ *       {@link #noticeCapFor} (the smaller of the notice cap and what is left of the run cap), and every
+ *       call is refused before it is made when its worst-case cost would not fit;</li>
  *   <li>fail fast: after {@code LIVE_MAX_CONSECUTIVE_FAILURES} (default 2) failed or unusable model calls
  *       in a row the run is aborted by throwing {@link LlmFatalException} from inside the agent, so no
  *       further call is made. Billing / auth errors are fatal on their own (see AnthropicLlmProvider).</li>
@@ -62,6 +64,16 @@ public final class LiveRunGuard {
 
     public BigDecimal maxNoticeCostInr() {
         return positiveDecimal(env.apply("LIVE_MAX_NOTICE_COST_INR"), DEFAULT_MAX_NOTICE_COST_INR);
+    }
+
+    /**
+     * Cost cap for the next notice: the smaller of the notice cap and what is left of the run cap after
+     * {@code runSpentInr}; zero when the run cap is used up.
+     */
+    public BigDecimal noticeCapFor(BigDecimal runSpentInr) {
+        BigDecimal remaining = maxRunCostInr().subtract(runSpentInr != null ? runSpentInr : BigDecimal.ZERO);
+        if (remaining.signum() <= 0) return BigDecimal.ZERO;
+        return remaining.min(maxNoticeCostInr());
     }
 
     public int maxConsecutiveFailures() {

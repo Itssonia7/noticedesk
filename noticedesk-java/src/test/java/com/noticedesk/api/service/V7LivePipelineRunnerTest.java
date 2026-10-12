@@ -211,13 +211,14 @@ public class V7LivePipelineRunnerTest {
         System.out.println("=== RUN 2: V7 LIVE PIPELINE EXECUTION REPORT ===");
 
         for (String noticeFile : targetNotices) {
-            BigDecimal remaining = runCap.subtract(totalRun2Inr);
-            if (remaining.signum() <= 0) {
+            // a notice may spend at most the smaller of the notice cap and what is left of the run cap; the
+            // pipeline's budget refuses any call (matching or writer, retries included) whose worst case won't fit
+            BigDecimal thisNoticeCap = guard.noticeCapFor(totalRun2Inr);
+            if (thisNoticeCap.signum() <= 0) {
                 System.err.println("SAFETY CAP REACHED: run spend " + totalRun2Inr + " INR reached the run cap of INR " + runCap + ". Halting.");
                 break;
             }
-            // a notice may spend at most the smaller of the notice cap and what is left of the run cap
-            props.getLlm().setMaxCostInrPerNotice(remaining.min(noticeCap).doubleValue());
+            props.getLlm().setMaxCostInrPerNotice(thisNoticeCap.doubleValue());
 
             ClassPathResource resource = new ClassPathResource("testbench/notices/" + noticeFile);
             String jsonText;
@@ -268,6 +269,11 @@ public class V7LivePipelineRunnerTest {
                 totalRun2Inr = totalRun2Inr.add(spent);
                 statusByNotice.put(noticeId, "FAILED (" + e.getMessage() + ")");
                 System.out.printf("Notice %s: FAILED - %s | cost %.4f INR%n", noticeId, e.getMessage(), spent.doubleValue());
+                if (e.costCap()) {
+                    // the matching call did not fit the remaining budget: later notices would not fit either
+                    System.out.println("RUN STOPPED: matching call refused by the cost cap (no call made); remaining notices not run.");
+                    break;
+                }
                 if (guard.smoke()) break;
                 continue;
             } catch (LlmFatalException e) {

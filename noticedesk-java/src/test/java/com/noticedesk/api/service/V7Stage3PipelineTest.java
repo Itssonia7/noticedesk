@@ -102,7 +102,7 @@ class V7Stage3PipelineTest {
                 new MatchedIssue(3, "none", List.of(), "w", List.of(), Map.of("period", "2022-23", "amount", 10000.0), List.of("4"), List.of())),
                 Map.of("record", List.of(1), "issue", List.of(2, 3, 4), "demand", List.of(5)),
                 List.of(), List.of(), "h", 1, 1, 0, 0);
-        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any())).thenReturn(mr);
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(mr);
 
         when(partialAgent.generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any()))
                 .thenReturn(new PartialDraftingResult(
@@ -280,14 +280,60 @@ class V7Stage3PipelineTest {
         V7DraftingPipelineService capped = new V7DraftingPipelineService(matchingAgent, null, om, fill, assembly,
                 new DraftCheckService(null), partialAgent, newIssueAgent, highStakesAgent, citationAgent,
                 props, new ApiUsageLogService(null, props));
+        // the matching agent records its own spend in the notice budget
+        MatchingResult mr = matchingAgent.matchNoticeWithOcrText("", "", null, null, null);
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenAnswer(inv -> {
+            ((com.noticedesk.api.service.llm.NoticeCallBudget) inv.getArgument(4)).addCost("priced-model", 10, 0, 0, 0);
+            return mr;
+        });
 
         DraftingPipelineResult r = capped.runPipeline(input("Section 73"));
 
         verify(partialAgent, never()).generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any());
         verify(newIssueAgent, never()).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any());
         assertEquals("block", check(r, "FLAG_AI_BUDGET_EXHAUSTED").severity());
-        assertTrue(section(r, 4).contains(V7DraftingPipelineService.AI_FAILED_PLACEHOLDER));
+        assertTrue(section(r, 4).contains(V7DraftingPipelineService.AI_SKIPPED_COST_CAP_PLACEHOLDER));
         assertTrue(section(r, 13).contains("per-notice cost cap reached"));
+    }
+
+    @Test
+    void writerCallRefusedByWorstCaseCheck_leavesCostCapPlaceholderAndBlockFlag() {
+        AppProperties props = new AppProperties();
+        props.getLlm().setMaxCostInrPerNotice(5.0);
+        AppProperties.Pricing.ModelPrice price = new AppProperties.Pricing.ModelPrice();
+        price.setOutputPerMillion(20.0);
+        props.getPricing().getModels().put("priced-model", price);
+        V7DraftingPipelineService capped = new V7DraftingPipelineService(matchingAgent, null, om, fill, assembly,
+                new DraftCheckService(null), partialAgent, newIssueAgent, highStakesAgent, citationAgent,
+                props, new ApiUsageLogService(null, props));
+        // nothing spent yet, so the pipeline's own check passes; the writer's pre-call check refuses the call
+        when(newIssueAgent.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any())).thenAnswer(inv -> {
+            com.noticedesk.api.service.llm.NoticeCallBudget b = inv.getArgument(6);
+            assertNotNull(b.refusalReason("new_issue", "priced-model", 0, 16000));   // INR 28.16 worst case > INR 5
+            return null;
+        });
+
+        DraftingPipelineResult r = capped.runPipeline(input("Section 73"));
+
+        assertEquals("block", check(r, "FLAG_AI_BUDGET_EXHAUSTED").severity());
+        assertTrue(allHtml(r).contains(V7DraftingPipelineService.AI_SKIPPED_COST_CAP_PLACEHOLDER));
+        assertTrue(section(r, 13).contains("AI writer call not made (per-notice cost cap: worst case"), section(r, 13));
+        assertFalse(section(r, 13).contains("new-issue writer returned no usable output"));
+    }
+
+    @Test
+    void matchingRefusedByCostCap_failsTheNoticeWithACostCapReason() {
+        MatchingResult refused = new MatchingResult(new MatchedNoticeInfo(null, null, null, null, null, null, null, null),
+                List.of(new MatchedIssue(1, "none", List.of(), "w", List.of(), Map.of(), List.of(), List.of(IssueMatchingAgent.FLAG_COST_CAP))),
+                Map.of(), List.of(IssueMatchingAgent.FLAG_COST_CAP, "per-notice cost cap: worst case of this call INR 7.04"),
+                List.of(IssueMatchingAgent.FLAG_COST_CAP), "h", 0, 0, 0, 0);
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(refused);
+
+        MatchingFailedException e = assertThrows(MatchingFailedException.class, () -> pipeline.runPipeline(input("Section 73")));
+
+        assertTrue(e.costCap());
+        assertTrue(e.getMessage().contains("matching_cost_cap"), e.getMessage());
+        verify(newIssueAgent, never()).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any());
     }
 
     @Test
@@ -376,7 +422,7 @@ class V7Stage3PipelineTest {
                 List.of(new MatchedIssue(1, "none", List.of(), "Matching failed: invalid JSON", List.of(), Map.of(), List.of(),
                         List.of("matching_failed"))),
                 Map.of(), List.of("matching_failed", "invalid JSON at line 1 column 2"), List.of("matching_failed"), "h", 10, 5, 0, 0);
-        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any())).thenReturn(failed);
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(failed);
 
         MatchingFailedException e = assertThrows(MatchingFailedException.class, () -> pipeline.runPipeline(input("Section 73")));
 

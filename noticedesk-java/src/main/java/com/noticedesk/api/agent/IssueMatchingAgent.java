@@ -10,6 +10,7 @@ import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.service.llm.LlmProvider;
 import com.noticedesk.api.service.llm.LlmResponse;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.service.matching.CatalogueService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -97,6 +98,19 @@ public class IssueMatchingAgent {
     }
 
     public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId) {
+        return matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, null);
+    }
+
+    /** Flag of a result whose call was refused by the notice's cost cap (no call was made for that attempt). */
+    public static final String FLAG_COST_CAP = "matching_cost_cap";
+
+    /**
+     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID)}, checking every attempt (retry included)
+     * against {@code budget} before the call and recording each billed call in it. A refused attempt ends
+     * matching with a {@link #FLAG_COST_CAP} fallback result. A null budget checks nothing.
+     */
+    public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
+                                                 NoticeCallBudget budget) {
         List<IssueCard> cards = catalogueService.getActiveCards();
         String compactCatalogueText = catalogueService.renderCatalogueCompactText(cards);
         String catalogueHash = catalogueService.getCatalogueHash(compactCatalogueText);
@@ -133,11 +147,23 @@ public class IssueMatchingAgent {
             int maxTokens = properties.getLlm().maxTokensForAgent("matching", raiseCap);
             jsonNode = null;
 
+            // hard cap: worst case of exactly this call (prompt and max_tokens as sent) must fit the budget
+            String refusal = budget != null
+                    ? budget.refusalReason("matching", modelName, (long) systemPrompt.length() + activeUserPrompt.length(), maxTokens)
+                    : null;
+            if (refusal != null) {
+                log.error("matching_not_called attempt={} noticeId={}: {}", attempt, noticeId, refusal);
+                return createFallbackResult(FLAG_COST_CAP, refusal, catalogueHash, totalInTokens, totalOutTokens,
+                        totalCacheReadTokens, totalCacheWriteTokens);
+            }
+
             try {
                 response = llm.generateWithEffort(systemPrompt, activeUserPrompt, modelName, maxTokens, effort, true);
             } catch (LlmFatalException e) {
+                if (budget != null) budget.recordCall("matching", null, modelName);
                 throw e;   // billing / auth error or live run aborted: no retry, no fallback result
             } catch (Exception e) {
+                if (budget != null) budget.recordCall("matching", null, modelName);
                 log.warn("matching_attempt_failed attempt={} error={}", attempt, e.getMessage());
                 validationError = e.getMessage();
                 outcome(attempt, false, e.getClass().getSimpleName());
@@ -155,6 +181,7 @@ public class IssueMatchingAgent {
             totalOutTokens += response.outputTokensOrZero();
             totalCacheReadTokens += response.cacheReadTokensOrZero();
             totalCacheWriteTokens += response.cacheWriteTokensOrZero();
+            if (budget != null) budget.recordCall("matching", response, modelName);
             apiUsageLogService.logCall(response, modelName, "matching", attempt, tenantId, noticeId);
 
             if (response.refused()) {

@@ -7,7 +7,19 @@ package com.noticedesk.api.service;
  */
 public class MatchingFailedException extends RuntimeException {
 
+    private final boolean costCap;
+
     public MatchingFailedException(String message) {
+        this(message, false);
+    }
+
+    /** {@code costCap}: the matching call was refused by the per-notice / run cost cap (no call made). */
+    public MatchingFailedException(String message, boolean costCap) {
         super(message);
+        this.costCap = costCap;
+    }
+
+    public boolean costCap() {
+        return costCap;
     }
 }
