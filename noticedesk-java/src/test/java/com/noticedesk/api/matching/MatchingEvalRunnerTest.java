@@ -186,6 +186,9 @@ class MatchingEvalRunnerTest {
 
         int totalExpectedParas = 0;
         int coveredParasCount = 0;
+        int issueCountChecked = 0;
+        int issueCountMatched = 0;
+        List<String> issueCountMismatches = new ArrayList<>();
 
         int totalCalls = 0;
         int cacheHitCalls = 0;
@@ -307,6 +310,15 @@ class MatchingEvalRunnerTest {
                 }
             }
 
+            // Issue splitting (prompt rule 4): one issue per distinct ground; consequential interest / penalty not split
+            if (answerKey.has("expected_issues")) {
+                issueCountChecked++;
+                int expectedCount = answerKey.path("expected_issues").asInt();
+                int gotCount = result.issues() != null ? result.issues().size() : 0;
+                if (expectedCount == gotCount) issueCountMatched++;
+                else issueCountMismatches.add(noticeId + ": expected " + expectedCount + ", got " + gotCount);
+            }
+
             int expectedParaCount = answerKey.path("para_count").asInt(1);
             totalExpectedParas += expectedParaCount;
             if (result.paraMap() != null && !result.paraMap().isEmpty()) {
@@ -341,6 +353,8 @@ class MatchingEvalRunnerTest {
         System.out.println("Partial/None Correctly Flagged: " + partialNoneCorrectPct);
         System.out.println("Fact Accuracy: " + factAccuracyPct);
         System.out.println("Para Coverage: " + paraCoveragePct);
+        System.out.println("Issue Count Match: " + RunCostLedger.pct(issueCountMatched, issueCountChecked, successfulCalls)
+                + (issueCountMismatches.isEmpty() ? "" : " " + issueCountMismatches));
         System.out.println("Cache Hit Rate (Call 2+): " + cacheHitRatePct);
         System.out.printf("Cache Read Tokens (Calls 2+): %d%n", totalCacheReadTokensCall2Plus);
         System.out.printf("Total Benchmark Cost (all billed calls, failed included): %.4f INR%n", setCostInr.doubleValue());
@@ -368,6 +382,7 @@ class MatchingEvalRunnerTest {
         summaryReport.put("partial_none_correct_pct", RunCostLedger.pctValue(correctPartialOrNoneCount, expectedPartialOrNoneCount, successfulCalls));
         summaryReport.put("fact_accuracy_pct", RunCostLedger.pctValue(matchedFactsCount, totalExpectedFacts, successfulCalls));
         summaryReport.put("para_coverage_pct", RunCostLedger.pctValue(coveredParasCount, totalExpectedParas, successfulCalls));
+        summaryReport.put("issue_count_match_pct", RunCostLedger.pctValue(issueCountMatched, issueCountChecked, successfulCalls));
         summaryReport.put("cache_hit_rate_pct", RunCostLedger.pctValue(cacheHitCalls, successfulCalls - 1, successfulCalls));
         summaryReport.put("cache_read_tokens_calls_2_plus", totalCacheReadTokensCall2Plus);
         summaryReport.put("total_cost_inr", setCostInr.doubleValue());

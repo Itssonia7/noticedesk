@@ -67,7 +67,7 @@ class ApiUsagePricingTest {
     void perAgentEffortAndMaxTokens_defaultsFromYml() {
         AppProperties.Llm llm = props.getLlm();
         // these assertions hold when the LLM_EFFORT_* / LLM_MAX_TOKENS_* env vars are not set
-        if (System.getenv("LLM_EFFORT_MATCHING") == null) assertEquals("low", llm.effortForAgent("matching"));
+        if (System.getenv("LLM_EFFORT_MATCHING") == null) assertEquals("medium", llm.effortForAgent("matching"));
         if (System.getenv("LLM_EFFORT_PARTIAL_DRAFTING") == null) assertEquals("medium", llm.effortForAgent("partial_drafting"));
         if (System.getenv("LLM_EFFORT_NEW_ISSUE") == null) assertEquals("medium", llm.effortForAgent("new_issue"));
         if (System.getenv("LLM_EFFORT_HIGH_STAKES") == null) assertEquals("medium", llm.effortForAgent("high_stakes"));

@@ -90,7 +90,7 @@ noticedesk:
     model-high-stakes: ${LLM_MODEL_HIGH_STAKES:}
     # Thinking effort (output_config.effort: low|medium|high|xhigh|max), sent only to the models in
     # anthropic.effort-models. An empty value sends no effort (the model's own default applies).
-    effort-matching: ${LLM_EFFORT_MATCHING:low}
+    effort-matching: ${LLM_EFFORT_MATCHING:medium}
     effort-partial-drafting: ${LLM_EFFORT_PARTIAL_DRAFTING:medium}
     effort-new-issue: ${LLM_EFFORT_NEW_ISSUE:medium}
     effort-high-stakes: ${LLM_EFFORT_HIGH_STAKES:medium}
