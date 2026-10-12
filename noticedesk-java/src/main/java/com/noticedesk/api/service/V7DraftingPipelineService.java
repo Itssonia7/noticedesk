@@ -257,7 +257,8 @@ public class V7DraftingPipelineService {
             log.info("AI citations: {} listed, {} after removing duplicates", rawCitations.size(), allCitations.size());
         }
 
-        CitationVerificationResult citationResult = verifyCitations(allCitations, noticeId);
+        // IndianKanoon calls are priced from configuration and count against the same per-notice cap
+        CitationVerificationResult citationResult = verifyCitations(allCitations, noticeId, budget);
         List<VerifiedCitation> verified = citationResult.citations();
 
         Set<String> notFoundIds = new HashSet<>();
@@ -276,6 +277,9 @@ public class V7DraftingPipelineService {
         }
         if (citationResult.flags().contains("MISSING_INDIANKANOON_API_TOKEN")) {
             notes.add("INDIANKANOON_API_TOKEN is not set: AI citations were NOT checked.");
+        }
+        if (citationResult.flags().contains(CitationVerificationAgent.FLAG_IK_COST_CAP)) {
+            notes.add("Per-notice cost cap reached before every citation was checked: remaining citations are NOT_CHECKED.");
         }
 
         Map<Integer, AiIssueContent> aiContent = new LinkedHashMap<>();
@@ -477,7 +481,7 @@ public class V7DraftingPipelineService {
                 r.strengthNote(), r.model(), r.promptVersion());
     }
 
-    private CitationVerificationResult verifyCitations(List<RawAiCitation> citations, UUID noticeId) {
+    private CitationVerificationResult verifyCitations(List<RawAiCitation> citations, UUID noticeId, NoticeCallBudget budget) {
         if (citations.isEmpty()) {
             return new CitationVerificationResult(Map.of("total", 0), List.of(), null, List.of());
         }
@@ -490,7 +494,7 @@ public class V7DraftingPipelineService {
             return new CitationVerificationResult(Map.of("total", notChecked.size(), "not_checked", notChecked.size()),
                     notChecked, null, List.of());
         }
-        return citationVerificationAgent.verifyAiCitations(citations, noticeId);
+        return citationVerificationAgent.verifyAiCitations(citations, noticeId, budget);
     }
 
     private static String stripCitations(String html, Set<String> removedNames) {

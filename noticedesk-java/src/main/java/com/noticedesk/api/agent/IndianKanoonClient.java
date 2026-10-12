@@ -18,7 +18,7 @@ import java.util.Map;
 
 /**
  * Thin HTTP client for the IndianKanoon API (search + document fragment). Kept separate so tests
- * can mock it; no test makes a live call.
+ * can mock it; no test makes a live call. HTTP 401 / 403 / 429 throw {@link IndianKanoonFatalException}.
  */
 @Component
 @RequiredArgsConstructor
@@ -76,6 +76,9 @@ public class IndianKanoonClient {
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) {
+            // 401 / 403 / 429 stop the run (no retry, no NOT_CHECKED fallback); other errors are per-citation
+            IndianKanoonFatalException fatal = IndianKanoonFatalException.forHttpStatus(response.statusCode());
+            if (fatal != null) throw fatal;
             throw new IllegalStateException("IndianKanoon HTTP " + response.statusCode());
         }
         return objectMapper.readValue(response.body(), new TypeReference<>() {});

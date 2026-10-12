@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
 import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -361,9 +362,19 @@ public class CitationVerificationAgent {
             "court", "of", "the", "hon", "ble", "honble", "honourable", "india", "high", "supreme",
             "judicature", "at", "bench");
 
+    /** Flag set when the per-notice cost cap stopped IndianKanoon calls (remaining citations NOT_CHECKED). */
+    public static final String FLAG_IK_COST_CAP = "IK_COST_CAP_REACHED";
+
+    public CitationVerificationResult verifyAiCitations(List<RawAiCitation> rawCitations, UUID noticeId) {
+        return verifyAiCitations(rawCitations, noticeId, null);
+    }
+
     /**
-     * Verifies every AI citation against IndianKanoon and never throws: a missing token, the per-draft
-     * call cap ({@code IK_MAX_CALLS_PER_DRAFT}) or an API error yields NOT_CHECKED.
+     * Verifies every AI citation against IndianKanoon. A missing token, the per-draft call cap
+     * ({@code IK_MAX_CALLS_PER_DRAFT}), the per-notice cost cap ({@code budget}, each call counted at its
+     * configured price {@code citation.indiankanoon.cost-inr-per-*}) or a per-citation API error yields
+     * NOT_CHECKED; HTTP 401 / 403 / 429 from IndianKanoon throw {@link IndianKanoonFatalException} and stop
+     * the run.
      * <ul>
      *   <li>VERIFIED — case name, court and year all match a judgment (and the quoted text, if any, is found in it)</li>
      *   <li>VERIFIED_PARTIAL — name matched but court/year differ or the quote was not found (block flag)</li>
@@ -372,7 +383,7 @@ public class CitationVerificationAgent {
      * </ul>
      * The per-citation status is the only output; the caller edits the HTML.
      */
-    public CitationVerificationResult verifyAiCitations(List<RawAiCitation> rawCitations, UUID noticeId) {
+    public CitationVerificationResult verifyAiCitations(List<RawAiCitation> rawCitations, UUID noticeId, NoticeCallBudget budget) {
         List<RawAiCitation> raws = dedupeCitations(rawCitations);
         List<VerifiedCitation> out = new ArrayList<>();
         List<String> flags = new ArrayList<>();
@@ -402,7 +413,7 @@ public class CitationVerificationAgent {
                 } else {
                     result = getFromIkCache(key);
                     if (result == null) {
-                        result = checkAgainstIndianKanoon(r, token, maxCalls, callsMade, noticeId);
+                        result = checkAgainstIndianKanoon(r, token, maxCalls, callsMade, noticeId, budget);
                         if (!NOT_CHECKED.equals(result.status())) {
                             saveToIkCache(key, result);
                         }
@@ -413,6 +424,10 @@ public class CitationVerificationAgent {
             if (NOT_CHECKED.equals(result.status()) && result.details() != null
                     && result.details().startsWith("IK call cap") && !flags.contains("IK_MAX_CALLS_EXCEEDED")) {
                 flags.add("IK_MAX_CALLS_EXCEEDED");
+            }
+            if (NOT_CHECKED.equals(result.status()) && result.details() != null
+                    && result.details().startsWith("per-notice cost cap") && !flags.contains(FLAG_IK_COST_CAP)) {
+                flags.add(FLAG_IK_COST_CAP);
             }
             out.add(result);
         }
@@ -432,15 +447,17 @@ public class CitationVerificationAgent {
     }
 
     private VerifiedCitation checkAgainstIndianKanoon(RawAiCitation r, String token, int maxCalls,
-                                                      int[] callsMade, UUID noticeId) {
+                                                      int[] callsMade, UUID noticeId, NoticeCallBudget budget) {
         if (callsMade[0] >= maxCalls) {
             return v7Result(r, NOT_CHECKED, null, "flagged", "IK call cap reached (" + maxCalls + ")");
         }
+        String capRefusal = costCapRefusal(budget, ApiUsageLogService.IK_SEARCH);
+        if (capRefusal != null) {
+            return v7Result(r, NOT_CHECKED, null, "flagged", capRefusal);
+        }
         try {
             callsMade[0]++;
-            if (apiUsageLogService != null) {
-                apiUsageLogService.logUsage("indiankanoon", "ik_search", 1, 0, "ik_search", null, noticeId);
-            }
+            recordIkCall(ApiUsageLogService.IK_SEARCH, noticeId, budget);
             List<IndianKanoonClient.IkDoc> docs = ikClient.search(token, r.caseName());
             IndianKanoonClient.IkDoc match = null;
             for (IndianKanoonClient.IkDoc d : docs) {
@@ -470,20 +487,42 @@ public class CitationVerificationAgent {
                 if (callsMade[0] >= maxCalls) {
                     return v7Result(r, VERIFIED_PARTIAL, url, "flagged", "Name/court/year matched; quote not checked (IK call cap reached)");
                 }
-                callsMade[0]++;
-                if (apiUsageLogService != null) {
-                    apiUsageLogService.logUsage("indiankanoon", "ik_fragment", 1, 0, "ik_fragment", null, noticeId);
+                if (costCapRefusal(budget, ApiUsageLogService.IK_FRAGMENT) != null) {
+                    return v7Result(r, VERIFIED_PARTIAL, url, "flagged", "Name/court/year matched; quote not checked (per-notice cost cap)");
                 }
+                callsMade[0]++;
+                recordIkCall(ApiUsageLogService.IK_FRAGMENT, noticeId, budget);
                 String fragment = ikClient.fragment(token, match.docId(), r.quotedText());
                 if (!normaliseText(fragment).contains(normaliseText(r.quotedText()))) {
                     return v7Result(r, VERIFIED_PARTIAL, url, "flagged", "Name/court/year matched; quoted text not found in judgment");
                 }
             }
             return v7Result(r, VERIFIED, url, "passed", "Matched IndianKanoon judgment: " + match.title());
+        } catch (IndianKanoonFatalException e) {
+            log.error("IndianKanoon fatal error, run stopped: {}", e.getMessage());
+            throw e;   // 401 / 403 / 429: never a NOT_CHECKED fallback
         } catch (Exception e) {
             log.warn("IndianKanoon check failed for one citation: {}", e.getClass().getSimpleName());
             return v7Result(r, NOT_CHECKED, null, "flagged", "IndianKanoon API error");
         }
+    }
+
+    /** The configured INR price of one IndianKanoon call of {@code kind} (0 when none is configured). */
+    private java.math.BigDecimal ikCostInr(String kind) {
+        return apiUsageLogService != null ? apiUsageLogService.indianKanoonCostInr(kind) : java.math.BigDecimal.ZERO;
+    }
+
+    /** Why the per-notice cost cap forbids the next IndianKanoon call, or null. */
+    private String costCapRefusal(NoticeCallBudget budget, String kind) {
+        if (budget == null) return null;
+        return budget.refusalReasonForFixedCost(kind, ikCostInr(kind));
+    }
+
+    /** Logs the call at its configured price (usage row + run ledger) and counts it against the notice budget. */
+    private void recordIkCall(String kind, UUID noticeId, NoticeCallBudget budget) {
+        java.math.BigDecimal cost = ikCostInr(kind);
+        if (apiUsageLogService != null) cost = apiUsageLogService.logIndianKanoonCall(kind, null, noticeId);
+        if (budget != null) budget.addSpentInr(cost);
     }
 
     private VerifiedCitation getFromIkCache(String cacheKey) {
