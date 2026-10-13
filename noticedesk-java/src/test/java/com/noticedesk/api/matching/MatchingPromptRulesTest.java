@@ -20,10 +20,13 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Issue splitting rules of prompts/issue_matching_v1.md (live runs split notices 001 and 010 differently
- * from run to run) and the testbench answer keys that follow them. No model calls.
+ * Rules of the live matching prompt (prompts/issue_matching_v2.md: grounds-first splitting, one primary card
+ * plus alternates, decisive-fact status) and the testbench answer keys that follow the splitting rules
+ * (live runs split notices 001 and 010 differently from run to run). No model calls.
  */
 class MatchingPromptRulesTest {
+
+    private static final String PROMPT = "/prompts/" + com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION + ".md";
 
     /** Interest / penalty provisions that are consequential to a main demand unless an exception applies. */
     private static final Pattern INTEREST_OR_PENALTY = Pattern.compile("(?i)Section\\s*(50|73\\(9\\)|74\\(9\\)|122|125|129|171\\(3A\\))\\b");
@@ -37,8 +40,63 @@ class MatchingPromptRulesTest {
             "notice_06_hybrid_sec73_sec50.json", 2);
 
     @Test
-    void promptStatesTheIssueSplittingAndParaMapRules() throws IOException {
-        String prompt = resource("/prompts/issue_matching_v1.md");
+    void agentLoadsTheV2Prompt_andV1StaysUntouched() throws IOException {
+        assertEquals("issue_matching_v2", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        String v1 = resource("/prompts/issue_matching_v1.md");
+        assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
+        assertFalse(v1.contains("alternates"));
+    }
+
+    @Test
+    void promptWorksGroundsFirst_withOnePrimaryCardAndAlternates() throws IOException {
+        String prompt = resource(PROMPT);
+        // 1(a) grounds first, one issue per ground
+        assertTrue(prompt.contains("`issues.length` MUST equal `grounds.length`"));
+        assertTrue(prompt.contains("Never merge two grounds into one issue because they share a card, a section or a period"));
+        assertTrue(prompt.contains("Never split one ground into several issues by tax head"));
+        // 1(b) one primary + up to 2 alternates, sibling rule
+        assertTrue(prompt.contains("`card_id` = the ONE best card"));
+        assertTrue(prompt.contains("`alternates` = up to 2 other plausible card ids"));
+        assertTrue(prompt.contains("Never put the primary card in `alternates`"));
+        assertTrue(prompt.contains("the primary MUST be that sibling card (NDK-xxx)"));
+        assertTrue(prompt.contains("DECISIVE"));
+        // 1(c) status rules and the hedging rule
+        assertTrue(prompt.contains("DECISIVE facts are ALL present in the notice"));
+        assertTrue(prompt.contains("The match is still `\"full\"` when amounts or other non-decisive details are missing"));
+        assertTrue(prompt.contains("at least one DECISIVE fact is absent from or contradicted by the notice"));
+        assertTrue(prompt.contains("Name the absent, contradicted or extra fact in `why`"));
+        assertTrue(prompt.contains("Being unsure between two sibling cards is NOT a reason"));
+        assertTrue(prompt.contains("a primary `card_id` MUST be given whenever status is `\"full\"` or `\"partial\"`"));
+        // 1(d) period regime check
+        assertTrue(prompt.contains("Period regime check"));
+        assertTrue(prompt.contains("the primary is the card whose regime contains the notice's dates"));
+        // 1(e) self-check list
+        assertTrue(prompt.contains("## Self-check before you answer"));
+        assertTrue(prompt.contains("`issues.length` equals `grounds.length`"));
+        assertTrue(prompt.contains("Every numbered paragraph of the notice appears as a key of `para_map`"));
+        assertTrue(prompt.contains("Every issue with status `\"full\"` or `\"partial\"` has a non-null `card_id`"));
+        assertTrue(prompt.contains("No card id appears as both a primary and an alternate"));
+    }
+
+    @Test
+    void outputExampleUsesCardIdAndAlternates_notCardIds() throws IOException {
+        String prompt = resource(PROMPT);
+        int start = prompt.indexOf("```json");
+        int end = prompt.indexOf("```", start + 7);
+        assertTrue(start >= 0 && end > start, "prompt has a fenced JSON example");
+        String example = prompt.substring(start, end);
+        assertTrue(example.contains("\"grounds\""));
+        assertTrue(example.contains("\"card_id\""));
+        assertTrue(example.contains("\"alternates\""));
+        assertFalse(example.contains("card_ids"), "the v1 card_ids array must not appear in the v2 example");
+        assertTrue(example.contains("\"para_map\""));
+        assertTrue(example.contains("\"missing_or_doubtful\""));
+    }
+
+    @Test
+    void promptKeepsTheIssueSplittingAndParaMapRules() throws IOException {
+        String prompt = resource(PROMPT);
+        assertTrue(prompt.contains("NEVER invent or fabricate values"));
         assertTrue(prompt.contains("One issue per distinct ground of demand"));
         assertTrue(prompt.contains("Consequential interest and penalty are part of the main issue, NOT separate issues"));
         assertTrue(prompt.contains("the notice's ONLY demand is interest or penalty"));

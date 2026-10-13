@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 13-10-2026 (private notice set for the live runners)
+Last updated: 13-10-2026 (matching prompt v2: one primary card + alternates)
 
 ---
 
@@ -250,6 +250,35 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   A notice without a GSTIN uses the synthetic allow-listed bench GSTIN for its DB rows only.
 - Both runners refuse to run when `PRIVATE_SEED_DIR` is set and `CARD-*` cards remain in the database,
   and print the catalogue size and hash first. Details in `docs/PRIVATE_DATA.md`.
+
+## (b10) Matching prompt v2: one primary card + alternates (13-10-2026)
+
+- Live finding on 40 private notices against the 269-card catalogue: the matcher returned 2-3 card ids per
+  issue instead of choosing one, called a match "partial" even when the right card was among its candidates,
+  bundled several distinct grounds into one issue (96 expected grounds came back as 56 issues) and missed
+  date-regime traps between sibling cards.
+- `prompts/issue_matching_v2.md` (v1 kept untouched; `IssueMatchingAgent.PROMPT_VERSION` = `issue_matching_v2`):
+  the model first lists every distinct ground (`grounds`), then returns exactly one issue per ground; per issue
+  ONE primary `card_id` (or null) plus up to two `alternates`; the primary is chosen on the card's DECISIVE facts
+  and every NOT THIS IF rule ("Not this if <fact> (use NDK-xxx)" forces the sibling); status `full` = all
+  DECISIVE facts present and no NOT THIS IF triggered (missing amounts do not matter), `partial` = the card's
+  ground but a DECISIVE fact absent / contradicted or a material element the card does not cover (named in
+  `why`), `none` = no card; doubt between siblings is never "partial"; a period-regime check (order / notice /
+  tax-period dates against each sibling's PERIOD and date boundaries) precedes the choice; a self-check list
+  closes the prompt. The rules on no invention, para_map and issue splitting 4(a)-(c) are kept.
+- Result shape: `MatchedIssue.cardIds` now holds ONLY the primary (one element, or empty for `none`), so
+  template fill and every downstream consumer are unchanged; the new field `alternateCardIds` (at most two,
+  never the primary) holds the other candidates. The parser reads both the v2 shape (`card_id` + `alternates`)
+  and the old v1 shape (`card_ids`: first = primary, rest = alternates). Unknown primary -> status `none` +
+  issue flag `unknown_card_id` (as before); unknown alternate -> dropped with a log line. New non-failing
+  flags: issue flag `hedged` (status full / partial without a primary), result flag `issue_count_mismatch`
+  (`issues.length != grounds.length`). Alternates are not persisted (`issue_matches` has no spare JSON column
+  and no migration was added); they live in the result object only.
+- `MatchingEvalRunnerTest` scores the PRIMARY card only: the answer key's expected issues are first
+  de-duplicated by card_ids set (keys that list interest / penalty as a separate issue on the main card), then
+  each expected issue is paired as correct primary (status + card), primary card right but status wrong, right
+  card only in alternates, wrong, missed; extra counts against the de-duplicated expected count. The "Got"
+  column of WRONG MATCH DETAILS shows the alternates (`full[NDK-006] alt[NDK-007]`).
 
 ## (c) Verification
 

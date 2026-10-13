@@ -56,13 +56,26 @@ class Stage3AgentsTest {
     @Test
     void testPartialDraftingAgentStubExecution() {
         PartialDraftingAgent agent = new PartialDraftingAgent(properties, objectMapper, null, null);
-        MatchedIssue issue = new MatchedIssue(1, "partial", List.of("CARD-006"), "Why", List.of(), Map.of(), List.of(), List.of());
+        // v2 result shape: cardIds holds only the primary, the matcher's other candidates are alternates
+        MatchedIssue issue = new MatchedIssue(1, "partial", List.of("CARD-006"), List.of("CARD-007", "CARD-008"),
+                "Why", List.of(), Map.of(), List.of(), List.of());
+        assertEquals("CARD-006", issue.primaryCardId());
+        assertEquals(List.of("CARD-007", "CARD-008"), issue.alternateCardIds());
 
         PartialDraftingResult result = agent.generatePartialDrafting(issue, null, null, "scn_73", UUID.randomUUID());
 
         assertNotNull(result);
         assertFalse(result.sections().isEmpty());
         assertTrue(result.sections().get(0).html().contains("Additional argument"));
+    }
+
+    @Test
+    void matchedIssue_v1Constructor_hasNoAlternates_andNoPrimaryWhenNone() {
+        MatchedIssue issue = new MatchedIssue(1, "none", List.of(), "Why", List.of(), Map.of(), List.of(), List.of());
+        assertEquals(List.of(), issue.alternateCardIds());
+        assertNull(issue.primaryCardId());
+        MatchedIssue nullAlternates = new MatchedIssue(1, "full", List.of("CARD-006"), null, "Why", List.of(), Map.of(), List.of(), List.of());
+        assertEquals(List.of(), nullAlternates.alternateCardIds(), "null alternates read as empty");
     }
 
     @Test

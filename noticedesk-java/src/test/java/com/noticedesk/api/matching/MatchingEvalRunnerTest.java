@@ -224,42 +224,61 @@ class MatchingEvalRunnerTest {
         return v;
     }
 
-    /** Card-level outcome of one notice against its answer key (see {@link #scoreCards}). */
-    record CardScore(int expected, int correct, int statusRightWrongCard, int missed, int extra, List<WrongMatchInfo> wrong) {
+    /**
+     * Card-level outcome of one notice against its (de-duplicated) answer key, see {@link #scoreCards}.
+     * {@code expected} is the number of expected issues after de-duplication.
+     */
+    record CardScore(int expected, int correct, int primaryRightStatusWrong, int rightCardInAlternates, int wrongCard,
+                     int missed, int extra, List<WrongMatchInfo> wrong) {
         boolean allCorrect() {
             return correct == expected && extra == 0;
         }
     }
 
+    static final String KIND_PRIMARY_RIGHT_STATUS_WRONG = "primary card right, status wrong";
+    static final String KIND_RIGHT_CARD_IN_ALTERNATES = "right card only in alternates";
+    static final String KIND_WRONG = "wrong";
+    static final String KIND_MISSED = "missed";
+
     /**
-     * Card-level accuracy. Each expected issue is paired with at most one returned issue: first the returned
-     * issues with the same status whose card_ids contain any of the expected card ids (the expected list holds
-     * alternatives; status "none" needs no card), then, for what is left, any unused returned issue with the same
-     * status ("status right, wrong card"). The rest are missed. Returned issues beyond
-     * {@code answer_key.expected_issues} (else the size of the issues list) are extra. For a private notice
-     * only statuses and card ids are reported; the model's explanation is withheld.
+     * Card-level accuracy against the PRIMARY card only (a shortlist counts for nothing). The answer key's
+     * expected issues are first de-duplicated by their card_ids set (several keys list interest / penalty as a
+     * separate issue on the main issue's card; those are one ground under the splitting rules). Each
+     * expected issue is then paired with at most one returned issue, in this order:
+     * <ol>
+     *   <li>correct: same status and the returned PRIMARY card is one of the expected ids (status "none" needs
+     *       no card);</li>
+     *   <li>primary card right, status wrong: the returned primary is an expected id, the status differs;</li>
+     *   <li>right card only in alternates: an expected id is among the returned alternates (any status);</li>
+     *   <li>wrong: an unused returned issue remains (same status first) but neither its primary nor its
+     *       alternates is an expected id;</li>
+     *   <li>missed: no unused returned issue remains.</li>
+     * </ol>
+     * Returned issues beyond the de-duplicated expected count are extra. For a private notice only statuses
+     * and card ids are reported; the model's explanation is withheld.
      */
     static CardScore scoreCards(String noticeId, JsonNode answerKey, List<MatchedIssue> returnedIssues, boolean isPrivate) {
         List<MatchedIssue> returned = returnedIssues == null ? List.of() : returnedIssues;
-        JsonNode expectedIssues = answerKey.path("issues");
-        if (!expectedIssues.isArray()) {
-            return new CardScore(0, 0, 0, 0, 0, List.of());
+        JsonNode expectedNode = answerKey.path("issues");
+        if (!expectedNode.isArray()) {
+            return new CardScore(0, 0, 0, 0, 0, 0, 0, List.of());
         }
-        int expectedCount = answerKey.has("expected_issues") ? answerKey.path("expected_issues").asInt() : expectedIssues.size();
+        List<JsonNode> expectedIssues = dedupeExpected(expectedNode);
+        int expectedCount = expectedIssues.size();
         boolean[] used = new boolean[returned.size()];
-        int correct = 0, wrongCard = 0, missed = 0;
+        int correct = 0, primaryRightStatusWrong = 0, inAlternates = 0, wrongCard = 0, missed = 0;
         List<Integer> unresolved = new ArrayList<>();
 
         for (int e = 0; e < expectedIssues.size(); e++) {
             JsonNode exp = expectedIssues.get(e);
-            String expStatus = exp.path("status").asText("").trim().toLowerCase(Locale.ROOT);
+            String expStatus = expectedStatus(exp);
             List<String> expCards = cardIds(exp.path("card_ids"));
             int idx = -1;
             for (int r = 0; r < returned.size() && idx < 0; r++) {
                 if (used[r]) continue;
                 MatchedIssue got = returned.get(r);
                 if (!expStatus.equalsIgnoreCase(got.status())) continue;
-                if ("none".equals(expStatus) || overlaps(expCards, got.cardIds())) idx = r;
+                if ("none".equals(expStatus) || contains(expCards, got.primaryCardId())) idx = r;
             }
             if (idx >= 0) {
                 used[idx] = true;
@@ -270,37 +289,85 @@ class MatchingEvalRunnerTest {
         }
 
         String gotAll = returned.isEmpty() ? "no issue returned"
-                : returned.stream().map(i -> i.status() + cardList(i.cardIds())).collect(java.util.stream.Collectors.joining(", "));
+                : returned.stream().map(MatchingEvalRunnerTest::gotColumn).collect(java.util.stream.Collectors.joining(", "));
+        String withheld = "(withheld: private notice)";
         List<WrongMatchInfo> wrong = new ArrayList<>();
         for (int e : unresolved) {
             JsonNode exp = expectedIssues.get(e);
-            String expStatus = exp.path("status").asText("").trim().toLowerCase(Locale.ROOT);
+            String expStatus = expectedStatus(exp);
             List<String> expCards = cardIds(exp.path("card_ids"));
-            int idx = -1;
-            for (int r = 0; r < returned.size() && idx < 0; r++) {
-                if (!used[r] && expStatus.equalsIgnoreCase(returned.get(r).status())) idx = r;
-            }
             String kind;
+            int idx = firstUnused(returned, used, got -> contains(expCards, got.primaryCardId()));
+            if (idx >= 0) {
+                kind = KIND_PRIMARY_RIGHT_STATUS_WRONG;
+                primaryRightStatusWrong++;
+            } else {
+                idx = firstUnused(returned, used, got -> overlaps(expCards, got.alternateCardIds()));
+                if (idx >= 0) {
+                    kind = KIND_RIGHT_CARD_IN_ALTERNATES;
+                    inAlternates++;
+                } else {
+                    idx = firstUnused(returned, used, got -> expStatus.equalsIgnoreCase(got.status()));
+                    if (idx < 0) idx = firstUnused(returned, used, got -> true);
+                    if (idx >= 0) {
+                        kind = KIND_WRONG;
+                        wrongCard++;
+                    } else {
+                        kind = KIND_MISSED;
+                        missed++;
+                    }
+                }
+            }
             String why;
             if (idx >= 0) {
                 used[idx] = true;
-                wrongCard++;
-                kind = "status right, wrong card";
-                why = isPrivate ? "(withheld: private notice)" : String.valueOf(returned.get(idx).why());
+                why = isPrivate ? withheld : String.valueOf(returned.get(idx).why());
             } else {
-                missed++;
-                kind = "missed";
-                why = returned.isEmpty() ? "No issue returned"
-                        : isPrivate ? "(withheld: private notice)" : String.valueOf(returned.get(0).why());
+                why = returned.isEmpty() ? "No issue returned" : isPrivate ? withheld : String.valueOf(returned.get(0).why());
             }
             wrong.add(new WrongMatchInfo(noticeId, expStatus + " " + cardList(expCards) + " [" + kind + "]", gotAll, why));
         }
         int extra = Math.max(0, returned.size() - expectedCount);
         if (extra > 0) {
             wrong.add(new WrongMatchInfo(noticeId, expectedCount + " issue(s) [extra returned: " + extra + "]", gotAll,
-                    isPrivate ? "(withheld: private notice)" : "More issues returned than the answer key expects"));
+                    isPrivate ? withheld : "More issues returned than the answer key expects"));
         }
-        return new CardScore(expectedIssues.size(), correct, wrongCard, missed, extra, wrong);
+        return new CardScore(expectedCount, correct, primaryRightStatusWrong, inAlternates, wrongCard, missed, extra, wrong);
+    }
+
+    /**
+     * The answer key's expected issues without duplicates: two expected issues with the same (non-empty)
+     * card_ids set are one ground, the first one is kept. Expected issues without a card (status "none") are
+     * never merged.
+     */
+    static List<JsonNode> dedupeExpected(JsonNode expectedIssues) {
+        List<JsonNode> out = new ArrayList<>();
+        Set<Set<String>> seen = new HashSet<>();
+        for (JsonNode exp : expectedIssues) {
+            Set<String> key = new TreeSet<>();
+            for (String c : cardIds(exp.path("card_ids"))) key.add(c.toLowerCase(Locale.ROOT));
+            if (!key.isEmpty() && !seen.add(key)) continue;
+            out.add(exp);
+        }
+        return out;
+    }
+
+    private static String expectedStatus(JsonNode exp) {
+        return exp.path("status").asText("").trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static int firstUnused(List<MatchedIssue> returned, boolean[] used, java.util.function.Predicate<MatchedIssue> test) {
+        for (int r = 0; r < returned.size(); r++) {
+            if (!used[r] && test.test(returned.get(r))) return r;
+        }
+        return -1;
+    }
+
+    /** "Got" column entry of one returned issue: status, primary card and (when any) the alternates. */
+    static String gotColumn(MatchedIssue i) {
+        String s = i.status() + cardList(i.cardIds());
+        if (i.alternateCardIds() != null && !i.alternateCardIds().isEmpty()) s += " alt" + cardList(i.alternateCardIds());
+        return s;
     }
 
     private static List<String> cardIds(JsonNode node) {
@@ -313,13 +380,18 @@ class MatchingEvalRunnerTest {
         return out;
     }
 
+    private static boolean contains(List<String> expected, String got) {
+        if (got == null) return false;
+        for (String e : expected) {
+            if (e.equalsIgnoreCase(got.trim())) return true;
+        }
+        return false;
+    }
+
     private static boolean overlaps(List<String> expected, List<String> got) {
         if (got == null) return false;
         for (String g : got) {
-            if (g == null) continue;
-            for (String e : expected) {
-                if (e.equalsIgnoreCase(g.trim())) return true;
-            }
+            if (contains(expected, g)) return true;
         }
         return false;
     }
@@ -356,10 +428,12 @@ class MatchingEvalRunnerTest {
         int cacheHitCalls = 0;
         int totalCacheReadTokensCall2Plus = 0;
 
-        // card-level accuracy (status + card id per expected issue)
+        // card-level accuracy (status + PRIMARY card id per de-duplicated expected issue)
         int cardIssuesExpected = 0;
         int cardIssuesCorrect = 0;
-        int cardStatusRightWrongCard = 0;
+        int cardPrimaryRightStatusWrong = 0;
+        int cardRightInAlternates = 0;
+        int cardIssuesWrong = 0;
         int cardIssuesMissed = 0;
         int cardIssuesExtra = 0;
         int noticesAllIssuesCorrect = 0;
@@ -413,8 +487,8 @@ class MatchingEvalRunnerTest {
             totalCostInr = totalCostInr.add(noticeInr);
             String whyStr = result.issues().stream().map(com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue::why).collect(java.util.stream.Collectors.joining(" ")).toLowerCase();
             // same inputs as the live pipeline: compare this hash with its matcher run when results differ
-            System.out.printf("  catalogue_hash=%s status=%s cost=%.4f INR%n", result.catalogueHash(),
-                    result.issues().stream().map(i -> i.status() + i.cardIds()).toList(), noticeInr.doubleValue());
+            System.out.printf("  catalogue_hash=%s status=%s flags=%s cost=%.4f INR%n", result.catalogueHash(),
+                    result.issues().stream().map(MatchingEvalRunnerTest::gotColumn).toList(), result.flags(), noticeInr.doubleValue());
 
             if (result.flags().contains(IssueMatchingAgent.FLAG_COST_CAP)) {
                 totalNotices--;
@@ -470,11 +544,13 @@ class MatchingEvalRunnerTest {
                 }
             }
 
-            // Card-level accuracy: status AND one of the expected card ids per expected issue
+            // Card-level accuracy: status AND the PRIMARY card per de-duplicated expected issue
             CardScore cards = scoreCards(noticeId, answerKey, result.issues(), isPrivate);
             cardIssuesExpected += cards.expected();
             cardIssuesCorrect += cards.correct();
-            cardStatusRightWrongCard += cards.statusRightWrongCard();
+            cardPrimaryRightStatusWrong += cards.primaryRightStatusWrong();
+            cardRightInAlternates += cards.rightCardInAlternates();
+            cardIssuesWrong += cards.wrongCard();
             cardIssuesMissed += cards.missed();
             cardIssuesExtra += cards.extra();
             if (cards.allCorrect()) noticesAllIssuesCorrect++;
@@ -504,11 +580,14 @@ class MatchingEvalRunnerTest {
             evalItem.put("cache_write_tokens", result.cacheWriteTokens());
             evalItem.put("cost_inr", noticeInr.doubleValue());
             evalItem.put("issues_expected", cards.expected());
-            evalItem.put("issues_correct", cards.correct());
-            evalItem.put("issues_status_right_wrong_card", cards.statusRightWrongCard());
+            evalItem.put("issues_correct_primary", cards.correct());
+            evalItem.put("issues_primary_right_status_wrong", cards.primaryRightStatusWrong());
+            evalItem.put("issues_right_card_in_alternates", cards.rightCardInAlternates());
+            evalItem.put("issues_wrong", cards.wrongCard());
             evalItem.put("issues_missed", cards.missed());
             evalItem.put("issues_extra", cards.extra());
             evalItem.put("all_issues_correct", cards.allCorrect());
+            evalItem.set("result_flags", objectMapper.valueToTree(result.flags()));
             noticeEvalResults.add(evalItem);
         }
 
@@ -534,10 +613,11 @@ class MatchingEvalRunnerTest {
         System.out.println("Cache Hit Rate (Call 2+): " + cacheHitRatePct);
         System.out.printf("Cache Read Tokens (Calls 2+): %d%n", totalCacheReadTokensCall2Plus);
         System.out.printf("Total Benchmark Cost (all billed calls, failed included): %.4f INR%n", setCostInr.doubleValue());
-        System.out.printf("Card-level accuracy: issues expected=%d | correct (status+card)=%d (%s) | status right, wrong card=%d | missed=%d | extra returned=%d%n",
+        System.out.printf("Card-level accuracy (primary card only): issues expected (deduped)=%d | correct primary (status+card)=%d (%s) "
+                        + "| primary card right, status wrong=%d | right card only in alternates=%d | wrong=%d | missed=%d | extra returned=%d%n",
                 cardIssuesExpected, cardIssuesCorrect, RunCostLedger.pct(cardIssuesCorrect, cardIssuesExpected, successfulCalls),
-                cardStatusRightWrongCard, cardIssuesMissed, cardIssuesExtra);
-        System.out.printf("Notices with all issues correct (status+card, no extra): %d of %d successful%n", noticesAllIssuesCorrect, successfulCalls);
+                cardPrimaryRightStatusWrong, cardRightInAlternates, cardIssuesWrong, cardIssuesMissed, cardIssuesExtra);
+        System.out.printf("Notices with all issues correct (status+primary card, no extra): %d of %d successful%n", noticesAllIssuesCorrect, successfulCalls);
 
         if (successfulCalls == 0) {
             System.out.println("\nNo successful calls: accuracy metrics are N/A.");
@@ -566,10 +646,12 @@ class MatchingEvalRunnerTest {
         summaryReport.put("cache_hit_rate_pct", RunCostLedger.pctValue(cacheHitCalls, successfulCalls - 1, successfulCalls));
         summaryReport.put("cache_read_tokens_calls_2_plus", totalCacheReadTokensCall2Plus);
         summaryReport.put("total_cost_inr", setCostInr.doubleValue());
-        // card-level accuracy (status + one of the expected card ids per expected issue)
+        // card-level accuracy (status + the PRIMARY card per de-duplicated expected issue)
         summaryReport.put("issues_expected", cardIssuesExpected);
-        summaryReport.put("issues_correct", cardIssuesCorrect);
-        summaryReport.put("issues_status_right_wrong_card", cardStatusRightWrongCard);
+        summaryReport.put("issues_correct_primary", cardIssuesCorrect);
+        summaryReport.put("issues_primary_right_status_wrong", cardPrimaryRightStatusWrong);
+        summaryReport.put("issues_right_card_in_alternates", cardRightInAlternates);
+        summaryReport.put("issues_wrong", cardIssuesWrong);
         summaryReport.put("issues_missed", cardIssuesMissed);
         summaryReport.put("issues_extra", cardIssuesExtra);
         summaryReport.put("issue_card_accuracy_pct", RunCostLedger.pctValue(cardIssuesCorrect, cardIssuesExpected, successfulCalls));

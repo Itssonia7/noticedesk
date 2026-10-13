@@ -45,16 +45,37 @@ public class IssueMatchingAgent {
             String authority
     ) {}
 
+    /**
+     * One matched issue. {@code cardIds} holds ONLY the primary card (one element, or empty for status
+     * {@code none}), so template fill and every downstream consumer read it unchanged; the matcher's other
+     * plausible cards are in {@code alternateCardIds} (at most two, never the primary).
+     */
     public record MatchedIssue(
             int issueNo,
             String status,
             List<String> cardIds,
+            List<String> alternateCardIds,
             String why,
             List<String> notThisIfChecked,
             Map<String, Object> facts,
             List<String> noticeParas,
             List<String> flags
-    ) {}
+    ) {
+        public MatchedIssue {
+            if (alternateCardIds == null) alternateCardIds = List.of();
+        }
+
+        /** An issue without alternates (the v1 shape). */
+        public MatchedIssue(int issueNo, String status, List<String> cardIds, String why, List<String> notThisIfChecked,
+                            Map<String, Object> facts, List<String> noticeParas, List<String> flags) {
+            this(issueNo, status, cardIds, List.of(), why, notThisIfChecked, facts, noticeParas, flags);
+        }
+
+        /** The primary card id, or null for an issue without one. */
+        public String primaryCardId() {
+            return cardIds == null || cardIds.isEmpty() ? null : cardIds.get(0);
+        }
+    }
 
     public record MatchingResult(
             MatchedNoticeInfo notice,
@@ -103,6 +124,18 @@ public class IssueMatchingAgent {
 
     /** Flag of a result whose call was refused by the notice's cost cap (no call was made for that attempt). */
     public static final String FLAG_COST_CAP = "matching_cost_cap";
+
+    /** Prompt resource under {@code prompts/} (v2: one primary card + alternates, grounds-first splitting). */
+    public static final String PROMPT_VERSION = "issue_matching_v2";
+
+    /** Issue flag: the primary card id is not in the active catalogue (the issue is downgraded to {@code none}). */
+    public static final String FLAG_UNKNOWN_CARD_ID = "unknown_card_id";
+    /** Issue flag: status full / partial returned without a primary card (prompt self-check 3). */
+    public static final String FLAG_HEDGED = "hedged";
+    /** Result flag: the model's {@code issues} count differs from its {@code grounds} count (prompt self-check 1). */
+    public static final String FLAG_ISSUE_COUNT_MISMATCH = "issue_count_mismatch";
+    /** Most alternates kept per issue; any beyond are dropped. */
+    static final int MAX_ALTERNATES = 2;
 
     /**
      * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID)}, checking every attempt (retry included)
@@ -239,6 +272,7 @@ public class IssueMatchingAgent {
             MatchedNoticeInfo noticeInfo = parseNoticeInfo(jsonNode.path("notice"));
             List<MatchedIssue> issues = new ArrayList<>();
 
+            List<String> resultFlags = new ArrayList<>();
             JsonNode issuesArray = jsonNode.path("issues");
             if (issuesArray.isArray()) {
                 for (JsonNode issueNode : issuesArray) {
@@ -246,13 +280,7 @@ public class IssueMatchingAgent {
                     String status = issueNode.path("status").asText("none");
                     String why = issueNode.path("why").asText("");
 
-                    List<String> cardIds = new ArrayList<>();
-                    JsonNode cardsNode = issueNode.path("card_ids");
-                    if (cardsNode.isArray()) {
-                        for (JsonNode c : cardsNode) {
-                            cardIds.add(c.asText());
-                        }
-                    }
+                    CardChoice choice = readCardChoice(issueNode);
 
                     List<String> notThisIf = new ArrayList<>();
                     JsonNode notNode = issueNode.path("not_this_if_checked");
@@ -275,25 +303,44 @@ public class IssueMatchingAgent {
 
                     List<String> issueFlags = new ArrayList<>();
 
-                    // Requirement: Unknown card_id returned -> that issue becomes "none" + flag "unknown_card_id"
-                    List<String> validCardsForIssue = new ArrayList<>();
-                    boolean hasUnknownCard = false;
-                    for (String cid : cardIds) {
-                        if (validCardIds.contains(cid)) {
-                            validCardsForIssue.add(cid);
+                    // Unknown primary card -> the issue becomes "none" + flag unknown_card_id (as before)
+                    List<String> primary = new ArrayList<>();
+                    if (choice.primary() != null) {
+                        if (validCardIds.contains(choice.primary())) {
+                            primary.add(choice.primary());
                         } else {
-                            hasUnknownCard = true;
-                            log.warn("Issue #{}: Unknown card_id '{}' returned by LLM. Downgrading issue to 'none'.", issueNo, cid);
+                            log.warn("Issue #{}: Unknown card_id '{}' returned by LLM. Downgrading issue to 'none'.", issueNo, choice.primary());
+                            status = "none";
+                            issueFlags.add(FLAG_UNKNOWN_CARD_ID);
                         }
                     }
 
-                    if (hasUnknownCard) {
-                        status = "none";
-                        issueFlags.add("unknown_card_id");
+                    // Unknown alternates are dropped silently (logged); the primary never repeats as an alternate
+                    List<String> alternates = new ArrayList<>();
+                    for (String alt : choice.alternates()) {
+                        if (alternates.size() >= MAX_ALTERNATES) break;
+                        if (!validCardIds.contains(alt)) {
+                            log.info("Issue #{}: unknown alternate card_id '{}' dropped", issueNo, alt);
+                        } else if (!alt.equals(choice.primary()) && !alternates.contains(alt)) {
+                            alternates.add(alt);
+                        }
                     }
 
-                    issues.add(new MatchedIssue(issueNo, status, validCardsForIssue, why, notThisIf, facts, noticeParas, issueFlags));
+                    // Prompt self-check 3: a full / partial match must name a primary card
+                    if (("full".equalsIgnoreCase(status) || "partial".equalsIgnoreCase(status)) && primary.isEmpty()) {
+                        log.warn("Issue #{}: status '{}' without a primary card_id (hedged)", issueNo, status);
+                        issueFlags.add(FLAG_HEDGED);
+                    }
+
+                    issues.add(new MatchedIssue(issueNo, status, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags));
                 }
+            }
+
+            // Prompt self-check 1: one issue per ground (only when the model returned the v2 grounds list)
+            JsonNode groundsNode = jsonNode.path("grounds");
+            if (groundsNode.isArray() && groundsNode.size() != issues.size()) {
+                log.warn("matching_issue_count_mismatch grounds={} issues={} noticeId={}", groundsNode.size(), issues.size(), noticeId);
+                resultFlags.add(FLAG_ISSUE_COUNT_MISMATCH);
             }
 
             Map<String, List<Integer>> paraMap = objectMapper.convertValue(jsonNode.path("para_map"), new TypeReference<Map<String, List<Integer>>>() {});
@@ -307,13 +354,56 @@ public class IssueMatchingAgent {
                 }
             }
 
-            return new MatchingResult(noticeInfo, issues, paraMap, missingOrDoubtful, List.of(), catalogueHash,
+            return new MatchingResult(noticeInfo, issues, paraMap, missingOrDoubtful, List.copyOf(resultFlags), catalogueHash,
                     totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
 
         } catch (Exception e) {
             log.error("matching_parse_failed error={}", e.getMessage(), e);
             return createFallbackResult("matching_parse_failed", e.getMessage(), catalogueHash, totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
         }
+    }
+
+    /** The model's card choice for one issue before validation: primary (nullable) and alternates as returned. */
+    record CardChoice(String primary, List<String> alternates) {}
+
+    /**
+     * Reads the card choice in either output shape: v2 {@code "card_id": "X", "alternates": [...]}, or
+     * v1 {@code "card_ids": ["X", ...]} where the first id is the primary and the rest are alternates.
+     * A blank or non-text {@code card_id} counts as null (no primary).
+     */
+    static CardChoice readCardChoice(JsonNode issueNode) {
+        List<String> alternates = new ArrayList<>();
+        if (issueNode.has("card_id") || issueNode.has("alternates")) {
+            String primary = cleanId(issueNode.path("card_id"));
+            JsonNode altNode = issueNode.path("alternates");
+            if (altNode.isArray()) {
+                for (JsonNode a : altNode) {
+                    String id = cleanId(a);
+                    if (id != null) alternates.add(id);
+                }
+            }
+            return new CardChoice(primary, alternates);
+        }
+        JsonNode cardsNode = issueNode.path("card_ids");
+        List<String> ids = new ArrayList<>();
+        if (cardsNode.isArray()) {
+            for (JsonNode c : cardsNode) {
+                String id = cleanId(c);
+                if (id != null) ids.add(id);
+            }
+        } else {
+            String id = cleanId(cardsNode);
+            if (id != null) ids.add(id);
+        }
+        String primary = ids.isEmpty() ? null : ids.get(0);
+        if (ids.size() > 1) alternates.addAll(ids.subList(1, ids.size()));
+        return new CardChoice(primary, alternates);
+    }
+
+    private static String cleanId(JsonNode n) {
+        if (n == null || !n.isTextual()) return null;
+        String s = n.asText().trim();
+        return s.isEmpty() ? null : s;
     }
 
     private MatchingResult createFallbackResult(String flag, String errorDetail, String hash, int in, int out, int cRead, int cWrite) {
@@ -349,12 +439,12 @@ public class IssueMatchingAgent {
 
     private String loadPromptTemplate() {
         try {
-            ClassPathResource resource = new ClassPathResource("prompts/issue_matching_v1.md");
+            ClassPathResource resource = new ClassPathResource("prompts/" + PROMPT_VERSION + ".md");
             try (InputStream is = resource.getInputStream()) {
                 return new String(is.readAllBytes(), StandardCharsets.UTF_8);
             }
         } catch (Exception e) {
-            log.error("Failed to load issue_matching_v1.md prompt resource", e);
+            log.error("Failed to load " + PROMPT_VERSION + ".md prompt resource", e);
             return "Compare notice OCR text against issue cards and return JSON.";
         }
     }
