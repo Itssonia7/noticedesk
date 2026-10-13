@@ -21,8 +21,11 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 /**
- * v7 Stage 3 high-stakes mode: Section 74/74A proceedings, appeal stage, or demand at/above
- * {@code HIGH_STAKES_DEMAND_THRESHOLD} (only when that variable is set). The high-stakes model writes
+ * v7 Stage 3 high-stakes mode. OFF by default: it is active only when {@code HIGH_STAKES_SECTION_74=true}
+ * (Section 74/74A proceedings), {@code HIGH_STAKES_APPEAL_STAGE=true} (appeal stage) or
+ * {@code HIGH_STAKES_DEMAND_THRESHOLD} is set (demand at/above that amount). When none of these is set,
+ * every notice takes the normal path: code template fill for full matches, the partial writer for partial
+ * matches and the new-issue writer for issues without a card. When active, the high-stakes model writes
  * the narrative of sections 01 and 03; the pipeline also routes the AI parts of 04/05/06 to it.
  */
 @Service

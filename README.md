@@ -123,6 +123,12 @@ Flyway applies all migrations automatically on startup. Health check: `GET http:
 
 Config is in `noticedesk-java/src/main/resources/application.yml` (same env var names as the Python `.env.example` above where applicable — `DATABASE_URL`, `ANTHROPIC_API_KEY`, etc.)
 
+v7 drafting (Java only):
+- `HIGH_STAKES_SECTION_74=false` / `HIGH_STAKES_APPEAL_STAGE=false` / `HIGH_STAKES_DEMAND_THRESHOLD=` — high-stakes
+  drafting mode is off by default; set to `true` / an amount to route Section 74/74A, appeal-stage or large-demand
+  notices to the high-stakes writer. Off, every notice uses the normal path (code template fill, partial writer,
+  new-issue writer).
+
 ---
 
 ## 3. Frontend (Next.js)

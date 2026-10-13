@@ -226,9 +226,11 @@ noticedesk:
     supporting-evidence-max-chars: ${DRAFTING_SUPPORTING_EVIDENCE_MAX_CHARS:40000}
     demo-firm-name-override: ${DEMO_FIRM_NAME_OVERRIDE:}
     gst-corpus-dir: ${GST_CORPUS_DIR:../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired}
+    # High-stakes drafting mode is OFF by default: every notice goes through the normal path
+    # (code template fill / partial writer / new-issue writer). Switch it on per trigger by env var.
     high-stakes:
-      section-74: true
-      appeal-stage: true
+      section-74: ${HIGH_STAKES_SECTION_74:false}
+      appeal-stage: ${HIGH_STAKES_APPEAL_STAGE:false}
       demand-threshold: ${HIGH_STAKES_DEMAND_THRESHOLD:}
   citation:
     provider: ${CITATION_PROVIDER:stub}

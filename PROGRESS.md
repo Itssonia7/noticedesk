@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 12-10-2026 (cache-aware cost estimate, provisional templates, citation-only runner)
+Last updated: 13-10-2026 (high-stakes mode off by default)
 
 ---
 
@@ -220,6 +220,16 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   ("case|court|year;...") or five defaults (Hindustan Steel 1969, CIT v Vatika Township 2014, Whirlpool
   v Registrar of Trade Marks 1998, Mangalore Chemicals 1991, one invented name that must be NOT_FOUND)
   and prints the status per citation, the IndianKanoon call count and the cost.
+
+## (b8) High-stakes mode off by default (13-10-2026)
+
+- The high-stakes drafting mode is now OFF unless switched on by env var: `HIGH_STAKES_SECTION_74=true`
+  (Section 74/74A notices), `HIGH_STAKES_APPEAL_STAGE=true` (appeal-stage notices) or
+  `HIGH_STAKES_DEMAND_THRESHOLD=<amount>` (demand at or above the amount). All three default to off /
+  blank in `application.yml` and `AppProperties`; the high-stakes code and prompt are unchanged.
+- With the mode off, every notice (Section 74/74A and appeal stage included) takes the normal path:
+  code template fill for full matches, the partial writer for partial matches, and the new-issue writer
+  only for issues with no card.
 
 ## (c) Verification
 

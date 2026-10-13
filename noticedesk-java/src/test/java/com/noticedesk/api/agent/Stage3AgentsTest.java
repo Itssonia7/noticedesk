@@ -89,6 +89,21 @@ class Stage3AgentsTest {
     }
 
     @Test
+    void testHighStakesDraftingAgentOffByDefault() {
+        // Fresh properties: no HIGH_STAKES_SECTION_74 / HIGH_STAKES_APPEAL_STAGE / HIGH_STAKES_DEMAND_THRESHOLD.
+        AppProperties defaults = new AppProperties();
+        AppProperties.Drafting.HighStakes hs = defaults.getDrafting().getHighStakes();
+        assertFalse(hs.getSection74());
+        assertFalse(hs.getAppealStage());
+        assertTrue(hs.getDemandThreshold() == null || hs.getDemandThreshold().isBlank());
+
+        HighStakesDraftingAgent agent = new HighStakesDraftingAgent(defaults, objectMapper, null, null);
+
+        assertFalse(agent.isHighStakesActive("Section 74", "scn_74", 50000.0));
+        assertFalse(agent.isHighStakesActive("Section 73", "appeal_stage", 50000.0));
+    }
+
+    @Test
     void testCitationVerificationAgentMissingTokenDoesNotCrash() {
         AppProperties.Citation citConfig = properties.getCitation();
         citConfig.setProvider("indiankanoon");

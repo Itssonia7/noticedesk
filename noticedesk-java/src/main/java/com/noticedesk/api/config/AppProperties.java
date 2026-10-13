@@ -265,10 +265,11 @@ public class AppProperties {
         private String citationFailPolicy = "FLAG_AND_CONTINUE"; // FLAG_AND_CONTINUE | FALL_THROUGH_TO_OPUS
         private HighStakes highStakes = new HighStakes();
 
+        /** All three triggers off by default; set HIGH_STAKES_SECTION_74 / HIGH_STAKES_APPEAL_STAGE / HIGH_STAKES_DEMAND_THRESHOLD to enable. */
         @Data
         public static class HighStakes {
-            private Boolean section74 = true;
-            private Boolean appealStage = true;
+            private Boolean section74 = false;
+            private Boolean appealStage = false;
             private String demandThreshold;  // empty/null = demand threshold check disabled
         }
     }
