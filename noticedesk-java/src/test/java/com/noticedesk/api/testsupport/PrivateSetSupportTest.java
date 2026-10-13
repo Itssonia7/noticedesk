@@ -51,6 +51,24 @@ class PrivateSetSupportTest {
     }
 
     @Test
+    void defectCardIds_fromOptionalFile_orNull(@TempDir Path tmp) throws IOException {
+        assertNull(PrivateSetSupport.defectCardIds(null), "no PRIVATE_SEED_DIR: no list");
+        assertNull(PrivateSetSupport.defectCardIds(" "));
+        assertNull(PrivateSetSupport.defectCardIds(tmp.toString()), "file absent: count skipped");
+
+        Files.writeString(tmp.resolve(PrivateSetSupport.DEFECT_CARDS_FILE), """
+                # procedural / visible-defect cards
+                NDK-141
+                ndk-143   # unsigned SCN
+                  NDK-104
+
+                NDK-141
+                """);
+        assertEquals(java.util.Set.of("NDK-141", "NDK-143", "NDK-104"), PrivateSetSupport.defectCardIds(tmp.toString()));
+        assertEquals(java.util.Set.of(), PrivateSetSupport.parseDefectCardIds(List.of("", "   ", "# only a comment")));
+    }
+
+    @Test
     void privateNotices_sortedJsonOnly_orEmpty(@TempDir Path tmp) throws IOException {
         assertTrue(PrivateSetSupport.privateNotices(null).isEmpty());
         assertTrue(PrivateSetSupport.privateNotices(tmp.resolve("nope").toString()).isEmpty());

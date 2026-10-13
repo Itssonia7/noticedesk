@@ -45,14 +45,21 @@ public class IssueMatchingAgent {
             String authority
     ) {}
 
+    /** Issue kind (v3): a ground of demand or action stated by the department. */
+    public static final String KIND_DEMAND = "demand";
+    /** Issue kind (v3): a procedural / jurisdictional / limitation / form defect visible in the document itself. */
+    public static final String KIND_DEFECT = "defect";
+
     /**
      * One matched issue. {@code cardIds} holds ONLY the primary card (one element, or empty for status
      * {@code none}), so template fill and every downstream consumer read it unchanged; the matcher's other
-     * plausible cards are in {@code alternateCardIds} (at most two, never the primary).
+     * plausible cards are in {@code alternateCardIds} (at most two, never the primary). {@code kind} is
+     * {@link #KIND_DEMAND} (default, every v1 / v2 issue) or {@link #KIND_DEFECT} (v3 visible-defect ground).
      */
     public record MatchedIssue(
             int issueNo,
             String status,
+            String kind,
             List<String> cardIds,
             List<String> alternateCardIds,
             String why,
@@ -63,18 +70,35 @@ public class IssueMatchingAgent {
     ) {
         public MatchedIssue {
             if (alternateCardIds == null) alternateCardIds = List.of();
+            kind = normalizeKind(kind);
         }
 
-        /** An issue without alternates (the v1 shape). */
+        /** An issue of kind {@code demand} with alternates (the v2 shape). */
+        public MatchedIssue(int issueNo, String status, List<String> cardIds, List<String> alternateCardIds, String why,
+                            List<String> notThisIfChecked, Map<String, Object> facts, List<String> noticeParas, List<String> flags) {
+            this(issueNo, status, KIND_DEMAND, cardIds, alternateCardIds, why, notThisIfChecked, facts, noticeParas, flags);
+        }
+
+        /** An issue of kind {@code demand} without alternates (the v1 shape). */
         public MatchedIssue(int issueNo, String status, List<String> cardIds, String why, List<String> notThisIfChecked,
                             Map<String, Object> facts, List<String> noticeParas, List<String> flags) {
-            this(issueNo, status, cardIds, List.of(), why, notThisIfChecked, facts, noticeParas, flags);
+            this(issueNo, status, KIND_DEMAND, cardIds, List.of(), why, notThisIfChecked, facts, noticeParas, flags);
         }
 
         /** The primary card id, or null for an issue without one. */
         public String primaryCardId() {
             return cardIds == null || cardIds.isEmpty() ? null : cardIds.get(0);
         }
+
+        /** True for a visible-defect ground (kind {@code defect}). */
+        public boolean isDefect() {
+            return KIND_DEFECT.equals(kind);
+        }
+    }
+
+    /** {@code defect} for "defect" (any case, trimmed); everything else (null, blank, "demand", unknown) is {@code demand}. */
+    static String normalizeKind(String kind) {
+        return kind != null && KIND_DEFECT.equalsIgnoreCase(kind.trim()) ? KIND_DEFECT : KIND_DEMAND;
     }
 
     public record MatchingResult(
@@ -125,13 +149,19 @@ public class IssueMatchingAgent {
     /** Flag of a result whose call was refused by the notice's cost cap (no call was made for that attempt). */
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
-    /** Prompt resource under {@code prompts/} (v2: one primary card + alternates, grounds-first splitting). */
-    public static final String PROMPT_VERSION = "issue_matching_v2";
+    /**
+     * Prompt resource under {@code prompts/} (v3: visible-defect issues with {@code kind}, written date-boundary
+     * checks, partial must cite the missing DECISIVE fact; v2 added one primary card + alternates and
+     * grounds-first splitting).
+     */
+    public static final String PROMPT_VERSION = "issue_matching_v3";
 
     /** Issue flag: the primary card id is not in the active catalogue (the issue is downgraded to {@code none}). */
     public static final String FLAG_UNKNOWN_CARD_ID = "unknown_card_id";
     /** Issue flag: status full / partial returned without a primary card (prompt self-check 3). */
     public static final String FLAG_HEDGED = "hedged";
+    /** Issue flag (informational): a visible-defect ground (kind {@code defect}) that no catalogue card covers (status {@code none}). */
+    public static final String FLAG_DEFECT_WITHOUT_CARD = "defect_without_card";
     /** Result flag: the model's {@code issues} count differs from its {@code grounds} count (prompt self-check 1). */
     public static final String FLAG_ISSUE_COUNT_MISMATCH = "issue_count_mismatch";
     /** Most alternates kept per issue; any beyond are dropped. */
@@ -278,6 +308,7 @@ public class IssueMatchingAgent {
                 for (JsonNode issueNode : issuesArray) {
                     int issueNo = issueNode.path("issue_no").asInt(issues.size() + 1);
                     String status = issueNode.path("status").asText("none");
+                    String kind = normalizeKind(issueNode.path("kind").asText(null));   // v1 / v2 output: demand
                     String why = issueNode.path("why").asText("");
 
                     CardChoice choice = readCardChoice(issueNode);
@@ -332,7 +363,12 @@ public class IssueMatchingAgent {
                         issueFlags.add(FLAG_HEDGED);
                     }
 
-                    issues.add(new MatchedIssue(issueNo, status, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags));
+                    // Informational: a visible defect the catalogue has no card for (status none, after the unknown-card downgrade)
+                    if (KIND_DEFECT.equals(kind) && "none".equalsIgnoreCase(status)) {
+                        issueFlags.add(FLAG_DEFECT_WITHOUT_CARD);
+                    }
+
+                    issues.add(new MatchedIssue(issueNo, status, kind, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags));
                 }
             }
 

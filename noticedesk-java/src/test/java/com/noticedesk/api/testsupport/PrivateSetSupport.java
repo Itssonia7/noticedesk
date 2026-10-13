@@ -8,9 +8,15 @@ import org.springframework.core.io.Resource;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Shared pieces of the opt-in live runners for the private notice set kept outside the repository
@@ -68,6 +74,37 @@ public final class PrivateSetSupport {
         ClassPathResource onClasspath = new ClassPathResource("testbench/notices/" + n);
         if (onClasspath.exists()) return onClasspath;
         return privateNotice(privateSeedDir, n);
+    }
+
+    /** Optional file under {@code $PRIVATE_SEED_DIR} listing the defect card ids, one per line. */
+    public static final String DEFECT_CARDS_FILE = "defect_cards.txt";
+
+    /**
+     * The defect card ids from {@code $PRIVATE_SEED_DIR/defect_cards.txt} (one id per line, upper-cased, blank
+     * lines and {@code #} comments ignored), or {@code null} when the variable is blank or the file is absent /
+     * unreadable (the defect count is then skipped). Nothing from the file is logged.
+     */
+    public static Set<String> defectCardIds(String privateSeedDir) {
+        if (privateSeedDir == null || privateSeedDir.isBlank()) return null;
+        File f = new File(privateSeedDir, DEFECT_CARDS_FILE);
+        if (!f.isFile()) return null;
+        try {
+            return parseDefectCardIds(Files.readAllLines(f.toPath(), StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** The ids in a {@code defect_cards.txt} file's lines: trimmed, upper-cased; blank lines and {@code #} comments skipped. */
+    public static Set<String> parseDefectCardIds(List<String> lines) {
+        Set<String> ids = new TreeSet<>();
+        for (String line : lines) {
+            String s = line.trim();
+            int hash = s.indexOf('#');
+            if (hash >= 0) s = s.substring(0, hash).trim();
+            if (!s.isEmpty()) ids.add(s.toUpperCase(Locale.ROOT));
+        }
+        return ids;
     }
 
     /** Distinct card ids in {@code issue_cards} (any status) that start with {@link #DUMMY_CARD_PREFIX}. */

@@ -243,6 +243,95 @@ class IssueMatchingAgentTest {
         assertTrue(result.issues().get(0).flags().isEmpty());
     }
 
+    // ---------------------------------------------------------------- v3: issue kind and the defect_without_card flag
+
+    @Test
+    void v3Kind_isParsedPerIssue_andDefaultsToDemand() {
+        String json = """
+                {"notice": {"din": null},
+                 "grounds": [{"ground_no": 1, "kind": "demand", "label": "ITC mismatch", "paras": ["3"]},
+                             {"ground_no": 2, "kind": "defect", "label": "DIN missing", "paras": ["header"]},
+                             {"ground_no": 3, "label": "no kind given", "paras": ["4"]},
+                             {"ground_no": 4, "kind": "DEFECT ", "label": "unsigned order", "paras": ["header"]},
+                             {"ground_no": 5, "kind": "something else", "label": "unknown kind", "paras": ["5"]}],
+                 "issues": [
+                   {"issue_no": 1, "kind": "demand", "status": "full", "card_id": "NDK-006", "alternates": [], "why": "a", "notice_paras": ["3"]},
+                   {"issue_no": 2, "kind": "defect", "status": "full", "card_id": "NDK-141", "alternates": ["NDK-143"], "why": "b", "notice_paras": ["header"]},
+                   {"issue_no": 3, "status": "partial", "card_id": "NDK-007", "alternates": [], "why": "c", "notice_paras": ["4"]},
+                   {"issue_no": 4, "kind": "DEFECT ", "status": "partial", "card_id": "NDK-143", "alternates": [], "why": "d", "notice_paras": ["header"]},
+                   {"issue_no": 5, "kind": "something else", "status": "none", "card_id": null, "alternates": [], "why": "e", "notice_paras": ["5"]}],
+                 "para_map": {"3": [1], "4": [3], "5": [5]}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006", "NDK-007", "NDK-141", "NDK-143"));
+
+        assertTrue(result.flags().isEmpty(), result.flags().toString());
+        assertEquals(5, result.issues().size());
+        IssueMatchingAgent.MatchedIssue demand = result.issues().get(0);
+        assertEquals(IssueMatchingAgent.KIND_DEMAND, demand.kind());
+        assertFalse(demand.isDefect());
+        IssueMatchingAgent.MatchedIssue defect = result.issues().get(1);
+        assertEquals(IssueMatchingAgent.KIND_DEFECT, defect.kind());
+        assertTrue(defect.isDefect());
+        assertEquals("full", defect.status());
+        assertEquals(List.of("NDK-141"), defect.cardIds(), "cardIds holds ONLY the primary, for a defect too");
+        assertEquals(List.of("NDK-143"), defect.alternateCardIds());
+        assertEquals(List.of("header"), defect.noticeParas());
+        assertTrue(defect.flags().isEmpty(), "a defect with a card gets no flag");
+        assertEquals(IssueMatchingAgent.KIND_DEMAND, result.issues().get(2).kind(), "no kind (v1 / v2 output) = demand");
+        assertEquals(IssueMatchingAgent.KIND_DEFECT, result.issues().get(3).kind(), "kind is trimmed and case-insensitive");
+        assertTrue(result.issues().get(3).flags().isEmpty(), "a partial defect with a card gets no flag");
+        assertEquals(IssueMatchingAgent.KIND_DEMAND, result.issues().get(4).kind(), "an unknown kind is demand");
+        assertTrue(result.issues().get(4).flags().isEmpty(), "a demand issue with status none gets no defect flag");
+    }
+
+    @Test
+    void v3Defect_withoutCard_getsTheInformationalFlag_statusStaysNone() {
+        String json = """
+                {"notice": {},
+                 "grounds": [{"ground_no": 1, "kind": "defect", "label": "no hearing offered", "paras": ["6"]},
+                             {"ground_no": 2, "kind": "defect", "label": "DIN missing", "paras": ["header"]}],
+                 "issues": [
+                   {"issue_no": 1, "kind": "defect", "status": "none", "card_id": null, "alternates": [], "why": "no card", "notice_paras": ["6"]},
+                   {"issue_no": 2, "kind": "defect", "status": "full", "card_id": "NDK-999", "alternates": [], "why": "unknown card", "notice_paras": ["header"]}],
+                 "para_map": {"6": [1]}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-141"));
+
+        assertFalse(result.flags().contains("matching_failed"));
+        IssueMatchingAgent.MatchedIssue noCard = result.issues().get(0);
+        assertEquals("none", noCard.status());
+        assertTrue(noCard.isDefect());
+        assertTrue(noCard.cardIds().isEmpty());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_WITHOUT_CARD), noCard.flags());
+        assertEquals("defect_without_card", IssueMatchingAgent.FLAG_DEFECT_WITHOUT_CARD);
+
+        // an unknown primary on a defect: downgraded to none (unknown_card_id) and then also defect_without_card
+        IssueMatchingAgent.MatchedIssue unknown = result.issues().get(1);
+        assertEquals("none", unknown.status());
+        assertTrue(unknown.isDefect());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_UNKNOWN_CARD_ID, IssueMatchingAgent.FLAG_DEFECT_WITHOUT_CARD), unknown.flags());
+    }
+
+    @Test
+    void matchedIssue_kindIsNormalized_andOldConstructorsAreDemand() {
+        assertEquals("demand", IssueMatchingAgent.normalizeKind(null));
+        assertEquals("demand", IssueMatchingAgent.normalizeKind(""));
+        assertEquals("demand", IssueMatchingAgent.normalizeKind("demand"));
+        assertEquals("defect", IssueMatchingAgent.normalizeKind(" Defect "));
+        assertEquals("demand", IssueMatchingAgent.normalizeKind("procedural"));
+
+        IssueMatchingAgent.MatchedIssue v1 = new IssueMatchingAgent.MatchedIssue(1, "full", List.of("NDK-006"), "w", List.of(), java.util.Map.of(), List.of(), List.of());
+        assertEquals("demand", v1.kind());
+        IssueMatchingAgent.MatchedIssue v2 = new IssueMatchingAgent.MatchedIssue(1, "full", List.of("NDK-006"), List.of("NDK-007"), "w", List.of(), java.util.Map.of(), List.of(), List.of());
+        assertEquals("demand", v2.kind());
+        IssueMatchingAgent.MatchedIssue nullKind = new IssueMatchingAgent.MatchedIssue(1, "none", null, List.of(), null, "w", List.of(), java.util.Map.of(), List.of(), List.of());
+        assertEquals("demand", nullKind.kind());
+        assertTrue(nullKind.alternateCardIds().isEmpty());
+        IssueMatchingAgent.MatchedIssue defect = new IssueMatchingAgent.MatchedIssue(2, "full", "defect", List.of("NDK-141"), List.of(), "w", List.of(), java.util.Map.of(), List.of("header"), List.of());
+        assertTrue(defect.isDefect());
+        assertEquals("NDK-141", defect.primaryCardId());
+    }
+
     @Test
     void readCardChoice_bothShapes() throws Exception {
         var v2 = IssueMatchingAgent.readCardChoice(objectMapper.readTree("{\"card_id\": \" NDK-001 \", \"alternates\": [\"NDK-002\", \"\", null, 3]}"));

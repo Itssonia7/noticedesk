@@ -122,6 +122,19 @@ class MatchingEvalRunnerTest {
         boolean runPrivate = !"dummy".equals(sets);
         System.out.println("MATCHING_EVAL_SETS=" + sets);
 
+        // MATCHING_EVAL_SHOW_WHY=true: the model's "why" and not_this_if_checked lines are printed per issue for the
+        // private set too (the private notices are synthetic: fictional party, placeholder GSTIN). The notice text
+        // is never printed, and the results JSON keeps metrics only either way.
+        showWhy = "true".equalsIgnoreCase(envOrProperty("MATCHING_EVAL_SHOW_WHY"));
+        System.out.println("MATCHING_EVAL_SHOW_WHY=" + showWhy
+                + (showWhy ? " (per-issue reasons printed for every set, private included; notice text still withheld)" : ""));
+
+        // $PRIVATE_SEED_DIR/defect_cards.txt (optional, one card id per line): the expected issues whose card is listed
+        // count as expected defect issues; without the file the expected-defect count is skipped
+        defectCardIds = PrivateSetSupport.defectCardIds(privateSeedDir);
+        System.out.println(defectCardIds == null ? "Defect card list: none (defect_cards.txt absent; expected-defect count skipped)"
+                : "Defect card list: " + defectCardIds.size() + " card id(s) from defect_cards.txt");
+
         List<Resource> dummyNotices = new ArrayList<>();
         if (runDummy) {
             PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
@@ -217,6 +230,10 @@ class MatchingEvalRunnerTest {
     private ApiUsageLogService pricing;
     /** Set when a billing / auth error or the consecutive-failure limit stopped the run. */
     private String abortReason;
+    /** {@code MATCHING_EVAL_SHOW_WHY}: print the model's reasons per issue for the private set too. */
+    private boolean showWhy;
+    /** Card ids of defect cards ({@code $PRIVATE_SEED_DIR/defect_cards.txt}), or null when the file is absent. */
+    private Set<String> defectCardIds;
 
     private static String envOrProperty(String name) {
         String v = System.getenv(name);
@@ -258,6 +275,15 @@ class MatchingEvalRunnerTest {
      * and card ids are reported; the model's explanation is withheld.
      */
     static CardScore scoreCards(String noticeId, JsonNode answerKey, List<MatchedIssue> returnedIssues, boolean isPrivate) {
+        return scoreCards(noticeId, answerKey, returnedIssues, isPrivate, false);
+    }
+
+    /**
+     * As {@link #scoreCards(String, JsonNode, List, boolean)}; with {@code showWhy} the model's "why" and its
+     * not_this_if_checked lines are reported for a private notice too ({@code MATCHING_EVAL_SHOW_WHY=true}).
+     */
+    static CardScore scoreCards(String noticeId, JsonNode answerKey, List<MatchedIssue> returnedIssues, boolean isPrivate,
+                                boolean showWhy) {
         List<MatchedIssue> returned = returnedIssues == null ? List.of() : returnedIssues;
         JsonNode expectedNode = answerKey.path("issues");
         if (!expectedNode.isArray()) {
@@ -290,6 +316,7 @@ class MatchingEvalRunnerTest {
 
         String gotAll = returned.isEmpty() ? "no issue returned"
                 : returned.stream().map(MatchingEvalRunnerTest::gotColumn).collect(java.util.stream.Collectors.joining(", "));
+        boolean withhold = isPrivate && !showWhy;
         String withheld = "(withheld: private notice)";
         List<WrongMatchInfo> wrong = new ArrayList<>();
         for (int e : unresolved) {
@@ -321,16 +348,16 @@ class MatchingEvalRunnerTest {
             String why;
             if (idx >= 0) {
                 used[idx] = true;
-                why = isPrivate ? withheld : String.valueOf(returned.get(idx).why());
+                why = withhold ? withheld : reasonOf(returned.get(idx), showWhy);
             } else {
-                why = returned.isEmpty() ? "No issue returned" : isPrivate ? withheld : String.valueOf(returned.get(0).why());
+                why = returned.isEmpty() ? "No issue returned" : withhold ? withheld : reasonOf(returned.get(0), showWhy);
             }
             wrong.add(new WrongMatchInfo(noticeId, expStatus + " " + cardList(expCards) + " [" + kind + "]", gotAll, why));
         }
         int extra = Math.max(0, returned.size() - expectedCount);
         if (extra > 0) {
             wrong.add(new WrongMatchInfo(noticeId, expectedCount + " issue(s) [extra returned: " + extra + "]", gotAll,
-                    isPrivate ? withheld : "More issues returned than the answer key expects"));
+                    withhold ? withheld : "More issues returned than the answer key expects"));
         }
         return new CardScore(expectedCount, correct, primaryRightStatusWrong, inAlternates, wrongCard, missed, extra, wrong);
     }
@@ -363,11 +390,67 @@ class MatchingEvalRunnerTest {
         return -1;
     }
 
-    /** "Got" column entry of one returned issue: status, primary card and (when any) the alternates. */
+    /** "Got" column entry of one returned issue: kind, status, primary card and (when any) the alternates. */
     static String gotColumn(MatchedIssue i) {
-        String s = i.status() + cardList(i.cardIds());
+        String s = i.kind() + ":" + i.status() + cardList(i.cardIds());
         if (i.alternateCardIds() != null && !i.alternateCardIds().isEmpty()) s += " alt" + cardList(i.alternateCardIds());
         return s;
+    }
+
+    /**
+     * The model's reason for one issue as reported in WRONG MATCH DETAILS: the "why" text, plus (with
+     * {@code showWhy}) its not_this_if_checked lines.
+     */
+    static String reasonOf(MatchedIssue i, boolean showWhy) {
+        String why = String.valueOf(i.why());
+        if (!showWhy) return why;
+        return "issue " + i.issueNo() + " why: " + why + " | not_this_if: " + notThisIfLine(i);
+    }
+
+    private static String notThisIfLine(MatchedIssue i) {
+        return i.notThisIfChecked() == null || i.notThisIfChecked().isEmpty() ? "(none)" : String.join(" ; ", i.notThisIfChecked());
+    }
+
+    /**
+     * The per-issue reason lines printed to the console when {@code MATCHING_EVAL_SHOW_WHY=true}: one "why" line
+     * and one not_this_if line per issue, each prefixed with the notice id and issue number. Never the notice text.
+     */
+    static List<String> reasonLines(String noticeId, List<MatchedIssue> issues) {
+        List<String> out = new ArrayList<>();
+        if (issues == null) return out;
+        for (MatchedIssue i : issues) {
+            String prefix = "  " + noticeId + " issue " + i.issueNo() + " [" + gotColumn(i) + "]";
+            out.add(prefix + " why: " + String.valueOf(i.why()).replace('\n', ' '));
+            out.add(prefix + " not_this_if: " + notThisIfLine(i).replace('\n', ' '));
+        }
+        return out;
+    }
+
+    /** Returned issues of kind {@code defect}. */
+    static int defectIssuesReturned(List<MatchedIssue> issues) {
+        if (issues == null) return 0;
+        int n = 0;
+        for (MatchedIssue i : issues) if (i.isDefect()) n++;
+        return n;
+    }
+
+    /**
+     * Expected (de-duplicated) issues of the answer key whose card is one of {@code defectCardIds}; -1 when there
+     * is no defect card list (the count is skipped).
+     */
+    static int defectIssuesExpected(JsonNode answerKey, Set<String> defectCardIds) {
+        if (defectCardIds == null) return -1;
+        JsonNode expectedNode = answerKey.path("issues");
+        if (!expectedNode.isArray()) return 0;
+        int n = 0;
+        for (JsonNode exp : dedupeExpected(expectedNode)) {
+            boolean defect = false;
+            for (String id : cardIds(exp.path("card_ids"))) {
+                if (defectCardIds.contains(id.toUpperCase(Locale.ROOT))) defect = true;
+            }
+            if (defect) n++;
+        }
+        return n;
     }
 
     private static List<String> cardIds(JsonNode node) {
@@ -438,6 +521,10 @@ class MatchingEvalRunnerTest {
         int cardIssuesExtra = 0;
         int noticesAllIssuesCorrect = 0;
 
+        // v3 defect issues: returned (kind = defect) and expected (card in defect_cards.txt; skipped without the file)
+        int defectReturned = 0;
+        int defectExpected = 0;
+
         BigDecimal startInr = spentInr[0];      // the INR cap applies across both sets
         BigDecimal totalCostInr = startInr;
         final BigDecimal INR_CAP = guard != null ? guard.maxRunCostInr() : LiveRunGuard.DEFAULT_MAX_RUN_COST_INR;
@@ -487,8 +574,11 @@ class MatchingEvalRunnerTest {
             totalCostInr = totalCostInr.add(noticeInr);
             String whyStr = result.issues().stream().map(com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue::why).collect(java.util.stream.Collectors.joining(" ")).toLowerCase();
             // same inputs as the live pipeline: compare this hash with its matcher run when results differ
-            System.out.printf("  catalogue_hash=%s status=%s flags=%s cost=%.4f INR%n", result.catalogueHash(),
+            System.out.printf("  catalogue_hash=%s issues(kind:status[primary] alt[...])=%s flags=%s cost=%.4f INR%n", result.catalogueHash(),
                     result.issues().stream().map(MatchingEvalRunnerTest::gotColumn).toList(), result.flags(), noticeInr.doubleValue());
+            if (showWhy) {
+                for (String line : reasonLines(noticeId, result.issues())) System.out.println(line);
+            }
 
             if (result.flags().contains(IssueMatchingAgent.FLAG_COST_CAP)) {
                 totalNotices--;
@@ -545,7 +635,9 @@ class MatchingEvalRunnerTest {
             }
 
             // Card-level accuracy: status AND the PRIMARY card per de-duplicated expected issue
-            CardScore cards = scoreCards(noticeId, answerKey, result.issues(), isPrivate);
+            CardScore cards = scoreCards(noticeId, answerKey, result.issues(), isPrivate, showWhy);
+            defectReturned += defectIssuesReturned(result.issues());
+            if (defectCardIds != null) defectExpected += defectIssuesExpected(answerKey, defectCardIds);
             cardIssuesExpected += cards.expected();
             cardIssuesCorrect += cards.correct();
             cardPrimaryRightStatusWrong += cards.primaryRightStatusWrong();
@@ -587,6 +679,8 @@ class MatchingEvalRunnerTest {
             evalItem.put("issues_missed", cards.missed());
             evalItem.put("issues_extra", cards.extra());
             evalItem.put("all_issues_correct", cards.allCorrect());
+            evalItem.put("defect_issues_returned", defectIssuesReturned(result.issues()));
+            if (defectCardIds != null) evalItem.put("defect_issues_expected", defectIssuesExpected(answerKey, defectCardIds));
             evalItem.set("result_flags", objectMapper.valueToTree(result.flags()));
             noticeEvalResults.add(evalItem);
         }
@@ -618,6 +712,8 @@ class MatchingEvalRunnerTest {
                 cardIssuesExpected, cardIssuesCorrect, RunCostLedger.pct(cardIssuesCorrect, cardIssuesExpected, successfulCalls),
                 cardPrimaryRightStatusWrong, cardRightInAlternates, cardIssuesWrong, cardIssuesMissed, cardIssuesExtra);
         System.out.printf("Notices with all issues correct (status+primary card, no extra): %d of %d successful%n", noticesAllIssuesCorrect, successfulCalls);
+        System.out.println("Defect issues (kind=defect): returned=" + defectReturned + " | expected="
+                + (defectCardIds == null ? "n/a (no defect_cards.txt)" : String.valueOf(defectExpected)));
 
         if (successfulCalls == 0) {
             System.out.println("\nNo successful calls: accuracy metrics are N/A.");
@@ -656,6 +752,12 @@ class MatchingEvalRunnerTest {
         summaryReport.put("issues_extra", cardIssuesExtra);
         summaryReport.put("issue_card_accuracy_pct", RunCostLedger.pctValue(cardIssuesCorrect, cardIssuesExpected, successfulCalls));
         summaryReport.put("notices_all_issues_correct", noticesAllIssuesCorrect);
+        summaryReport.put("defect_issues_returned", defectReturned);
+        if (defectCardIds != null) {
+            summaryReport.put("defect_issues_expected", defectExpected);
+        } else {
+            summaryReport.putNull("defect_issues_expected");   // no defect_cards.txt: count skipped
+        }
         summaryReport.set("notices", objectMapper.valueToTree(noticeEvalResults));
 
         spentInr[0] = totalCostInr;

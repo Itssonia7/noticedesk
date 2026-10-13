@@ -42,6 +42,16 @@ SPRING_PROFILES_ACTIVE=private-seed mvn -f noticedesk-java/pom.xml spring-boot:r
     the run before any call. Unset = every `*.json` in the folder.
   - `LIVE_SMOKE=true` still runs one dummy notice only; with `MATCHING_EVAL_SETS=private` it runs the
     first private notice instead.
+  - `MATCHING_EVAL_SHOW_WHY` = `false` (default) | `true`. With `true` the model's per-issue `why` text
+    and its `not_this_if_checked` lines are printed for the private set too, in the console (one `why`
+    line and one `not_this_if` line per issue, prefixed with the notice id and issue number) and in the
+    WRONG MATCH DETAILS. Set it only when the private notices are synthetic (fictional party, placeholder
+    GSTIN): the reasons quote the notice. The notice text itself is still never printed, and the results
+    JSON keeps metrics only either way.
+  - `$PRIVATE_SEED_DIR/defect_cards.txt` (optional, one card id per line, `#` comments allowed): the
+    procedural / visible-defect cards. With the file present the runner reports per set "Defect issues:
+    returned=N | expected=M" (returned = issues of kind `defect`; expected = answer-key issues whose card
+    is listed). Without the file the expected count is skipped (`n/a`).
 - `V7LivePipelineRunnerTest`: each `V7_LIVE_NOTICES` name is looked up on the classpath
   (`testbench/notices/<name>`) first, then in `$PRIVATE_SEED_DIR/notices/<name>`; an absolute path is
   also accepted. A name found nowhere refuses the run before any call.

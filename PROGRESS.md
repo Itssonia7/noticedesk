@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 13-10-2026 (matching prompt v2: one primary card + alternates)
+Last updated: 13-10-2026 (matching prompt v3: visible-defect issues, written date-boundary checks)
 
 ---
 
@@ -280,9 +280,56 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   card only in alternates, wrong, missed; extra counts against the de-duplicated expected count. The "Got"
   column of WRONG MATCH DETAILS shows the alternates (`full[NDK-006] alt[NDK-007]`).
 
+## (b11) Matching prompt v3: visible-defect issues, written date-boundary checks (13-10-2026)
+
+- Live finding on 40 private notices (269 cards, prompt v2): (1) the matcher never raised procedural /
+  visible defects as issues because v2 defined an issue as a "ground of demand" (a corrigendum with no DIN
+  -> none; a Section 74 SCN dated before the GSTR-9 due date -> none; a Section 73 SCN after the Section
+  73(10) limitation -> partial), although the catalogue has about 40 cards for such defects (missing
+  DIN/RFN, unsigned SCN, premature Section 74 SCN, time-barred Section 73 SCN, no DRC-01A, no hearing,
+  wrong officer, garnishee while the SCN is pending, Section 83 attachment, refund rejected without
+  RFD-08); (2) on two clear date-boundary traps the model still picked the sibling card (order served
+  21.07.2023 with the return in 26 days -> the on/after-01.10.2023 card; tax paid before the SCN -> the
+  "paid after SCN" card); (3) "partial" was overused and the eval withheld the model's reasons for private
+  notices, so the cause could not be diagnosed.
+- `prompts/issue_matching_v3.md` (v1 and v2 kept; `IssueMatchingAgent.PROMPT_VERSION` = `issue_matching_v3`):
+  - Every ground and issue carries `kind`: `demand` (a ground of demand or action, as before) or `defect`
+    (a procedural, jurisdictional, limitation, service, signature, DIN, hearing or form defect visible in
+    the document even though the department does not state it). A new Step 1b scans the document against
+    a checklist: DIN/RFN missing or placeholder on a central-tax document dated on/after 08.11.2019;
+    unsigned / not digitally authenticated; SCN date vs the Section 73(10)/74(10)/74A limitation for the
+    FY (computed, with the extended Section 73 deadlines in the prompt); Section 74 SCN before the GSTR-9
+    due date; no DRC-01A in the Rule 142(1A) mandatory window (09.10.2019 to 14.10.2020); no personal
+    hearing where an adverse order is proposed; reply time below the statutory minimum; officer's rank /
+    jurisdiction vs the power exercised; recovery / attachment / garnishee without an adjudicated demand;
+    order silent on the reply; refund rejection without RFD-08/RFD-09/hearing. A defect ground maps to a
+    card exactly like a demand ground; its paras are `"header"` or the paragraphs that reveal it; a
+    placeholder in the DIN field is a missing DIN; a defect is never invented.
+  - Date-boundary discipline replaces the v2 period-regime section: for every candidate card with a date,
+    FY or before/after boundary the model writes in `why` the line
+    `<fact>: <notice value> vs <card boundary> -> satisfied|not satisfied`; a card with a "not satisfied"
+    line can never be the primary. Two worked examples: order-service date vs 01.10.2023 (Section 62(2)
+    30-day vs 60-day cards) and tax paid before the SCN vs within 30 days after it (Section 73(5)/(6) vs 73(8)).
+  - Status discipline: `partial` must quote the card's DECISIVE text for the absent or contradicted fact;
+    all DECISIVE facts present = `full` even when amounts, DIN, hearing dates or annexures are missing and
+    even when alternates exist; the stage is read from the form name / heading and counts as a DECISIVE fact.
+  - `para_map`: header-only defect grounds need no entry; the demand paragraphs map to all demand issues
+    as before. The JSON example shows one demand ground + one missing-DIN defect ground with the written
+    date lines; the self-check list covers the kind, the boundary lines and the partial rule.
+- `IssueMatchingAgent`: `MatchedIssue` gains the field `kind` (`demand` default for v1/v2 output, `defect`
+  when the model says so; `isDefect()`); `cardIds` still holds only the primary; no DB change (the
+  informational issue flag `defect_without_card` is set for a defect ground with status `none` and is stored
+  with the other flags). Downstream (template fill, assembly, writers) is untouched: kind is additive.
+- `MatchingEvalRunnerTest`: `MATCHING_EVAL_SHOW_WHY=true` prints the per-issue `why` and
+  `not_this_if_checked` lines for the private set too (console, one line each per issue with notice id and
+  issue number, and WRONG MATCH DETAILS); the notice text and the results JSON stay as before. The
+  per-notice issue line now shows the kind (`demand:full[NDK-006] alt[NDK-007]`, `defect:none[]`). Per set:
+  "Defect issues: returned=N | expected=M", the expected count read from the optional
+  `$PRIVATE_SEED_DIR/defect_cards.txt` (one card id per line; absent = skipped). See `docs/PRIVATE_DATA.md`.
+
 ## (c) Verification
 
-- Offline unit suite (`mvn clean test`): **291 tests, 0 failures, 0 errors** on 13-10-2026 (no live API
+- Offline unit suite (`mvn test`): **315 tests, 0 failures, 0 errors** on 13-10-2026 after prompt v3 (no live API
   calls; all models and IndianKanoon mocked or served from local fixtures), plus the Spring context test
   `NoticedeskApiApplicationTests`, which needs the local Postgres (pgvector) and was not run in that
   container. A plain `mvn test` no longer modifies `output/`. V23 to V28 applied on Postgres 16.
