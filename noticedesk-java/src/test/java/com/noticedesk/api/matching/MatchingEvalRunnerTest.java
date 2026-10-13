@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.noticedesk.api.agent.IssueMatchingAgent;
+import com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
@@ -12,6 +13,7 @@ import com.noticedesk.api.service.llm.LlmFactory;
 import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.testsupport.LiveRunGuard;
+import com.noticedesk.api.testsupport.PrivateSetSupport;
 import com.noticedesk.api.testsupport.RunCostLedger;
 import com.noticedesk.api.testsupport.TestAppProperties;
 import org.junit.jupiter.api.Test;
@@ -32,7 +34,7 @@ class MatchingEvalRunnerTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    private record WrongMatchInfo(String noticeId, String expected, String got, String why) {}
+    record WrongMatchInfo(String noticeId, String expected, String got, String why) {}
 
     @Test
     void runMatchingEvaluationBenchmark() throws Exception {
@@ -101,35 +103,82 @@ class MatchingEvalRunnerTest {
         this.pricing = usageLogService;
         IssueMatchingAgent agent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, null, objectMapper);
 
-        // Dummy set: the committed testbench (fake data). Private set: $PRIVATE_SEED_DIR/notices/*.json
-        // (real data kept outside the repo). They are evaluated and reported separately.
-        PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
-        Map<String, Resource> uniqueResources = new TreeMap<>();
-        for (Resource res : resolver.getResources("classpath*:testbench/notices/*.json")) {
-            uniqueResources.putIfAbsent(res.getFilename(), res);
+        // The private catalogue (PRIVATE_SEED_DIR set) must never be evaluated next to the dummy cards
+        String privateSeedDir = envOrProperty("PRIVATE_SEED_DIR");
+        String dummyCardRefusal = PrivateSetSupport.dummyCardRefusal(jdbcTemplate, privateSeedDir);
+        if (dummyCardRefusal != null) {
+            fail(dummyCardRefusal);
         }
-        List<Resource> dummyNotices = new ArrayList<>(uniqueResources.values());
-        if (guard.smoke() && !dummyNotices.isEmpty()) {
-            dummyNotices = List.of(dummyNotices.get(0));
-            System.out.println("LIVE_SMOKE=true: only " + dummyNotices.get(0).getFilename() + " is run; private set skipped");
+        System.out.println(PrivateSetSupport.catalogueLine(catalogueService));
+
+        // MATCHING_EVAL_SETS: both (default) | dummy | private. Dummy set: the committed testbench (fake data).
+        // Private set: $PRIVATE_SEED_DIR/notices/*.json (real data kept outside the repo), or only the files
+        // named in MATCHING_EVAL_NOTICES. They are evaluated and reported separately.
+        String sets = Optional.ofNullable(envOrProperty("MATCHING_EVAL_SETS")).orElse("both").trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("both", "dummy", "private").contains(sets)) {
+            fail("REFUSED: MATCHING_EVAL_SETS must be both, dummy or private (got '" + sets + "')");
+        }
+        boolean runDummy = !"private".equals(sets);
+        boolean runPrivate = !"dummy".equals(sets);
+        System.out.println("MATCHING_EVAL_SETS=" + sets);
+
+        List<Resource> dummyNotices = new ArrayList<>();
+        if (runDummy) {
+            PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
+            Map<String, Resource> uniqueResources = new TreeMap<>();
+            for (Resource res : resolver.getResources("classpath*:testbench/notices/*.json")) {
+                uniqueResources.putIfAbsent(res.getFilename(), res);
+            }
+            dummyNotices.addAll(uniqueResources.values());
         }
 
         List<Resource> privateNotices = new ArrayList<>();
-        String privateSeedDir = System.getenv("PRIVATE_SEED_DIR");
-        if (privateSeedDir != null && !privateSeedDir.isBlank() && !guard.smoke()) {
-            File dir = new File(privateSeedDir, "notices");
-            File[] files = dir.listFiles((d, name) -> name.endsWith(".json"));
-            if (files != null) {
-                Arrays.sort(files);
-                for (File f : files) privateNotices.add(new org.springframework.core.io.FileSystemResource(f));
+        String noticesEnv = envOrProperty("MATCHING_EVAL_NOTICES");
+        if (runPrivate) {
+            if (privateSeedDir == null || privateSeedDir.isBlank()) {
+                if ("private".equals(sets)) {
+                    fail("REFUSED: MATCHING_EVAL_SETS=private but PRIVATE_SEED_DIR is not set");
+                }
+                if (noticesEnv != null && !noticesEnv.isBlank()) {
+                    fail("REFUSED: MATCHING_EVAL_NOTICES is set but PRIVATE_SEED_DIR is not");
+                }
+                System.out.println("Private notice set skipped (PRIVATE_SEED_DIR not set)");
+            } else if (noticesEnv != null && !noticesEnv.isBlank()) {
+                for (String name : noticesEnv.split(",")) {
+                    String n = name.trim();
+                    if (n.isEmpty()) continue;
+                    Resource res = PrivateSetSupport.privateNotice(privateSeedDir, n);
+                    if (res == null) {
+                        fail("REFUSED: private notice file not found: " + n);
+                    }
+                    privateNotices.add(res);
+                }
+                System.out.println("Private notice set (MATCHING_EVAL_NOTICES): " + privateNotices.size() + " file(s)");
+            } else {
+                privateNotices.addAll(PrivateSetSupport.privateNotices(privateSeedDir));
+                System.out.println("Private notice set: " + privateNotices.size() + " file(s)");
             }
-            System.out.println("Private notice set: " + privateNotices.size() + " file(s)");
-        } else {
-            System.out.println("Private notice set skipped (PRIVATE_SEED_DIR not set)");
+        }
+
+        if (guard.smoke()) {
+            if ("private".equals(sets)) {
+                // smoke on the private set: its first notice only (file name printed: it carries no notice content)
+                if (!privateNotices.isEmpty()) {
+                    privateNotices = List.of(privateNotices.get(0));
+                    System.out.println("LIVE_SMOKE=true: only private notice " + privateNotices.get(0).getFilename() + " is run");
+                }
+            } else {
+                if (!dummyNotices.isEmpty()) {
+                    dummyNotices = List.of(dummyNotices.get(0));
+                }
+                privateNotices = List.of();
+                System.out.println("LIVE_SMOKE=true: only " + (dummyNotices.isEmpty() ? "(no dummy notice)" : dummyNotices.get(0).getFilename())
+                        + " is run; private set skipped");
+            }
         }
 
         BigDecimal[] spentInr = {BigDecimal.ZERO};
-        ObjectNode dummySummary = evaluateSet("dummy", dummyNotices, false, agent, ledger, spentInr);
+        ObjectNode dummySummary = runDummy ? evaluateSet("dummy", dummyNotices, false, agent, ledger, spentInr) : null;
         ObjectNode privateSummary = privateNotices.isEmpty() || abortReason != null ? null
                 : evaluateSet("private", privateNotices, true, agent, ledger, spentInr);
         System.out.printf("Total billed calls: %d (failed: %d, unpriced: %d) | Total cost: %.4f INR (run cap INR %s, commit %s%s)%n",
@@ -148,7 +197,10 @@ class MatchingEvalRunnerTest {
         ObjectNode summaryReport = objectMapper.createObjectNode();
         summaryReport.put("timestamp", timestamp);
         summaryReport.put("model", matchingModel);
-        summaryReport.set("dummy", dummySummary);
+        summaryReport.put("sets", sets);
+        if (dummySummary != null) {
+            summaryReport.set("dummy", dummySummary);
+        }
         if (privateSummary != null) {
             summaryReport.set("private", privateSummary);   // notice IDs + metrics only
         }
@@ -165,6 +217,116 @@ class MatchingEvalRunnerTest {
     private ApiUsageLogService pricing;
     /** Set when a billing / auth error or the consecutive-failure limit stopped the run. */
     private String abortReason;
+
+    private static String envOrProperty(String name) {
+        String v = System.getenv(name);
+        if (v == null || v.isBlank()) v = System.getProperty(name);
+        return v;
+    }
+
+    /** Card-level outcome of one notice against its answer key (see {@link #scoreCards}). */
+    record CardScore(int expected, int correct, int statusRightWrongCard, int missed, int extra, List<WrongMatchInfo> wrong) {
+        boolean allCorrect() {
+            return correct == expected && extra == 0;
+        }
+    }
+
+    /**
+     * Card-level accuracy. Each expected issue is paired with at most one returned issue: first the returned
+     * issues with the same status whose card_ids contain any of the expected card ids (the expected list holds
+     * alternatives; status "none" needs no card), then, for what is left, any unused returned issue with the same
+     * status ("status right, wrong card"). The rest are missed. Returned issues beyond
+     * {@code answer_key.expected_issues} (else the size of the issues list) are extra. For a private notice
+     * only statuses and card ids are reported; the model's explanation is withheld.
+     */
+    static CardScore scoreCards(String noticeId, JsonNode answerKey, List<MatchedIssue> returnedIssues, boolean isPrivate) {
+        List<MatchedIssue> returned = returnedIssues == null ? List.of() : returnedIssues;
+        JsonNode expectedIssues = answerKey.path("issues");
+        if (!expectedIssues.isArray()) {
+            return new CardScore(0, 0, 0, 0, 0, List.of());
+        }
+        int expectedCount = answerKey.has("expected_issues") ? answerKey.path("expected_issues").asInt() : expectedIssues.size();
+        boolean[] used = new boolean[returned.size()];
+        int correct = 0, wrongCard = 0, missed = 0;
+        List<Integer> unresolved = new ArrayList<>();
+
+        for (int e = 0; e < expectedIssues.size(); e++) {
+            JsonNode exp = expectedIssues.get(e);
+            String expStatus = exp.path("status").asText("").trim().toLowerCase(Locale.ROOT);
+            List<String> expCards = cardIds(exp.path("card_ids"));
+            int idx = -1;
+            for (int r = 0; r < returned.size() && idx < 0; r++) {
+                if (used[r]) continue;
+                MatchedIssue got = returned.get(r);
+                if (!expStatus.equalsIgnoreCase(got.status())) continue;
+                if ("none".equals(expStatus) || overlaps(expCards, got.cardIds())) idx = r;
+            }
+            if (idx >= 0) {
+                used[idx] = true;
+                correct++;
+            } else {
+                unresolved.add(e);
+            }
+        }
+
+        String gotAll = returned.isEmpty() ? "no issue returned"
+                : returned.stream().map(i -> i.status() + cardList(i.cardIds())).collect(java.util.stream.Collectors.joining(", "));
+        List<WrongMatchInfo> wrong = new ArrayList<>();
+        for (int e : unresolved) {
+            JsonNode exp = expectedIssues.get(e);
+            String expStatus = exp.path("status").asText("").trim().toLowerCase(Locale.ROOT);
+            List<String> expCards = cardIds(exp.path("card_ids"));
+            int idx = -1;
+            for (int r = 0; r < returned.size() && idx < 0; r++) {
+                if (!used[r] && expStatus.equalsIgnoreCase(returned.get(r).status())) idx = r;
+            }
+            String kind;
+            String why;
+            if (idx >= 0) {
+                used[idx] = true;
+                wrongCard++;
+                kind = "status right, wrong card";
+                why = isPrivate ? "(withheld: private notice)" : String.valueOf(returned.get(idx).why());
+            } else {
+                missed++;
+                kind = "missed";
+                why = returned.isEmpty() ? "No issue returned"
+                        : isPrivate ? "(withheld: private notice)" : String.valueOf(returned.get(0).why());
+            }
+            wrong.add(new WrongMatchInfo(noticeId, expStatus + " " + cardList(expCards) + " [" + kind + "]", gotAll, why));
+        }
+        int extra = Math.max(0, returned.size() - expectedCount);
+        if (extra > 0) {
+            wrong.add(new WrongMatchInfo(noticeId, expectedCount + " issue(s) [extra returned: " + extra + "]", gotAll,
+                    isPrivate ? "(withheld: private notice)" : "More issues returned than the answer key expects"));
+        }
+        return new CardScore(expectedIssues.size(), correct, wrongCard, missed, extra, wrong);
+    }
+
+    private static List<String> cardIds(JsonNode node) {
+        List<String> out = new ArrayList<>();
+        if (node.isArray()) {
+            for (JsonNode n : node) out.add(n.asText().trim());
+        } else if (node.isTextual()) {
+            out.add(node.asText().trim());
+        }
+        return out;
+    }
+
+    private static boolean overlaps(List<String> expected, List<String> got) {
+        if (got == null) return false;
+        for (String g : got) {
+            if (g == null) continue;
+            for (String e : expected) {
+                if (e.equalsIgnoreCase(g.trim())) return true;
+            }
+        }
+        return false;
+    }
+
+    private static String cardList(List<String> ids) {
+        return ids == null ? "[]" : ids.toString();
+    }
 
     /**
      * Evaluates one notice set. The returned JSON holds only notice IDs and metrics; for the private
@@ -193,6 +355,14 @@ class MatchingEvalRunnerTest {
         int totalCalls = 0;
         int cacheHitCalls = 0;
         int totalCacheReadTokensCall2Plus = 0;
+
+        // card-level accuracy (status + card id per expected issue)
+        int cardIssuesExpected = 0;
+        int cardIssuesCorrect = 0;
+        int cardStatusRightWrongCard = 0;
+        int cardIssuesMissed = 0;
+        int cardIssuesExtra = 0;
+        int noticesAllIssuesCorrect = 0;
 
         BigDecimal startInr = spentInr[0];      // the INR cap applies across both sets
         BigDecimal totalCostInr = startInr;
@@ -269,7 +439,7 @@ class MatchingEvalRunnerTest {
                 cacheHitCalls++;
             }
 
-            // Metrics evaluation against answer_key
+            // Metrics evaluation against answer_key (status-level, as before)
             JsonNode expectedIssues = answerKey.path("issues");
             if (expectedIssues.isArray()) {
                 if (expectedIssues.size() > 1) {
@@ -278,28 +448,18 @@ class MatchingEvalRunnerTest {
 
                 for (JsonNode exp : expectedIssues) {
                     String expStatus = exp.path("status").asText();
-                    String expCardId = exp.path("card_ids").toString();
 
                     if ("full".equalsIgnoreCase(expStatus)) {
                         expectedFullMatchCount++;
                         boolean matchedFull = result.issues().stream().anyMatch(i -> "full".equalsIgnoreCase(i.status()));
                         if (!matchedFull) {
                             wrongFullMatchCount++;
-                            String gotStatus = result.issues().isEmpty() ? "none" : result.issues().get(0).status();
-                            String gotCardId = result.issues().isEmpty() ? "none" : result.issues().get(0).cardIds().toString();
-                            String why = result.issues().isEmpty() ? "No issue returned" : (isPrivate ? "(withheld: private notice)" : result.issues().get(0).why());
-                            wrongMatches.add(new WrongMatchInfo(noticeId, "full (" + expCardId + ")", gotStatus + " (" + gotCardId + ")", why));
                         }
                     } else {
                         expectedPartialOrNoneCount++;
                         boolean matchedNonFull = result.issues().stream().anyMatch(i -> expStatus.equalsIgnoreCase(i.status()));
                         if (matchedNonFull) {
                             correctPartialOrNoneCount++;
-                        } else {
-                            String gotStatus = result.issues().isEmpty() ? "none" : result.issues().get(0).status();
-                            String gotCardId = result.issues().isEmpty() ? "none" : result.issues().get(0).cardIds().toString();
-                            String why = result.issues().isEmpty() ? "No issue returned" : (isPrivate ? "(withheld: private notice)" : result.issues().get(0).why());
-                            wrongMatches.add(new WrongMatchInfo(noticeId, expStatus + " (" + expCardId + ")", gotStatus + " (" + gotCardId + ")", why));
                         }
                     }
 
@@ -309,6 +469,16 @@ class MatchingEvalRunnerTest {
                     }
                 }
             }
+
+            // Card-level accuracy: status AND one of the expected card ids per expected issue
+            CardScore cards = scoreCards(noticeId, answerKey, result.issues(), isPrivate);
+            cardIssuesExpected += cards.expected();
+            cardIssuesCorrect += cards.correct();
+            cardStatusRightWrongCard += cards.statusRightWrongCard();
+            cardIssuesMissed += cards.missed();
+            cardIssuesExtra += cards.extra();
+            if (cards.allCorrect()) noticesAllIssuesCorrect++;
+            wrongMatches.addAll(cards.wrong());
 
             // Issue splitting (prompt rule 4): one issue per distinct ground; consequential interest / penalty not split
             if (answerKey.has("expected_issues")) {
@@ -333,6 +503,12 @@ class MatchingEvalRunnerTest {
             evalItem.put("cache_read_tokens", result.cacheReadTokens());
             evalItem.put("cache_write_tokens", result.cacheWriteTokens());
             evalItem.put("cost_inr", noticeInr.doubleValue());
+            evalItem.put("issues_expected", cards.expected());
+            evalItem.put("issues_correct", cards.correct());
+            evalItem.put("issues_status_right_wrong_card", cards.statusRightWrongCard());
+            evalItem.put("issues_missed", cards.missed());
+            evalItem.put("issues_extra", cards.extra());
+            evalItem.put("all_issues_correct", cards.allCorrect());
             noticeEvalResults.add(evalItem);
         }
 
@@ -358,6 +534,10 @@ class MatchingEvalRunnerTest {
         System.out.println("Cache Hit Rate (Call 2+): " + cacheHitRatePct);
         System.out.printf("Cache Read Tokens (Calls 2+): %d%n", totalCacheReadTokensCall2Plus);
         System.out.printf("Total Benchmark Cost (all billed calls, failed included): %.4f INR%n", setCostInr.doubleValue());
+        System.out.printf("Card-level accuracy: issues expected=%d | correct (status+card)=%d (%s) | status right, wrong card=%d | missed=%d | extra returned=%d%n",
+                cardIssuesExpected, cardIssuesCorrect, RunCostLedger.pct(cardIssuesCorrect, cardIssuesExpected, successfulCalls),
+                cardStatusRightWrongCard, cardIssuesMissed, cardIssuesExtra);
+        System.out.printf("Notices with all issues correct (status+card, no extra): %d of %d successful%n", noticesAllIssuesCorrect, successfulCalls);
 
         if (successfulCalls == 0) {
             System.out.println("\nNo successful calls: accuracy metrics are N/A.");
@@ -386,6 +566,14 @@ class MatchingEvalRunnerTest {
         summaryReport.put("cache_hit_rate_pct", RunCostLedger.pctValue(cacheHitCalls, successfulCalls - 1, successfulCalls));
         summaryReport.put("cache_read_tokens_calls_2_plus", totalCacheReadTokensCall2Plus);
         summaryReport.put("total_cost_inr", setCostInr.doubleValue());
+        // card-level accuracy (status + one of the expected card ids per expected issue)
+        summaryReport.put("issues_expected", cardIssuesExpected);
+        summaryReport.put("issues_correct", cardIssuesCorrect);
+        summaryReport.put("issues_status_right_wrong_card", cardStatusRightWrongCard);
+        summaryReport.put("issues_missed", cardIssuesMissed);
+        summaryReport.put("issues_extra", cardIssuesExtra);
+        summaryReport.put("issue_card_accuracy_pct", RunCostLedger.pctValue(cardIssuesCorrect, cardIssuesExpected, successfulCalls));
+        summaryReport.put("notices_all_issues_correct", noticesAllIssuesCorrect);
         summaryReport.set("notices", objectMapper.valueToTree(noticeEvalResults));
 
         spentInr[0] = totalCostInr;

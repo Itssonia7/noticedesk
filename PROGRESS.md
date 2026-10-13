@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 13-10-2026 (high-stakes mode off by default)
+Last updated: 13-10-2026 (private notice set for the live runners)
 
 ---
 
@@ -231,11 +231,32 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   code template fill for full matches, the partial writer for partial matches, and the new-issue writer
   only for issues with no card.
 
+## (b9) Private notice set for the live runners (13-10-2026)
+
+- The firm's real catalogue (269 cards NDK-001..NDK-269, 269 templates TPL-001..TPL-269) and 308
+  private test notices now live in `$PRIVATE_SEED_DIR` (never in the repo); the 20 dummy cards were
+  deleted from the dev database. Test code only, no production change.
+- `MatchingEvalRunnerTest`: `MATCHING_EVAL_SETS` (`both` default | `dummy` | `private`) and
+  `MATCHING_EVAL_NOTICES` (chosen private files, in order; a missing name refuses the run before any
+  call). `LIVE_SMOKE=true` with `MATCHING_EVAL_SETS=private` runs the first private notice.
+- Card-level accuracy added next to the old status-level metrics: an expected issue counts as correct
+  only when a returned issue has the same status and one of its card ids (status `none` needs no card);
+  the runner also counts "status right, wrong card", missed and extra issues, and notices with every
+  issue correct. Wrong-match details for the private set show notice id, statuses and card ids only.
+- `V7LivePipelineRunnerTest`: `V7_LIVE_NOTICES` names resolve on the classpath first, then in
+  `$PRIVATE_SEED_DIR/notices`, or as an absolute path; a missing name refuses the run. Header reading
+  moved to `BenchNoticeHeader` (unit-tested offline): `Date:`/`Dated:` with `-` or `.`, `Reference No.:`,
+  `FY 2019-20` / `F.Y.`, `Section 73(1)` -> `Section 73`; bracket / underscore placeholders are null.
+  A notice without a GSTIN uses the synthetic allow-listed bench GSTIN for its DB rows only.
+- Both runners refuse to run when `PRIVATE_SEED_DIR` is set and `CARD-*` cards remain in the database,
+  and print the catalogue size and hash first. Details in `docs/PRIVATE_DATA.md`.
+
 ## (c) Verification
 
-- Offline unit suite (`mvn clean test`): **273 tests, 0 failures, 0 errors** (no live API calls; all models
-  and IndianKanoon mocked or served from local fixtures). A plain `mvn test` no longer modifies `output/`.
-  V23 to V28 applied on Postgres 16.
+- Offline unit suite (`mvn clean test`): **291 tests, 0 failures, 0 errors** on 13-10-2026 (no live API
+  calls; all models and IndianKanoon mocked or served from local fixtures), plus the Spring context test
+  `NoticedeskApiApplicationTests`, which needs the local Postgres (pgvector) and was not run in that
+  container. A plain `mvn test` no longer modifies `output/`. V23 to V28 applied on Postgres 16.
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
   - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.

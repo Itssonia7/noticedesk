@@ -22,12 +22,13 @@ import com.noticedesk.api.service.matching.TemplateFillService;
 import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.testsupport.BenchNoticeRows;
 import com.noticedesk.api.testsupport.LiveRunGuard;
+import com.noticedesk.api.testsupport.PrivateSetSupport;
 import com.noticedesk.api.testsupport.RunCostLedger;
 import com.noticedesk.api.testsupport.TestAppProperties;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.fail;
-import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.Resource;
 
 import java.io.File;
 import java.io.InputStream;
@@ -35,10 +36,14 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 public class V7LivePipelineRunnerTest {
+
+    /**
+     * Synthetic, allow-listed bench GSTIN (see .githooks/allowed_ids.txt) used only for the clients /
+     * registrations rows of a notice whose own GSTIN is a form placeholder. It never reaches the draft.
+     */
+    static final String BENCH_PLACEHOLDER_GSTIN = "27ABCDE1234F1Z5";
 
     @Test
     void runV7LivePipelineRun2() throws Exception {
@@ -150,6 +155,12 @@ public class V7LivePipelineRunnerTest {
 
         LlmFactory llmFactory = new LlmFactory(props);
         CatalogueService catalogueService = new CatalogueService(jdbc.getJdbcTemplate(), props, om);
+        // a private catalogue must never be run next to the dummy cards
+        String dummyCardRefusal = PrivateSetSupport.dummyCardRefusal(jdbc.getJdbcTemplate(), privateSeedDir);
+        if (dummyCardRefusal != null) {
+            fail(dummyCardRefusal);
+        }
+        System.out.println(PrivateSetSupport.catalogueLine(catalogueService));
         ApiUsageLogService usageLogService = new ApiUsageLogService(jdbc, props);
         RunCostLedger ledger = RunCostLedger.attach(usageLogService, System.out);
         guard.attach(usageLogService);
@@ -188,6 +199,16 @@ public class V7LivePipelineRunnerTest {
                     "notice_10_nomatch_anti_profiteering.json"
             };
         }
+        // every entry is resolved before any call: classpath testbench/notices/<name>, else
+        // $PRIVATE_SEED_DIR/notices/<name>, else an absolute path
+        Map<String, Resource> noticeFiles = new LinkedHashMap<>();
+        for (String name : targetNotices) {
+            Resource res = PrivateSetSupport.resolveNotice(name, privateSeedDir);
+            if (res == null) {
+                fail("REFUSED: notice file not found: " + name);
+            }
+            noticeFiles.put(name, res);
+        }
         if (guard.smoke()) {
             targetNotices = Arrays.copyOf(targetNotices, 1);
             System.out.println("LIVE_SMOKE=true: only " + targetNotices[0] + " is run");
@@ -215,7 +236,7 @@ public class V7LivePipelineRunnerTest {
             }
             props.getLlm().setMaxCostInrPerNotice(thisNoticeCap.doubleValue());
 
-            ClassPathResource resource = new ClassPathResource("testbench/notices/" + noticeFile);
+            Resource resource = noticeFiles.get(noticeFile);
             String jsonText;
             try (InputStream is = resource.getInputStream()) {
                 jsonText = new String(is.readAllBytes(), StandardCharsets.UTF_8);
@@ -227,25 +248,29 @@ public class V7LivePipelineRunnerTest {
             String ocr = root.path("full_ocr_text").asText();
             JsonNode answerKey = root.path("answer_key");
 
-            String ref = findPattern(ocr, "Reference No:\\s*(\\S+)");
-            String date = findPattern(ocr, "\\nDate:\\s*(\\d{2}-\\d{2}-\\d{4})");
-            String clientName = findPattern(ocr, "To,\\s*\\n(M/s [^\\n]+)");
-            String gstin = findPattern(ocr, "GSTIN:\\s*([0-9A-Z]{15})");
+            // header fields in either bench style; a form placeholder such as [____] is null, never a value
+            BenchNoticeHeader.Header header = BenchNoticeHeader.parse(ocr);
+            String ref = header.reference();
+            String date = header.date();
+            String clientName = header.clientName();
+            String gstin = header.gstin();
             String state = GstStateCodes.nameForGstin(gstin).orElse(null);   // null -> [[MISSING: state]] in assembly
-            String fy = findPattern(ocr, "Financial Year:\\s*(\\S+)");
-            String section = findPattern(ocr, "(?:Show Cause Notice|Notice) under (Section \\d+[A-Z]?)");
+            String fy = header.financialYear();
+            String section = header.section();
 
             Map<String, Object> noticeMap = new LinkedHashMap<>();
             noticeMap.put("notice_id", noticeId);
             noticeMap.put("tenant_id", UUID.fromString("11111111-1111-1111-1111-111111111111"));
             noticeMap.put("document_type", docType);
-            noticeMap.put("notice_number", ref);
-            noticeMap.put("issue_date", date);
-            noticeMap.put("section", section);
+            if (ref != null) noticeMap.put("notice_number", ref);
+            if (date != null) noticeMap.put("issue_date", date);
+            if (section != null) noticeMap.put("section", section);
 
             UUID noticeUuid = UUID.nameUUIDFromBytes(noticeId.getBytes(StandardCharsets.UTF_8));
-            // issue_matches.notice_id references notices: create the synthetic notice row first
-            BenchNoticeRows.ensureNotice(jdbc.getJdbcTemplate(), tenantUuid, noticeUuid, noticeId, gstin, clientName, docType, fy);
+            // issue_matches.notice_id references notices: create the synthetic notice row first. A notice whose
+            // GSTIN is a placeholder gets the synthetic bench GSTIN for its DB rows only; the draft itself sees null.
+            String rowGstin = gstin != null ? gstin : BENCH_PLACEHOLDER_GSTIN;
+            BenchNoticeRows.ensureNotice(jdbc.getJdbcTemplate(), tenantUuid, noticeUuid, noticeId, rowGstin, clientName, docType, fy);
 
             DraftingAgent.DraftingInput input = new DraftingAgent.DraftingInput(
                     noticeUuid, "formal", null, clientName, null, null, "Regular", gstin, state,
@@ -349,12 +374,6 @@ public class V7LivePipelineRunnerTest {
             System.err.println("LIVE RUN ABORTED: " + abortReason);
             fail("LIVE RUN ABORTED: " + abortReason);
         }
-    }
-
-    private static String findPattern(String text, String regex) {
-        Matcher m = Pattern.compile(regex).matcher(text);
-        if (m.find()) return m.group(1).trim();
-        return "";
     }
 
     private static String renderDraft(String noticeId, DraftingPipelineResult result) {

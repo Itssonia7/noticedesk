@@ -33,7 +33,21 @@ SPRING_PROFILES_ACTIVE=private-seed mvn -f noticedesk-java/pom.xml spring-boot:r
   writing, and logs counts only — never file names or contents.
 - `MatchingEvalRunnerTest` (opt-in, `ENABLE_E2E_TESTS=true`) also evaluates
   `$PRIVATE_SEED_DIR/notices` and reports the private set separately from the dummy testbench.
-  The results JSON (`testbench/results/`, git-ignored) stores notice IDs and metrics only.
+  The results JSON (`testbench/results/`, git-ignored) stores notice IDs, statuses, card ids and
+  metrics only; the model's explanation and the notice text are never printed for the private set.
+  - `MATCHING_EVAL_SETS` = `both` (default) | `dummy` | `private`. `private` makes no call on the
+    committed dummy testbench; `dummy` skips the private set.
+  - `MATCHING_EVAL_NOTICES` = optional comma-separated file names inside `$PRIVATE_SEED_DIR/notices`
+    (e.g. `notice_mix_01.json,notice_real_04D.json`), evaluated in that order; a missing name refuses
+    the run before any call. Unset = every `*.json` in the folder.
+  - `LIVE_SMOKE=true` still runs one dummy notice only; with `MATCHING_EVAL_SETS=private` it runs the
+    first private notice instead.
+- `V7LivePipelineRunnerTest`: each `V7_LIVE_NOTICES` name is looked up on the classpath
+  (`testbench/notices/<name>`) first, then in `$PRIVATE_SEED_DIR/notices/<name>`; an absolute path is
+  also accepted. A name found nowhere refuses the run before any call.
+- Both runners refuse to start (before any call) when `PRIVATE_SEED_DIR` is set and the database still
+  holds dummy cards (`issue_cards.card_id LIKE 'CARD-%'`): delete them first. They print the catalogue
+  size and hash at the start so a run can be tied to the catalogue it used.
 
 As a second line of defence `.gitignore` ignores `private/`, `noticedesk-private/`, `*.real.json`,
 `*.real.sql`, `*.real.docx` and `*.real.pdf`.
