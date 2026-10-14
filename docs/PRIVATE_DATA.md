@@ -44,8 +44,10 @@ SPRING_PROFILES_ACTIVE=private-seed mvn -f noticedesk-java/pom.xml spring-boot:r
     first private notice instead.
   - `MATCHING_EVAL_SHOW_WHY` = `false` (default) | `true`. With `true` the model's per-issue `why` text
     and its `not_this_if_checked` lines are printed for the private set too, in the console (one `why`
-    line and one `not_this_if` line per issue, prefixed with the notice id and issue number) and in the
-    WRONG MATCH DETAILS. Set it only when the private notices are synthetic (fictional party, placeholder
+    line and one `not_this_if` line per issue, prefixed with the notice id and issue number; the
+    `not_this_if` line ends with the COUNT of the issue's `client_facts_to_confirm`, never the facts) and
+    in the WRONG MATCH DETAILS. Each set also reports "Client facts (v3.2): issues with client facts=N |
+    partial_on_client_fact flags=M" (the same two totals go into the results JSON). Set it only when the private notices are synthetic (fictional party, placeholder
     GSTIN): the reasons quote the notice. The notice text itself is still never printed, and the results
     JSON keeps metrics only either way.
   - `$PRIVATE_SEED_DIR/defect_cards.txt` (optional, one card id per line, `#` comments allowed): the

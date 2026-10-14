@@ -413,7 +413,9 @@ class MatchingEvalRunnerTest {
 
     /**
      * The per-issue reason lines printed to the console when {@code MATCHING_EVAL_SHOW_WHY=true}: one "why" line
-     * and one not_this_if line per issue, each prefixed with the notice id and issue number. Never the notice text.
+     * and one not_this_if line per issue, each prefixed with the notice id and issue number; the not_this_if line
+     * ends with the COUNT of the issue's client_facts_to_confirm (v3.2; the facts themselves are not printed).
+     * Never the notice text.
      */
     static List<String> reasonLines(String noticeId, List<MatchedIssue> issues) {
         List<String> out = new ArrayList<>();
@@ -421,9 +423,32 @@ class MatchingEvalRunnerTest {
         for (MatchedIssue i : issues) {
             String prefix = "  " + noticeId + " issue " + i.issueNo() + " [" + gotColumn(i) + "]";
             out.add(prefix + " why: " + String.valueOf(i.why()).replace('\n', ' '));
-            out.add(prefix + " not_this_if: " + notThisIfLine(i).replace('\n', ' '));
+            out.add(prefix + " not_this_if: " + notThisIfLine(i).replace('\n', ' ')
+                    + " | client_facts_to_confirm: " + clientFactCount(i));
         }
         return out;
+    }
+
+    private static int clientFactCount(MatchedIssue i) {
+        return i.clientFactsToConfirm() == null ? 0 : i.clientFactsToConfirm().size();
+    }
+
+    /** Returned issues with a non-empty client_facts_to_confirm list (v3.2). */
+    static int issuesWithClientFacts(List<MatchedIssue> issues) {
+        if (issues == null) return 0;
+        int n = 0;
+        for (MatchedIssue i : issues) if (clientFactCount(i) > 0) n++;
+        return n;
+    }
+
+    /** Returned issues carrying the informational {@link IssueMatchingAgent#FLAG_PARTIAL_ON_CLIENT_FACT} flag (v3.2). */
+    static int partialOnClientFactFlags(List<MatchedIssue> issues) {
+        if (issues == null) return 0;
+        int n = 0;
+        for (MatchedIssue i : issues) {
+            if (i.flags() != null && i.flags().contains(IssueMatchingAgent.FLAG_PARTIAL_ON_CLIENT_FACT)) n++;
+        }
+        return n;
     }
 
     /** Returned issues of kind {@code defect}. */
@@ -524,6 +549,10 @@ class MatchingEvalRunnerTest {
         // v3 defect issues: returned (kind = defect) and expected (card in defect_cards.txt; skipped without the file)
         int defectReturned = 0;
         int defectExpected = 0;
+
+        // v3.2: issues that came back with client facts to confirm, and partials whose why mentions a CLIENT fact
+        int clientFactIssues = 0;
+        int partialOnClientFact = 0;
 
         BigDecimal startInr = spentInr[0];      // the INR cap applies across both sets
         BigDecimal totalCostInr = startInr;
@@ -638,6 +667,8 @@ class MatchingEvalRunnerTest {
             CardScore cards = scoreCards(noticeId, answerKey, result.issues(), isPrivate, showWhy);
             defectReturned += defectIssuesReturned(result.issues());
             if (defectCardIds != null) defectExpected += defectIssuesExpected(answerKey, defectCardIds);
+            clientFactIssues += issuesWithClientFacts(result.issues());
+            partialOnClientFact += partialOnClientFactFlags(result.issues());
             cardIssuesExpected += cards.expected();
             cardIssuesCorrect += cards.correct();
             cardPrimaryRightStatusWrong += cards.primaryRightStatusWrong();
@@ -681,6 +712,8 @@ class MatchingEvalRunnerTest {
             evalItem.put("all_issues_correct", cards.allCorrect());
             evalItem.put("defect_issues_returned", defectIssuesReturned(result.issues()));
             if (defectCardIds != null) evalItem.put("defect_issues_expected", defectIssuesExpected(answerKey, defectCardIds));
+            evalItem.put("issues_with_client_facts", issuesWithClientFacts(result.issues()));
+            evalItem.put("partial_on_client_fact_flags", partialOnClientFactFlags(result.issues()));
             evalItem.set("result_flags", objectMapper.valueToTree(result.flags()));
             noticeEvalResults.add(evalItem);
         }
@@ -714,6 +747,8 @@ class MatchingEvalRunnerTest {
         System.out.printf("Notices with all issues correct (status+primary card, no extra): %d of %d successful%n", noticesAllIssuesCorrect, successfulCalls);
         System.out.println("Defect issues (kind=defect): returned=" + defectReturned + " | expected="
                 + (defectCardIds == null ? "n/a (no defect_cards.txt)" : String.valueOf(defectExpected)));
+        System.out.println("Client facts (v3.2): issues with client facts=" + clientFactIssues
+                + " | partial_on_client_fact flags=" + partialOnClientFact);
 
         if (successfulCalls == 0) {
             System.out.println("\nNo successful calls: accuracy metrics are N/A.");
@@ -758,6 +793,8 @@ class MatchingEvalRunnerTest {
         } else {
             summaryReport.putNull("defect_issues_expected");   // no defect_cards.txt: count skipped
         }
+        summaryReport.put("issues_with_client_facts", clientFactIssues);
+        summaryReport.put("partial_on_client_fact_flags", partialOnClientFact);
         summaryReport.set("notices", objectMapper.valueToTree(noticeEvalResults));
 
         spentInr[0] = totalCostInr;

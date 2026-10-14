@@ -383,6 +383,10 @@ public class ReplyAssemblyService {
             if (ft != null && ft.flags() != null && ft.flags().contains(TemplateFillService.FLAG_PROVISIONAL_TEMPLATE)) {
                 sec13.append(", Template status=PROVISIONAL (promoted from an approved AI section, not CA-reviewed: partner to confirm or retire)");
             }
+            // matching prompt v3.2: the card's CLIENT facts the notice cannot evidence; status never depends on them
+            if (issue.clientFactsToConfirm() != null && !issue.clientFactsToConfirm().isEmpty()) {
+                sec13.append("<br/>Confirm with client: ").append(String.join("; ", issue.clientFactsToConfirm()));
+            }
             sec13.append("</li>");
         }
         sec13.append("</ul>");

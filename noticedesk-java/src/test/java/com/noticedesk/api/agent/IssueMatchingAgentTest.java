@@ -312,6 +312,102 @@ class IssueMatchingAgentTest {
         assertEquals(List.of(IssueMatchingAgent.FLAG_UNKNOWN_CARD_ID, IssueMatchingAgent.FLAG_DEFECT_WITHOUT_CARD), unknown.flags());
     }
 
+    // ---------------------------------------------------------------- v3.2: client_facts_to_confirm and partial_on_client_fact
+
+    @Test
+    void v3_2ClientFactsToConfirm_areReadPerIssue_andThePartialOnClientFactFlagIsInformational() {
+        String json = """
+                {"notice": {},
+                 "grounds": [{"ground_no": 1, "kind": "demand", "label": "RCM on GTA", "paras": ["3"]},
+                             {"ground_no": 2, "kind": "demand", "label": "ITC from non-filer", "paras": ["4"]},
+                             {"ground_no": 3, "kind": "defect", "label": "DIN missing", "paras": ["header"]},
+                             {"ground_no": 4, "kind": "demand", "label": "late fee", "paras": ["5"]}],
+                 "issues": [
+                   {"issue_no": 1, "kind": "demand", "status": "full", "card_id": "NDK-006", "alternates": [],
+                    "why": "DECISIVE facts present (para 3).",
+                    "client_facts_to_confirm": [" No consignment note was issued ", "", null, 7, "GTA has not opted for forward charge"],
+                    "notice_paras": ["3"]},
+                   {"issue_no": 2, "kind": "demand", "status": "partial", "card_id": "NDK-007", "alternates": [],
+                    "why": "DECISIVE \\"supplier has not filed GSTR-3B\\": absent - the notice is silent; CLIENT fact recipient paid supplier not in notice.",
+                    "client_facts_to_confirm": ["Recipient holds invoices and bank proof of payment"],
+                    "notice_paras": ["4"]},
+                   {"issue_no": 3, "kind": "defect", "status": "none", "card_id": null, "alternates": [], "why": "no card",
+                    "client_facts_to_confirm": [], "notice_paras": ["header"]},
+                   {"issue_no": 4, "kind": "demand", "status": "partial", "card_id": "NDK-006", "alternates": [],
+                    "why": "DECISIVE \\"Section 47\\": contradicted - the notice cites Section 50 (para 5).",
+                    "client_facts_to_confirm": "not a list", "notice_paras": ["5"]}],
+                 "para_map": {"3": [1], "4": [2], "5": [4]}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006", "NDK-007"));
+
+        assertTrue(result.flags().isEmpty(), result.flags().toString());
+        assertEquals(4, result.issues().size());
+
+        IssueMatchingAgent.MatchedIssue full = result.issues().get(0);
+        assertEquals("full", full.status());
+        assertEquals(List.of("No consignment note was issued", "GTA has not opted for forward charge"), full.clientFactsToConfirm(),
+                "entries are trimmed; blank, null and non-text entries are dropped");
+        assertTrue(full.flags().isEmpty(), "a full match never gets the partial_on_client_fact flag");
+
+        IssueMatchingAgent.MatchedIssue partialOnClient = result.issues().get(1);
+        assertEquals("partial", partialOnClient.status(), "the status is kept: the flag is informational");
+        assertEquals(List.of("NDK-007"), partialOnClient.cardIds());
+        assertEquals(List.of("Recipient holds invoices and bank proof of payment"), partialOnClient.clientFactsToConfirm());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_PARTIAL_ON_CLIENT_FACT), partialOnClient.flags());
+        assertEquals("partial_on_client_fact", IssueMatchingAgent.FLAG_PARTIAL_ON_CLIENT_FACT);
+
+        IssueMatchingAgent.MatchedIssue none = result.issues().get(2);
+        assertTrue(none.clientFactsToConfirm().isEmpty());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_WITHOUT_CARD), none.flags(), "status none: no client-fact flag");
+
+        IssueMatchingAgent.MatchedIssue partialOnDecisive = result.issues().get(3);
+        assertEquals("partial", partialOnDecisive.status());
+        assertTrue(partialOnDecisive.clientFactsToConfirm().isEmpty(), "a non-array value reads as an empty list");
+        assertTrue(partialOnDecisive.flags().isEmpty(), "a partial whose why names no CLIENT fact gets no flag");
+    }
+
+    @Test
+    void v3_2FieldAbsent_v3_1Output_readsAsEmptyList_withNoFlag() {
+        String json = """
+                {"notice": {},
+                 "grounds": [{"ground_no": 1, "kind": "demand", "label": "x", "paras": ["1"]}],
+                 "issues": [{"issue_no": 1, "kind": "demand", "status": "partial", "card_id": "NDK-006", "alternates": [],
+                             "why": "DECISIVE \\"form DRC-01\\": absent - the document is an ASMT-10 (para 1).", "notice_paras": ["1"]}],
+                 "para_map": {"1": [1]}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006"));
+
+        IssueMatchingAgent.MatchedIssue issue = result.issues().get(0);
+        assertEquals("partial", issue.status());
+        assertNotNull(issue.clientFactsToConfirm());
+        assertTrue(issue.clientFactsToConfirm().isEmpty(), "no client_facts_to_confirm key (v3.1 output): empty list");
+        assertTrue(issue.flags().isEmpty());
+    }
+
+    @Test
+    void readClientFactsToConfirm_andThePartialOnClientFactHeuristic() throws Exception {
+        assertEquals(List.of("a", "b"), IssueMatchingAgent.readClientFactsToConfirm(
+                objectMapper.readTree("{\"client_facts_to_confirm\": [\" a \", \"b\", \"  \", null, 1]}")));
+        assertTrue(IssueMatchingAgent.readClientFactsToConfirm(objectMapper.readTree("{\"client_facts_to_confirm\": null}")).isEmpty());
+        assertTrue(IssueMatchingAgent.readClientFactsToConfirm(objectMapper.readTree("{\"client_facts_to_confirm\": \"x\"}")).isEmpty());
+        assertTrue(IssueMatchingAgent.readClientFactsToConfirm(objectMapper.readTree("{\"status\": \"full\"}")).isEmpty());
+
+        assertTrue(IssueMatchingAgent.isPartialOnClientFact("partial", "DECISIVE \"x\": absent - CLIENT fact"));
+        assertTrue(IssueMatchingAgent.isPartialOnClientFact("Partial", "the card's CLIENT: facts are not in the notice"));
+        assertFalse(IssueMatchingAgent.isPartialOnClientFact("partial", "the client has not paid"), "the token is upper-case CLIENT");
+        assertFalse(IssueMatchingAgent.isPartialOnClientFact("full", "CLIENT facts copied to the list"));
+        assertFalse(IssueMatchingAgent.isPartialOnClientFact("none", "CLIENT"));
+        assertFalse(IssueMatchingAgent.isPartialOnClientFact("partial", null));
+
+        // the record defaults: old constructors and a null list give an empty list
+        IssueMatchingAgent.MatchedIssue v3 = new IssueMatchingAgent.MatchedIssue(1, "full", "demand", List.of("NDK-006"), List.of(), "w", List.of(), java.util.Map.of(), List.of(), List.of());
+        assertTrue(v3.clientFactsToConfirm().isEmpty());
+        IssueMatchingAgent.MatchedIssue nullList = new IssueMatchingAgent.MatchedIssue(1, "full", "demand", List.of("NDK-006"), List.of(), "w", List.of(), java.util.Map.of(), List.of(), List.of(), null);
+        assertTrue(nullList.clientFactsToConfirm().isEmpty());
+        IssueMatchingAgent.MatchedIssue v3_2 = new IssueMatchingAgent.MatchedIssue(1, "full", "demand", List.of("NDK-006"), List.of(), "w", List.of(), java.util.Map.of(), List.of(), List.of(), List.of("nil returns were filed"));
+        assertEquals(List.of("nil returns were filed"), v3_2.clientFactsToConfirm());
+    }
+
     @Test
     void matchedIssue_kindIsNormalized_andOldConstructorsAreDemand() {
         assertEquals("demand", IssueMatchingAgent.normalizeKind(null));

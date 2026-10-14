@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 14-10-2026 (matching prompt v3.1: written checks trimmed to the chosen cards; matching max_tokens 12000/20000)
+Last updated: 14-10-2026 (matching prompt v3.2: status decided on notice-visible facts only; client facts become a confirm-with-client list in the partner note)
 
 ---
 
@@ -359,9 +359,55 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   cap on the example's `why`); `ApiUsagePricingTest`, `HardCostCapTest`, `CacheAwareCostEstimateTest` and
   `IssueMatchingAgentTest` use the new max_tokens (the warm-catalogue cap test now runs at Rs 15).
 
+## (b13) Matching prompt v3.2: status on notice-visible facts only; client facts to confirm (14-10-2026)
+
+- Live finding on 35 private notices (prompt v3.1): about a third of the CORRECT primary cards came back
+  "partial" because the model reported a DECISIVE fact "absent from the notice" when that fact is a
+  client-side fact the department's document can never state ("no consignment note issued", "recipient
+  holds invoices and bank proof", "nil returns were filed", "supplier active on the portal", "interest and
+  late fee paid"). The catalogue cards are being rewritten in parallel so each SUMMARY reads
+  "ALLEGES: ... DECISIVE: <facts visible in the department's document> CLIENT: <facts to confirm with the
+  client; 'none' if none> DEFENCE: ...".
+- `prompts/issue_matching_v3.md` edited in place as **v3.2** (heading "(v3.2)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_2`; the resource name stays `issue_matching_v3`):
+  - The new SUMMARY shape is explained: DECISIVE facts are what the document states or shows and alone decide
+    the status; CLIENT facts are what only the taxpayer can supply, so one that is absent from the notice is
+    expected to be absent.
+  - Status rules: "full" and "partial" are decided ONLY on DECISIVE facts and on NOT THIS IF rules that can be
+    tested from the document. CLIENT facts never affect status in either direction. A NOT THIS IF rule whose
+    fact cannot be determined from the document is `cannot test` with NO effect on status (v3.1 made any
+    "cannot test" at most partial); the only untestable check that still makes a match partial is a DATE
+    boundary whose date the notice does not state (`-> cannot test (date not stated)`).
+  - New per-issue output field `client_facts_to_confirm`: the primary card's CLIENT facts, one short line
+    each in the card's words, minus any the notice already evidences; `[]` for `CLIENT: none` and for status
+    none. Never a DECISIVE fact; never a CLIENT fact in `why` as a reason for the status.
+  - Partial still quotes the specific DECISIVE fact absent or contradicted. Self-check gains "No issue is
+    partial because of a CLIENT fact.", the no-downgrade rule for "cannot test" and a `client_facts_to_confirm`
+    check. Grounds, visible defects, boundary lines for primary + alternates only and the 60-word `why` are
+    unchanged from v3.1. The JSON example carries the field on both issues and a client-side rule recorded as
+    "cannot test" on an issue that stays full.
+- Parser (`IssueMatchingAgent`): `MatchedIssue` gains `clientFactsToConfirm` (`List<String>`, empty by default;
+  the v3 / v3.1 ten-argument constructor is kept and delegates). Non-text, blank and null entries are dropped;
+  a missing or non-array value reads as an empty list. New informational issue flag `partial_on_client_fact`
+  when status is partial and the `why` text contains the token "CLIENT" (heuristic, never a failure, status kept).
+- Partner note (`ReplyAssemblyService`, Section 13 "Internal Partner Review Note", the per-issue `<li>` that shows
+  Match Status / Cards / Template / Written by): one extra line per issue, `Confirm with client: <fact 1>;
+  <fact 2>; ...`, only when the list is non-empty. The surrounding code appends its values without HTML
+  escaping and this line follows it. Client-facing sections are untouched. `issue_matches` rows are unchanged
+  (no new column).
+- `MatchingEvalRunnerTest`: with `MATCHING_EVAL_SHOW_WHY=true` the per-issue `not_this_if` console line ends
+  with `| client_facts_to_confirm: <count>` (count only, never the facts); each set prints and stores
+  "issues with client facts" and "partial_on_client_fact flags" (`issues_with_client_facts`,
+  `partial_on_client_fact_flags` per set and per notice in the results JSON). `docs/PRIVATE_DATA.md` updated.
+- Tests: `IssueMatchingAgentTest` (field present, absent, non-array; flag on a partial mentioning CLIENT, no flag on
+  full / none / a DECISIVE-only partial; record defaults), `ReplyAssemblyServiceTest` (the partner-note line for
+  the one issue with facts, none for the other, nothing in client-facing sections), `MatchingEvalCardScoreTest`
+  (count line and set totals), `MatchingPromptRulesTest` (v3.2 wording, example).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`): **316 tests, 0 failures, 0 errors** on 14-10-2026 after prompt v3.1 (no live API
+- Offline unit suite (`mvn test`): **322 tests, 0 failures, 0 errors** on 14-10-2026 after prompt v3.2 (316 after
+  v3.1 the same day; no live API
   calls; all models and IndianKanoon mocked or served from local fixtures), plus the Spring context test
   `NoticedeskApiApplicationTests`, which needs the local Postgres (pgvector) and was not run in that
   container. A plain `mvn test` no longer modifies `output/`. V23 to V28 applied on Postgres 16.

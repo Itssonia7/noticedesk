@@ -102,6 +102,40 @@ class ReplyAssemblyServiceTest {
     }
 
     @Test
+    void partnerNote_listsTheClientFactsToConfirm_perIssue_onlyWhenPresent() {
+        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN-001", "DIN-001", "2023-10-15", "30 Days", "2022-23", "2022-23", 100000.0, "Tax Officer");
+        MatchedIssue withFacts = new MatchedIssue(1, "full", "demand", List.of("CARD-006"), List.of(), "Why", List.of(),
+                Map.of("period", "2022-23", "amount", 100000.0), List.of(), List.of(),
+                List.of("No consignment note was issued by the transporter", "Recipient holds the invoices and bank proof of payment"));
+        MatchedIssue withoutFacts = new MatchedIssue(2, "partial", "demand", List.of("CARD-006"), List.of(), "Partial fit", List.of(),
+                Map.of("period", "2022-23"), List.of(), List.of(), List.of());
+        MatchingResult matchingResult = new MatchingResult(noticeInfo, List.of(withFacts, withoutFacts), Map.of(), List.of(), List.of(), "hash", 10, 10, 0, 0);
+        DraftingInput input = createTestDraftingInput("M/s ABC", "GSTIN123");
+
+        AssembledReplyResult result = assemblyService.assembleReply(matchingResult, List.of(), input, "scn_73");
+
+        AssembledSection sec13 = result.sections().get(12); // 13 Internal Partner Note
+        assertEquals("13 Internal Partner Note", sec13.title());
+        String html = sec13.bodyHtml();
+        int issue1 = html.indexOf("<li>Issue #1:");
+        int issue2 = html.indexOf("<li>Issue #2:");
+        assertTrue(issue1 >= 0 && issue2 > issue1, html);
+        String li1 = html.substring(issue1, html.indexOf("</li>", issue1));
+        String li2 = html.substring(issue2, html.indexOf("</li>", issue2));
+        assertTrue(li1.contains("Written by="), li1);
+        assertTrue(li1.contains("<br/>Confirm with client: No consignment note was issued by the transporter; "
+                + "Recipient holds the invoices and bank proof of payment"), li1);
+        assertFalse(li2.contains("Confirm with client"), "an issue without client facts gets no line: " + li2);
+        assertEquals(1, html.split("Confirm with client", -1).length - 1, "exactly one line, for the one issue with facts");
+
+        // the line is internal: it stays out of the client-facing sections
+        for (int s = 0; s < result.sections().size(); s++) {
+            if (s == 12) continue;
+            assertFalse(result.sections().get(s).bodyHtml().contains("Confirm with client"), result.sections().get(s).title());
+        }
+    }
+
+    @Test
     void testPartialOrNoMatchIssueGeneratesPendingAiMarker() {
         MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("DIN-001", "DIN-001", "2023-10-15", "30 Days", "2022-23", "2022-23", 100000.0, "Tax Officer");
         MatchedIssue partialIssue = new MatchedIssue(2, "partial", List.of("CARD-006"), "Partial fit", List.of(), Map.of("period", "2022-23"), List.of(), List.of());

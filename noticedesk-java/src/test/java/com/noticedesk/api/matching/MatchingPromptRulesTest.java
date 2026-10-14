@@ -20,10 +20,11 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.1: grounds-first splitting, one
- * primary card plus alternates, decisive-fact status, visible-defect grounds with a kind, written date-boundary
- * checks for the chosen cards only, primary-only not_this_if_checked, capped why) and the testbench answer keys
- * that follow the splitting rules (live runs split notices 001 and 010 differently from run to run). No model calls.
+ * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.2: grounds-first splitting, one
+ * primary card plus alternates, status decided on notice-visible DECISIVE facts only with the card's CLIENT facts
+ * returned as client_facts_to_confirm, visible-defect grounds with a kind, written date-boundary checks for the
+ * chosen cards only, primary-only not_this_if_checked, capped why) and the testbench answer keys that follow the
+ * splitting rules (live runs split notices 001 and 010 differently from run to run). No model calls.
  */
 class MatchingPromptRulesTest {
 
@@ -42,8 +43,8 @@ class MatchingPromptRulesTest {
 
     @Test
     void agentLoadsTheV3Prompt_andV1V2StayUntouched() throws IOException {
-        assertEquals("issue_matching_v3_1", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
-        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.1 is edited in place in the v3 file");
+        assertEquals("issue_matching_v3_2", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.2 is edited in place in the v3 file");
         String v1 = resource("/prompts/issue_matching_v1.md");
         assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
         assertFalse(v1.contains("alternates"));
@@ -53,8 +54,62 @@ class MatchingPromptRulesTest {
         assertFalse(v2.contains("\"kind\""), "v2 has no issue kind");
         assertFalse(v2.contains("Step 1b"), "v2 has no visible-defect step");
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.1)"));
-        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.1 version");
+        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.2)"));
+        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.2 version");
+        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.2 version");
+    }
+
+    /**
+     * v3.2 (live: a third of correct primary cards on 35 private notices were "partial" because a client-side fact,
+     * which the department's document can never state, was reported "absent from the notice"). The card SUMMARY now
+     * separates DECISIVE (notice-visible) from CLIENT facts; status is decided on DECISIVE facts and testable NOT
+     * THIS IF rules only; CLIENT facts come back as client_facts_to_confirm; an untestable rule no longer lowers the
+     * status unless it is a date boundary whose date the notice does not state.
+     */
+    @Test
+    void v3_2_statusOnNoticeVisibleFactsOnly_clientFactsBecomeAConfirmList() throws IOException {
+        String prompt = resource(PROMPT);
+        // (a) the new SUMMARY shape and the two roles
+        assertTrue(prompt.contains("\"ALLEGES: ... DECISIVE: <facts visible in the department's document> CLIENT: <facts to confirm with the client; 'none' if none> DEFENCE: ...\""));
+        assertFalse(prompt.contains("DECISIVE: <facts required for a full match> DEFENCE"), "v3.1 SUMMARY shape");
+        assertTrue(prompt.contains("**DECISIVE** facts are facts the department's own document states or shows"));
+        assertTrue(prompt.contains("they alone decide the status"));
+        assertTrue(prompt.contains("**CLIENT** facts are facts only the taxpayer can supply"));
+        assertTrue(prompt.contains("a CLIENT fact that is absent from the notice is EXPECTED to be absent"));
+        for (String example : new String[]{"no consignment note was issued", "recipient holds the invoices and bank proof of payment",
+                "nil returns were filed", "the supplier was active on the portal", "interest and late fee were paid"}) {
+            assertTrue(prompt.contains(example), example);
+        }
+        // (b) status rules: DECISIVE + testable NOT THIS IF only; CLIENT never affects status
+        assertTrue(prompt.contains("Status is decided ONLY on the card's DECISIVE facts (notice-visible) and on its NOT THIS IF rules that can be tested from the document."));
+        assertTrue(prompt.contains("CLIENT facts NEVER affect status, in either direction"));
+        assertTrue(prompt.contains("NONE of its testable NOT THIS IF rules is triggered"));
+        assertTrue(prompt.contains("still `\"full\"` when every CLIENT fact of the card is absent from the notice"));
+        assertTrue(prompt.contains("A CLIENT fact is never that fact."));
+        assertTrue(prompt.contains("a `\"partial\"` whose only reason is a CLIENT fact is invalid"));
+        assertTrue(prompt.contains("a missing annexure or an absent CLIENT fact is never a reason for `\"partial\"`"));
+        // (c) untestable rules: "cannot test" has no effect, except a date boundary whose date is not stated
+        assertTrue(prompt.contains("**Untestable rules.**"));
+        assertTrue(prompt.contains("is recorded as `cannot test` and has NO effect on status: it does not downgrade a `\"full\"` match"));
+        assertTrue(prompt.contains("The ONLY untestable check that makes a match `\"partial\"` is a DATE boundary of the card (section 5) that cannot be tested because the notice does not state the date"));
+        assertTrue(prompt.contains("A DATE boundary that cannot be tested because the notice does not state the date is written as `-> cannot test (date not stated)` and makes the match at most `\"partial\"`"));
+        assertTrue(prompt.contains("This is the only \"cannot test\" that affects status"));
+        assertFalse(prompt.contains("A boundary that cannot be tested because the notice does not state the date is written as"), "v3.1 wording: any boundary");
+        // (d) the new per-issue field
+        assertTrue(prompt.contains("**`client_facts_to_confirm`.**"));
+        assertTrue(prompt.contains("copy the primary card's CLIENT facts into `client_facts_to_confirm`, one short line per fact in the card's own words, leaving out any CLIENT fact the notice itself already evidences"));
+        assertTrue(prompt.contains("The list is empty (`[]`) when the card says `CLIENT: none`, when the card has no CLIENT part, or when status is `\"none\"`."));
+        assertTrue(prompt.contains("Never put a DECISIVE fact in this list, and never put a CLIENT fact in `why` as a reason for the status."));
+        // (e) partial still names the DECISIVE fact; self-check lines
+        assertTrue(prompt.contains("DECISIVE \"<quoted card text>\": <absent|contradicted|exceeded> - <what the notice says instead>"));
+        assertTrue(prompt.contains("No issue is partial because of a CLIENT fact."));
+        assertTrue(prompt.contains("No `not_this_if_checked` entry that reads \"cannot test\" lowered a status, except a date boundary written `-> cannot test (date not stated)`."));
+        assertTrue(prompt.contains("has a `client_facts_to_confirm` list holding the primary card's CLIENT facts in the card's words, minus any the notice already evidences; it is `[]` for `CLIENT: none` and for status `\"none\"`; it holds no DECISIVE fact."));
+        // (f) v3.1 rules kept: grounds, defects, boundary lines for primary + alternates only, 60-word why
+        assertTrue(prompt.contains("Step 1b, **visible defects**"));
+        assertTrue(prompt.contains("WRITE lines only for the chosen primary card and for each listed alternate (at most 2)"));
+        assertTrue(prompt.contains("`why` is at most 60 words of prose plus the boundary lines of section 5"));
+        assertTrue(prompt.contains("`not_this_if_checked` lists ONLY the primary card's NOT THIS IF rules"));
     }
 
     /**
@@ -211,10 +266,17 @@ class MatchingPromptRulesTest {
         assertTrue(example.contains("document date: 02.05.2024 vs on or after 08.11.2019 -> satisfied"));
         assertFalse(example.contains("\"header\": ["), "a header-only defect has no para_map entry");
         // v3.1 trimmed form: short primary-only not_this_if_checked entries, paragraph citations instead of restating
-        assertTrue(example.contains("\"not_this_if_checked\": [\"Not this if period on or after 01.01.2022 (use CARD-002) - not triggered\"]"));
+        assertTrue(example.contains("\"not_this_if_checked\": [\"Not this if period on or after 01.01.2022 (use CARD-002) - not triggered\", \"Not this if the supplier has since filed GSTR-1 - cannot test\"]"));
         assertTrue(example.contains("\"not_this_if_checked\": [\"Not this if issued by a State GST authority - not triggered\"]"));
         assertFalse(example.contains("CARD-002: Not this if"), "no not_this_if_checked entry for the alternate");
         assertTrue(example.contains("(paras 3, 3.1, 4)"));
+        // v3.2: client_facts_to_confirm on every issue (facts for the demand issue, [] for the defect); an untestable
+        // client-side NOT THIS IF rule is "cannot test" and the issue stays full
+        assertEquals(2, example.split("\"client_facts_to_confirm\"", -1).length - 1, "one client_facts_to_confirm per issue");
+        assertTrue(example.contains("\"client_facts_to_confirm\": [\"Recipient holds the tax invoices and bank proof of payment to the supplier\", \"Supplier was active on the portal on the invoice dates\"]"));
+        assertTrue(example.contains("\"client_facts_to_confirm\": []"));
+        assertTrue(example.contains("\"Not this if the supplier has since filed GSTR-1 - cannot test\"]"));
+        assertFalse(example.contains("\"status\": \"partial\""), "the example has no partial: both issues stay full");
         for (String why : whyValues(example)) {
             // sentences end in ". " (dates like 02.05.2024 have no space after the dot); boundary lines carry "->"
             int words = 0;

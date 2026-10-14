@@ -55,6 +55,8 @@ public class IssueMatchingAgent {
      * {@code none}), so template fill and every downstream consumer read it unchanged; the matcher's other
      * plausible cards are in {@code alternateCardIds} (at most two, never the primary). {@code kind} is
      * {@link #KIND_DEMAND} (default, every v1 / v2 issue) or {@link #KIND_DEFECT} (v3 visible-defect ground).
+     * {@code clientFactsToConfirm} (v3.2) holds the primary card's CLIENT facts the notice does not evidence,
+     * in the card's words, for the partner to confirm with the client; empty before v3.2 and for status none.
      */
     public record MatchedIssue(
             int issueNo,
@@ -66,11 +68,19 @@ public class IssueMatchingAgent {
             List<String> notThisIfChecked,
             Map<String, Object> facts,
             List<String> noticeParas,
-            List<String> flags
+            List<String> flags,
+            List<String> clientFactsToConfirm
     ) {
         public MatchedIssue {
             if (alternateCardIds == null) alternateCardIds = List.of();
+            if (clientFactsToConfirm == null) clientFactsToConfirm = List.of();
             kind = normalizeKind(kind);
+        }
+
+        /** An issue with a kind and alternates but no client facts (the v3 / v3.1 shape). */
+        public MatchedIssue(int issueNo, String status, String kind, List<String> cardIds, List<String> alternateCardIds, String why,
+                            List<String> notThisIfChecked, Map<String, Object> facts, List<String> noticeParas, List<String> flags) {
+            this(issueNo, status, kind, cardIds, alternateCardIds, why, notThisIfChecked, facts, noticeParas, flags, List.of());
         }
 
         /** An issue of kind {@code demand} with alternates (the v2 shape). */
@@ -150,12 +160,14 @@ public class IssueMatchingAgent {
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
     /**
-     * Version of the live matching prompt (v3.1: boundary lines and {@code not_this_if_checked} written only for
-     * the chosen cards, {@code why} capped at 60 words of prose, DIN/signature and proper-officer guards; v3 added
-     * visible-defect issues with {@code kind}, written date-boundary checks and partial must cite the missing
-     * DECISIVE fact; v2 added one primary card + alternates and grounds-first splitting).
+     * Version of the live matching prompt (v3.2: status decided on notice-visible DECISIVE facts only, the card's
+     * CLIENT facts returned as {@code client_facts_to_confirm}, an untestable NOT THIS IF rule no longer lowers the
+     * status; v3.1: boundary lines and {@code not_this_if_checked} written only for the chosen cards, {@code why}
+     * capped at 60 words of prose, DIN/signature and proper-officer guards; v3 added visible-defect issues with
+     * {@code kind}, written date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one
+     * primary card + alternates and grounds-first splitting).
      */
-    public static final String PROMPT_VERSION = "issue_matching_v3_1";
+    public static final String PROMPT_VERSION = "issue_matching_v3_2";
     /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
     public static final String PROMPT_FILE = "issue_matching_v3";
 
@@ -167,6 +179,12 @@ public class IssueMatchingAgent {
     public static final String FLAG_DEFECT_WITHOUT_CARD = "defect_without_card";
     /** Result flag: the model's {@code issues} count differs from its {@code grounds} count (prompt self-check 1). */
     public static final String FLAG_ISSUE_COUNT_MISMATCH = "issue_count_mismatch";
+    /**
+     * Issue flag (informational heuristic, v3.2): status partial and the {@code why} text contains the token
+     * "CLIENT", so the model may have downgraded the match on a client-side fact, which the prompt forbids.
+     * Never a failure; the status is kept.
+     */
+    public static final String FLAG_PARTIAL_ON_CLIENT_FACT = "partial_on_client_fact";
     /** Most alternates kept per issue; any beyond are dropped. */
     static final int MAX_ALTERNATES = 2;
 
@@ -335,6 +353,8 @@ public class IssueMatchingAgent {
                     Map<String, Object> facts = objectMapper.convertValue(issueNode.path("facts"), new TypeReference<Map<String, Object>>() {});
                     if (facts == null) facts = Map.of();
 
+                    List<String> clientFacts = readClientFactsToConfirm(issueNode);
+
                     List<String> issueFlags = new ArrayList<>();
 
                     // Unknown primary card -> the issue becomes "none" + flag unknown_card_id (as before)
@@ -371,7 +391,13 @@ public class IssueMatchingAgent {
                         issueFlags.add(FLAG_DEFECT_WITHOUT_CARD);
                     }
 
-                    issues.add(new MatchedIssue(issueNo, status, kind, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags));
+                    // Informational heuristic (v3.2): a partial whose reason mentions a CLIENT fact
+                    if (isPartialOnClientFact(status, why)) {
+                        log.info("Issue #{}: partial match whose why mentions a CLIENT fact (informational)", issueNo);
+                        issueFlags.add(FLAG_PARTIAL_ON_CLIENT_FACT);
+                    }
+
+                    issues.add(new MatchedIssue(issueNo, status, kind, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags, clientFacts));
                 }
             }
 
@@ -437,6 +463,27 @@ public class IssueMatchingAgent {
         String primary = ids.isEmpty() ? null : ids.get(0);
         if (ids.size() > 1) alternates.addAll(ids.subList(1, ids.size()));
         return new CardChoice(primary, alternates);
+    }
+
+    /**
+     * The v3.2 {@code client_facts_to_confirm} list of one issue: its non-blank text entries, trimmed, in order.
+     * Empty when the key is absent (v1 to v3.1 output), null, not an array, or holds no usable text.
+     */
+    static List<String> readClientFactsToConfirm(JsonNode issueNode) {
+        JsonNode node = issueNode.path("client_facts_to_confirm");
+        if (!node.isArray()) return List.of();
+        List<String> out = new ArrayList<>();
+        for (JsonNode f : node) {
+            if (f == null || !f.isTextual()) continue;
+            String s = f.asText().trim();
+            if (!s.isEmpty()) out.add(s);
+        }
+        return List.copyOf(out);
+    }
+
+    /** {@link #FLAG_PARTIAL_ON_CLIENT_FACT} heuristic: status partial and the why text contains the token "CLIENT" (upper case). */
+    static boolean isPartialOnClientFact(String status, String why) {
+        return "partial".equalsIgnoreCase(status) && why != null && why.contains("CLIENT");
     }
 
     private static String cleanId(JsonNode n) {

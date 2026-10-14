@@ -221,13 +221,38 @@ class MatchingEvalCardScoreTest {
         assertEquals("(withheld: private notice)", hidden.wrong().get(0).why());
         assertEquals("(withheld: private notice)", hidden.wrong().get(1).why());
 
-        // console lines: one why line and one not_this_if line per issue, prefixed with notice id and issue no
+        // console lines: one why line and one not_this_if line per issue, prefixed with notice id and issue no;
+        // the not_this_if line ends with the client_facts_to_confirm COUNT (never the facts)
         List<String> lines = MatchingEvalRunnerTest.reasonLines("notice_syn_07", List.of(demand, defect));
         assertEquals(List.of(
                 "  notice_syn_07 issue 1 [demand:full[NDK-099] alt[NDK-100]] why: order service date: 21.07.2023 vs before 01.10.2023 -> satisfied",
-                "  notice_syn_07 issue 1 [demand:full[NDK-099] alt[NDK-100]] not_this_if: NDK-099: Not this if X (use NDK-100) - not triggered",
+                "  notice_syn_07 issue 1 [demand:full[NDK-099] alt[NDK-100]] not_this_if: NDK-099: Not this if X (use NDK-100) - not triggered | client_facts_to_confirm: 0",
                 "  notice_syn_07 issue 2 [defect:none[]] why: no card for the missing DIN",
-                "  notice_syn_07 issue 2 [defect:none[]] not_this_if: (none)"), lines);
+                "  notice_syn_07 issue 2 [defect:none[]] not_this_if: (none) | client_facts_to_confirm: 0"), lines);
+    }
+
+    @Test
+    void v3_2_clientFactCountPerIssue_andSetTotals_neverPrintTheFacts() {
+        MatchedIssue withFacts = new MatchedIssue(1, "full", "demand", List.of("NDK-006"), List.of(), "w", List.of(), Map.of(),
+                List.of("3"), List.of(), List.of("no consignment note was issued", "recipient holds the invoices"));
+        MatchedIssue partialOnClient = new MatchedIssue(2, "partial", "demand", List.of("NDK-007"), List.of(),
+                "DECISIVE \"x\": absent - CLIENT fact not in notice", List.of(), Map.of(), List.of("4"),
+                List.of(com.noticedesk.api.agent.IssueMatchingAgent.FLAG_PARTIAL_ON_CLIENT_FACT), List.of("nil returns were filed"));
+        MatchedIssue none = new MatchedIssue(3, "none", "defect", List.of(), List.of(), "w", List.of(), Map.of(), List.of("header"), List.of());
+
+        List<String> lines = MatchingEvalRunnerTest.reasonLines("notice_syn_08", List.of(withFacts, partialOnClient, none));
+        assertEquals("  notice_syn_08 issue 1 [demand:full[NDK-006]] not_this_if: (none) | client_facts_to_confirm: 2", lines.get(1));
+        assertEquals("  notice_syn_08 issue 2 [demand:partial[NDK-007]] not_this_if: (none) | client_facts_to_confirm: 1", lines.get(3));
+        assertEquals("  notice_syn_08 issue 3 [defect:none[]] not_this_if: (none) | client_facts_to_confirm: 0", lines.get(5));
+        for (String line : lines) {
+            assertFalse(line.contains("consignment") || line.contains("nil returns"), "the facts are never printed: " + line);
+        }
+
+        assertEquals(2, MatchingEvalRunnerTest.issuesWithClientFacts(List.of(withFacts, partialOnClient, none)));
+        assertEquals(1, MatchingEvalRunnerTest.partialOnClientFactFlags(List.of(withFacts, partialOnClient, none)));
+        assertEquals(0, MatchingEvalRunnerTest.issuesWithClientFacts(List.of()));
+        assertEquals(0, MatchingEvalRunnerTest.partialOnClientFactFlags(null));
+        assertEquals(0, MatchingEvalRunnerTest.issuesWithClientFacts(null));
     }
 
     @Test
