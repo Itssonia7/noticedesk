@@ -150,11 +150,14 @@ public class IssueMatchingAgent {
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
     /**
-     * Prompt resource under {@code prompts/} (v3: visible-defect issues with {@code kind}, written date-boundary
-     * checks, partial must cite the missing DECISIVE fact; v2 added one primary card + alternates and
-     * grounds-first splitting).
+     * Version of the live matching prompt (v3.1: boundary lines and {@code not_this_if_checked} written only for
+     * the chosen cards, {@code why} capped at 60 words of prose, DIN/signature and proper-officer guards; v3 added
+     * visible-defect issues with {@code kind}, written date-boundary checks and partial must cite the missing
+     * DECISIVE fact; v2 added one primary card + alternates and grounds-first splitting).
      */
-    public static final String PROMPT_VERSION = "issue_matching_v3";
+    public static final String PROMPT_VERSION = "issue_matching_v3_1";
+    /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
+    public static final String PROMPT_FILE = "issue_matching_v3";
 
     /** Issue flag: the primary card id is not in the active catalogue (the issue is downgraded to {@code none}). */
     public static final String FLAG_UNKNOWN_CARD_ID = "unknown_card_id";
@@ -475,12 +478,12 @@ public class IssueMatchingAgent {
 
     private String loadPromptTemplate() {
         try {
-            ClassPathResource resource = new ClassPathResource("prompts/" + PROMPT_VERSION + ".md");
+            ClassPathResource resource = new ClassPathResource("prompts/" + PROMPT_FILE + ".md");
             try (InputStream is = resource.getInputStream()) {
                 return new String(is.readAllBytes(), StandardCharsets.UTF_8);
             }
         } catch (Exception e) {
-            log.error("Failed to load " + PROMPT_VERSION + ".md prompt resource", e);
+            log.error("Failed to load " + PROMPT_FILE + ".md prompt resource", e);
             return "Compare notice OCR text against issue cards and return JSON.";
         }
     }

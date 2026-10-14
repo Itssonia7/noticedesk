@@ -135,7 +135,7 @@ class HardCostCapTest {
         assertEquals(0, new BigDecimal("20").compareTo(guard.noticeCapFor(BigDecimal.ZERO)));
 
         NoticeCallBudget budget = new NoticeCallBudget(Integer.MAX_VALUE, noticeCap, pricing);
-        // Sonnet matching at max_tokens 8000: output alone is INR 7.04 > 6.81
+        // Sonnet matching at max_tokens 12000: output alone is INR 10.56 > 6.81
         MatchingResult r = matcher().matchNoticeWithOcrText("synthetic notice", "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget);
 
         assertTrue(r.flags().contains(IssueMatchingAgent.FLAG_COST_CAP), r.flags().toString());
@@ -168,16 +168,17 @@ class HardCostCapTest {
     @Test
     void matchingRetry_isCheckedAndRefused() {
         Mockito.when(llm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
-                .thenReturn(new LlmResponse("", SONNET, "anthropic", 1000, 8000, "max_tokens", 0, 0, LlmResponse.FAILURE_MAX_TOKENS));
-        // first call worst case ~INR 7.05 fits INR 10; it costs ~INR 7.22; retry at 16000 (INR 14.08) does not fit
-        NoticeCallBudget budget = budget("10", "0");
+                .thenReturn(new LlmResponse("", SONNET, "anthropic", 1000, 12000, "max_tokens", 0, 0, LlmResponse.FAILURE_MAX_TOKENS));
+        // first call (max_tokens 12000) worst case ~INR 10.6 fits INR 15; it costs ~INR 10.74; the retry at 20000
+        // (output alone INR 17.60) does not fit the remaining ~INR 4.26 and is not made
+        NoticeCallBudget budget = budget("15", "0");
 
         MatchingResult r = matcher().matchNoticeWithOcrText("synthetic notice", "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget);
 
         assertTrue(r.flags().contains(IssueMatchingAgent.FLAG_COST_CAP), r.flags().toString());
-        Mockito.verify(llm, Mockito.times(1)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(SONNET), Mockito.eq(8000),
+        Mockito.verify(llm, Mockito.times(1)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(SONNET), Mockito.eq(12000),
                 Mockito.any(), Mockito.anyBoolean());
-        Mockito.verify(llm, Mockito.never()).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.eq(16000),
+        Mockito.verify(llm, Mockito.never()).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.eq(20000),
                 Mockito.any(), Mockito.anyBoolean());
     }
 

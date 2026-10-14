@@ -71,8 +71,8 @@ public class AppProperties {
         // Per-agent max_tokens. A thinking model spends output tokens on thinking before the JSON,
         // so the cap must leave room for both. A max_tokens stop is retried once with the *Retry cap.
         // Integer so an empty env var binds to null and falls back to the default below.
-        private Integer maxTokensMatching = 8000;
-        private Integer maxTokensMatchingRetry = 16000;
+        private Integer maxTokensMatching = 12000;
+        private Integer maxTokensMatchingRetry = 20000;
         private Integer maxTokensPartialDrafting = 16000;
         private Integer maxTokensPartialDraftingRetry = 24000;
         private Integer maxTokensNewIssue = 16000;
@@ -111,7 +111,7 @@ public class AppProperties {
         /** max_tokens for a v7 agent key; {@code retry} = the higher cap used after a max_tokens stop. */
         public int maxTokensForAgent(String agent, boolean retry) {
             return switch (agent) {
-                case "matching" -> orDefault(retry ? maxTokensMatchingRetry : maxTokensMatching, retry ? 16000 : 8000);
+                case "matching" -> orDefault(retry ? maxTokensMatchingRetry : maxTokensMatching, retry ? 20000 : 12000);
                 case "partial_drafting" -> orDefault(retry ? maxTokensPartialDraftingRetry : maxTokensPartialDrafting, retry ? 24000 : 16000);
                 case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 24000 : 16000);
                 case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 24000 : 16000);

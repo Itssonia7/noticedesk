@@ -42,7 +42,8 @@ class CacheAwareCostEstimateTest {
     private static final String SONNET = "claude-sonnet-5-5";
     private static final String OPUS = "claude-opus-5-5";
     private static final int CATALOGUE_TOKENS = 83_000;
-    private static final int MATCHING_MAX_TOKENS = 8000;
+    /** application.yml default since prompt v3.1 (the matcher sends it; the estimate below must follow it). */
+    private static final int MATCHING_MAX_TOKENS = 12000;
     /** ~270 real cards: ~330k characters. */
     private static final String CATALOGUE = "C".repeat(330_000);
     private static final String MATCHING_JSON = """
@@ -89,10 +90,11 @@ class CacheAwareCostEstimateTest {
         assertEquals("cache_write", first.prefixPricing());
         assertFalse(first.prefixMeasured());
         assertEquals(NoticeCallBudget.estimateInputTokens(prompt.prefixChars()), first.prefixTokens());   // 165,003 at 2 chars/token
-        assertInr("7.04", first.outputInr());                     // 8,000 x $10/M x 88
+        assertEquals(MATCHING_MAX_TOKENS, props.getLlm().maxTokensForAgent("matching", false), "yml default");
+        assertInr("10.56", first.outputInr());                    // 12,000 x $10/M x 88
         assertInr("1.76", first.perCallInr());                    // 20,006 chars -> 10,003 tokens x $2/M x 88 = 1.7605
         assertInr("36.30", first.prefixInr());                    // 165,003 x $2.50/M x 88
-        assertInr("45.10", first.totalInr());
+        assertInr("48.62", first.totalInr());
 
         // the API answers with the catalogue's real size as cache_creation tokens
         NoticeCallBudget budget = new NoticeCallBudget(Integer.MAX_VALUE, null, pricing);
@@ -106,8 +108,8 @@ class CacheAwareCostEstimateTest {
         assertEquals(CATALOGUE_TOKENS, second.prefixTokens());
         assertInr("1.46", second.prefixInr());                    // 83,000 x $0.20/M x 88 = 1.4608
         assertInr("1.76", second.perCallInr());
-        assertInr("7.04", second.outputInr());
-        assertInr("10.26", second.totalInr());
+        assertInr("10.56", second.outputInr());
+        assertInr("13.78", second.totalInr());
 
         // a different model has its own cache; a different catalogue is a different prefix
         assertEquals("cache_write", NoticeCallBudget.estimate(pricing, Prompt.of(OPUS, "rules\n" + CATALOGUE, "x"), 100).prefixPricing());
@@ -119,7 +121,10 @@ class CacheAwareCostEstimateTest {
         assertNull(NoticeCallBudget.estimate(pricing, Prompt.of("unpriced-model", CATALOGUE, "x"), 100));
     }
 
-    /** The reported figures: Sonnet matching on an 83,000-token catalogue, max_tokens 8000, per-call part empty. */
+    /**
+     * The reported figures (Sonnet matching on an 83,000-token catalogue, per-call part empty), at the v3.1
+     * max_tokens of 12000 (was 8000: Rs 25.30 cold / Rs 8.50 warm).
+     */
     @Test
     void reportedWorstCases_for83kTokenCatalogue() {
         Prompt prompt = Prompt.of(SONNET, CATALOGUE, "");
@@ -130,25 +135,25 @@ class CacheAwareCostEstimateTest {
         assertEquals("cache_write", first.prefixPricing());
         assertTrue(first.prefixMeasured());
         assertInr("18.26", first.prefixInr());                    // 83,000 x $2.50/M x 88
-        assertInr("25.30", first.totalInr());                     // + 7.04 output
+        assertInr("28.82", first.totalInr());                     // + 10.56 output
 
         pricing.promptCache().recordUse(SONNET, prompt.prefixHash(), CATALOGUE_TOKENS);
         Estimate next = NoticeCallBudget.estimate(pricing, prompt, MATCHING_MAX_TOKENS);
         assertEquals("cache_read", next.prefixPricing());
         assertInr("1.46", next.prefixInr());
-        assertInr("8.50", next.totalInr());
+        assertInr("12.02", next.totalInr());
     }
 
-    /** A cap of INR 12 refuses the first matching call on the 83k-token catalogue but allows the second. */
+    /** A cap of INR 15 refuses the first matching call on the 83k-token catalogue but allows the second. */
     @Test
-    void capOf12_refusesFirstMatchingCall_allowsSecondWithWarmCatalogue() {
+    void capOf15_refusesFirstMatchingCall_allowsSecondWithWarmCatalogue() {
         IssueMatchingAgent matcher = matcher();
         Mockito.when(llm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(SONNET), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
                 .thenReturn(new LlmResponse(MATCHING_JSON, SONNET, "anthropic", 600, 1500, "end_turn", CATALOGUE_TOKENS, 0))
                 .thenReturn(new LlmResponse(MATCHING_JSON, SONNET, "anthropic", 600, 1500, "end_turn", 0, CATALOGUE_TOKENS));
 
-        // first notice of the process: cold catalogue, character estimate at cache-write (~INR 36 + 7.04): refused, no call
-        NoticeCallBudget first = new NoticeCallBudget(Integer.MAX_VALUE, inr("12"), pricing);
+        // first notice of the process: cold catalogue, character estimate at cache-write (~INR 36 + 10.56): refused, no call
+        NoticeCallBudget first = new NoticeCallBudget(Integer.MAX_VALUE, inr("15"), pricing);
         MatchingResult r1 = matcher.matchNoticeWithOcrText("synthetic notice text", "scn_73", UUID.randomUUID(), UUID.randomUUID(), first);
         assertTrue(r1.flags().contains(IssueMatchingAgent.FLAG_COST_CAP), r1.flags().toString());
         assertTrue(first.lastRefusal().contains("worst case"), first.lastRefusal());
@@ -161,9 +166,9 @@ class CacheAwareCostEstimateTest {
         // recorded spend: 600 in x $2 + 1,500 out x $10 + 83,000 cache write x $2.50 per M = $0.2237 x 88
         assertInr("19.69", big.spentInr());
 
-        // the next notice under the INR 12 cap: catalogue priced at cache-read with the measured 83,000 tokens
-        // (1.46) + output 7.04 + the notice text at the input price: allowed, call made
-        NoticeCallBudget second = new NoticeCallBudget(Integer.MAX_VALUE, inr("12"), pricing);
+        // the next notice under the INR 15 cap: catalogue priced at cache-read with the measured 83,000 tokens
+        // (1.46) + output 10.56 (max_tokens 12000 from application.yml) + the notice text at the input price: allowed, call made
+        NoticeCallBudget second = new NoticeCallBudget(Integer.MAX_VALUE, inr("15"), pricing);
         MatchingResult r3 = matcher.matchNoticeWithOcrText("synthetic notice text", "scn_73", UUID.randomUUID(), UUID.randomUUID(), second);
         assertFalse(r3.flags().contains(IssueMatchingAgent.FLAG_COST_CAP), r3.flags().toString());
         assertEquals(0, second.budgetRefusals());

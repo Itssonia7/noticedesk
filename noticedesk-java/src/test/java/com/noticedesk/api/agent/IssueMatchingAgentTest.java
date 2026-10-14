@@ -381,7 +381,7 @@ class IssueMatchingAgentTest {
     void maxTokensStop_isRetriedOnceWithHigherCap_andBothCallsAreLogged() {
         LlmProvider mockLlm = Mockito.mock(LlmProvider.class);
         Mockito.when(mockLlm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
-                .thenReturn(failedResponse("max_tokens", LlmResponse.FAILURE_MAX_TOKENS, 8000))
+                .thenReturn(failedResponse("max_tokens", LlmResponse.FAILURE_MAX_TOKENS, 12000))
                 .thenReturn(new LlmResponse(VALID_JSON, "claude-sonnet-5-5", "anthropic", 1000, 3000, "end_turn", 0, 9000));
         ApiUsageLogService usage = Mockito.mock(ApiUsageLogService.class);
 
@@ -391,12 +391,12 @@ class IssueMatchingAgentTest {
         assertFalse(result.flags().contains("matching_failed"));
         assertEquals("FAKE-SCN-1", result.notice().noticeNumber());
         Mockito.verify(mockLlm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq("claude-sonnet-5-5"),
-                Mockito.eq(8000), Mockito.eq("low"), Mockito.eq(true));
+                Mockito.eq(12000), Mockito.eq("low"), Mockito.eq(true));
         Mockito.verify(mockLlm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq("claude-sonnet-5-5"),
-                Mockito.eq(16000), Mockito.eq("low"), Mockito.eq(true));
+                Mockito.eq(20000), Mockito.eq("low"), Mockito.eq(true));
         Mockito.verify(usage).logCall(Mockito.any(), Mockito.any(), Mockito.eq("matching"), Mockito.eq(1), Mockito.any(), Mockito.any());
         Mockito.verify(usage).logCall(Mockito.any(), Mockito.any(), Mockito.eq("matching"), Mockito.eq(2), Mockito.any(), Mockito.any());
-        assertEquals(11000, result.outputTokens(), "output tokens of the failed attempt are counted too");
+        assertEquals(15000, result.outputTokens(), "output tokens of the failed attempt are counted too");
     }
 
     @Test

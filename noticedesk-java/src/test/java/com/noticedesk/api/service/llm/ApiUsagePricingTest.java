@@ -71,7 +71,9 @@ class ApiUsagePricingTest {
         if (System.getenv("LLM_EFFORT_PARTIAL_DRAFTING") == null) assertEquals("medium", llm.effortForAgent("partial_drafting"));
         if (System.getenv("LLM_EFFORT_NEW_ISSUE") == null) assertEquals("medium", llm.effortForAgent("new_issue"));
         if (System.getenv("LLM_EFFORT_HIGH_STAKES") == null) assertEquals("medium", llm.effortForAgent("high_stakes"));
-        if (System.getenv("LLM_MAX_TOKENS_MATCHING") == null) assertEquals(8000, llm.maxTokensForAgent("matching", false));
+        // prompt v3.1 writes boundary lines and not_this_if_checked (live average ~5,000 output tokens; one notice hit 8,000)
+        if (System.getenv("LLM_MAX_TOKENS_MATCHING") == null) assertEquals(12000, llm.maxTokensForAgent("matching", false));
+        if (System.getenv("LLM_MAX_TOKENS_MATCHING_RETRY") == null) assertEquals(20000, llm.maxTokensForAgent("matching", true));
         assertTrue(llm.maxTokensForAgent("matching", true) > llm.maxTokensForAgent("matching", false));
         for (String a : List.of("partial_drafting", "new_issue", "high_stakes")) {
             assertTrue(llm.maxTokensForAgent(a, true) > llm.maxTokensForAgent(a, false), a);
@@ -85,7 +87,9 @@ class ApiUsagePricingTest {
     void emptyMaxTokens_fallsBackToDefault() {
         AppProperties.Llm llm = new AppProperties.Llm();
         llm.setMaxTokensMatching(null);
-        assertEquals(8000, llm.maxTokensForAgent("matching", false));
+        llm.setMaxTokensMatchingRetry(null);
+        assertEquals(12000, llm.maxTokensForAgent("matching", false));
+        assertEquals(20000, llm.maxTokensForAgent("matching", true));
     }
 
     @Test

@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 13-10-2026 (matching prompt v3: visible-defect issues, written date-boundary checks)
+Last updated: 14-10-2026 (matching prompt v3.1: written checks trimmed to the chosen cards; matching max_tokens 12000/20000)
 
 ---
 
@@ -327,9 +327,41 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   "Defect issues: returned=N | expected=M", the expected count read from the optional
   `$PRIVATE_SEED_DIR/defect_cards.txt` (one card id per line; absent = skipped). See `docs/PRIVATE_DATA.md`.
 
+## (b12) Matching prompt v3.1: written checks trimmed to the chosen cards; max_tokens 12000/20000 (14-10-2026)
+
+- Live finding on 29 private notices (prompt v3): output tokens doubled, from about 2,000 to about 5,000 per
+  notice on average, because v3 made the model write a boundary line for EVERY candidate card and a
+  `not_this_if_checked` entry for the alternates too. One notice hit the 8,000 max_tokens cap and its retry at
+  16,000 was refused by the per-notice cost cap, so that notice got no match. Accuracy improved under v3, so
+  the mechanism stays and only the volume is cut.
+- `prompts/issue_matching_v3.md` edited in place as **v3.1** (heading "(v3.1)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_1`, the resource name stays `issue_matching_v3` via the new `PROMPT_FILE` constant):
+  - Date-boundary lines (`<fact>: <notice value> vs <card boundary> -> satisfied|not satisfied`) are written
+    ONLY for the chosen primary card and for each listed alternate (at most 2), and only for boundaries that
+    exist on those cards; candidates considered and rejected get no lines. A primary still never carries a
+    "not satisfied" line.
+  - `not_this_if_checked` holds only the primary card's rules, one short entry per rule
+    (`<rule in 12 words or fewer> - triggered|not triggered|cannot test`); no entries for alternates.
+  - `why` is at most 60 words of prose plus the boundary lines; "Do not restate the notice; cite paragraph
+    numbers."
+  - Visible-defect guard: a defect ground is raised only when the document itself shows the defect; a header
+    with a DIN, a reference number and a signed or digitally signed block has no DIN/signature defect; a
+    "proper officer" defect needs the officer's designation in the document AND a card stating the monetary
+    limit or jurisdiction rule it breaches.
+  - Self-check items 5 to 7 and the JSON example follow the trimmed form.
+- `application.yml`: `max-tokens-matching` 12000 (was 8000) and `max-tokens-matching-retry` 20000 (was 16000),
+  env vars `LLM_MAX_TOKENS_MATCHING` / `LLM_MAX_TOKENS_MATCHING_RETRY`; the `AppProperties` fallbacks match.
+  `NoticeCallBudget` is unchanged: its worst case prices the full max_tokens of the call, so the matching
+  estimate moves automatically from Rs 7.04 to Rs 10.56 of output (Sonnet, Rs 88 per USD): 83k-token
+  catalogue cold Rs 28.82 (was 25.30), warm Rs 12.02 (was 8.50); the retry at 20,000 prices Rs 17.60 of output.
+- Tests: `MatchingPromptRulesTest` asserts the v3.1 wording (primary-only `not_this_if_checked`, boundary
+  lines for the primary and alternates only, the DIN/signature guard, the "proper officer" guard, the 60-word
+  cap on the example's `why`); `ApiUsagePricingTest`, `HardCostCapTest`, `CacheAwareCostEstimateTest` and
+  `IssueMatchingAgentTest` use the new max_tokens (the warm-catalogue cap test now runs at Rs 15).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`): **315 tests, 0 failures, 0 errors** on 13-10-2026 after prompt v3 (no live API
+- Offline unit suite (`mvn test`): **316 tests, 0 failures, 0 errors** on 14-10-2026 after prompt v3.1 (no live API
   calls; all models and IndianKanoon mocked or served from local fixtures), plus the Spring context test
   `NoticedeskApiApplicationTests`, which needs the local Postgres (pgvector) and was not run in that
   container. A plain `mvn test` no longer modifies `output/`. V23 to V28 applied on Postgres 16.

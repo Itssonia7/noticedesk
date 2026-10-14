@@ -20,14 +20,14 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Rules of the live matching prompt (prompts/issue_matching_v3.md: grounds-first splitting, one primary card
- * plus alternates, decisive-fact status, visible-defect grounds with a kind, written date-boundary checks)
- * and the testbench answer keys that follow the splitting rules (live runs split notices 001 and 010
- * differently from run to run). No model calls.
+ * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.1: grounds-first splitting, one
+ * primary card plus alternates, decisive-fact status, visible-defect grounds with a kind, written date-boundary
+ * checks for the chosen cards only, primary-only not_this_if_checked, capped why) and the testbench answer keys
+ * that follow the splitting rules (live runs split notices 001 and 010 differently from run to run). No model calls.
  */
 class MatchingPromptRulesTest {
 
-    private static final String PROMPT = "/prompts/" + com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION + ".md";
+    private static final String PROMPT = "/prompts/" + com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE + ".md";
 
     /** Interest / penalty provisions that are consequential to a main demand unless an exception applies. */
     private static final Pattern INTEREST_OR_PENALTY = Pattern.compile("(?i)Section\\s*(50|73\\(9\\)|74\\(9\\)|122|125|129|171\\(3A\\))\\b");
@@ -42,7 +42,8 @@ class MatchingPromptRulesTest {
 
     @Test
     void agentLoadsTheV3Prompt_andV1V2StayUntouched() throws IOException {
-        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3_1", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.1 is edited in place in the v3 file");
         String v1 = resource("/prompts/issue_matching_v1.md");
         assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
         assertFalse(v1.contains("alternates"));
@@ -52,7 +53,39 @@ class MatchingPromptRulesTest {
         assertFalse(v2.contains("\"kind\""), "v2 has no issue kind");
         assertFalse(v2.contains("Step 1b"), "v2 has no visible-defect step");
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3)"));
+        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.1)"));
+        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.1 version");
+    }
+
+    /**
+     * v3.1 trims the written checks to the chosen cards (live: v3 doubled output tokens, 2k to 5k, one max_tokens
+     * stop) and guards two over-eager defect grounds. The mechanism (written boundary lines, no primary with a
+     * "not satisfied" line) stays.
+     */
+    @Test
+    void v3_1_writtenChecksOnlyForTheChosenCards_whyCapped_defectGuards() throws IOException {
+        String prompt = resource(PROMPT);
+        // (a) boundary lines for the primary and the listed alternates only; rejected candidates get none
+        assertTrue(prompt.contains("WRITE lines only for the chosen primary card and for each listed alternate (at most 2), and only for boundaries that actually exist on those cards"));
+        assertTrue(prompt.contains("Candidates that were considered and rejected get no lines."));
+        assertFalse(prompt.contains("For EVERY candidate card (primary and alternates)"), "v3 wording: lines for every candidate");
+        assertTrue(prompt.contains("A card with any boundary line that reads \"not satisfied\" can NEVER be the primary"));
+        // (b) not_this_if_checked: the primary card's rules only, one short entry per rule
+        assertTrue(prompt.contains("`not_this_if_checked` lists ONLY the primary card's NOT THIS IF rules, one short entry per rule in the form `<rule in 12 words or fewer> - triggered|not triggered|cannot test`"));
+        assertTrue(prompt.contains("No entries for alternates or for rejected candidates."));
+        assertFalse(prompt.contains("for the primary (and the alternates) under `not_this_if_checked`"), "v3 wording: rules of the alternates too");
+        // (c) why: 60 words of prose plus the boundary lines; cite paragraphs instead of restating the notice
+        assertTrue(prompt.contains("`why` is at most 60 words of prose plus the boundary lines of section 5"));
+        assertTrue(prompt.contains("Do not restate the notice; cite paragraph numbers."));
+        // (d) defect guards: DIN / signature present in the header; "proper officer" only with a stated designation and a card rule
+        assertTrue(prompt.contains("A defect ground is raised only when the document itself shows the defect; a department header that carries a DIN, a reference number and a signed or digitally signed block has no DIN/signature defect."));
+        assertTrue(prompt.contains("Do not raise a \"proper officer\" defect unless the document states the officer's designation AND the monetary limit or jurisdiction rule the designation breaches is stated on a card."));
+        // (e) self-check items follow (a) and (b)
+        assertTrue(prompt.contains("every NOT THIS IF rule was tested and listed in `not_this_if_checked` (one short entry per rule; no entries for alternates)"));
+        assertTrue(prompt.contains("boundary of the primary card and of each listed alternate was tested and written out in `why`"));
+        assertTrue(prompt.contains("rejected candidates have no boundary lines"));
+        assertFalse(prompt.contains("boundary of every candidate card was tested"), "v3 self-check wording");
+        assertTrue(prompt.contains("`why` is at most 60 words of prose plus its boundary lines and cites paragraph numbers"));
     }
 
     @Test
@@ -177,6 +210,27 @@ class MatchingPromptRulesTest {
         assertTrue(example.contains("-> not satisfied (alternate only)"));
         assertTrue(example.contains("document date: 02.05.2024 vs on or after 08.11.2019 -> satisfied"));
         assertFalse(example.contains("\"header\": ["), "a header-only defect has no para_map entry");
+        // v3.1 trimmed form: short primary-only not_this_if_checked entries, paragraph citations instead of restating
+        assertTrue(example.contains("\"not_this_if_checked\": [\"Not this if period on or after 01.01.2022 (use CARD-002) - not triggered\"]"));
+        assertTrue(example.contains("\"not_this_if_checked\": [\"Not this if issued by a State GST authority - not triggered\"]"));
+        assertFalse(example.contains("CARD-002: Not this if"), "no not_this_if_checked entry for the alternate");
+        assertTrue(example.contains("(paras 3, 3.1, 4)"));
+        for (String why : whyValues(example)) {
+            // sentences end in ". " (dates like 02.05.2024 have no space after the dot); boundary lines carry "->"
+            int words = 0;
+            for (String sentence : why.split("\\.\\s+")) {
+                if (!sentence.contains("->") && !sentence.isBlank()) words += sentence.trim().split("\\s+").length;
+            }
+            assertTrue(words <= 60, "why prose must be 60 words or fewer, was " + words + ": " + why);
+        }
+    }
+
+    private static java.util.List<String> whyValues(String example) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = Pattern.compile("\"why\": \"((?:[^\"\\\\]|\\\\.)*)\"").matcher(example);
+        while (m.find()) out.add(m.group(1));
+        assertEquals(2, out.size(), "two why values in the example");
+        return out;
     }
 
     @Test
