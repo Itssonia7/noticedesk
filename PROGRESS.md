@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 14-10-2026 (matching prompt v3.2: status decided on notice-visible facts only; client facts become a confirm-with-client list in the partner note)
+Last updated: 14-10-2026 (matching prompt v3.3: a card's stage is tested against the response the input document calls for, not against the input document's own name)
 
 ---
 
@@ -404,10 +404,40 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   the one issue with facts, none for the other, nothing in client-facing sections), `MatchingEvalCardScoreTest`
   (count line and set totals), `MatchingPromptRulesTest` (v3.2 wording, example).
 
+## (b14) Matching prompt v3.3: card stage tested against the response the input document calls for (14-10-2026)
+
+- **Live finding (35 private notices)**: the catalogue cards describe the stage of the FIRM'S RESPONSE (an APL-01
+  appeal, a reply to an SCN, a REG-21 revocation application, an RFD-09 reply), while the input document is the
+  DEPARTMENT'S document that the response answers. The model read a card's "APL-01 appeal stage" and wrote
+  "contradicted - the document is the DRC-07 order", downgrading a correct card to partial.
+- `prompts/issue_matching_v3.md` edited in place as **v3.3** (heading "(v3.3)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_3`; the resource name stays `issue_matching_v3`). Prompt-only change; no parser, output or
+  database change.
+  - New section "Stage of the response" right before the status rules, with an input-document to response-stage
+    table: DRC-07 order -> APL-01 appeal; RFD-06 refund rejection order -> APL-01 appeal; REG-19 cancellation
+    order -> REG-21 revocation application or APL-01 appeal; MOV-09 penalty order -> APL-01 appeal; REG-17 SCN ->
+    REG-18 reply; RFD-08 -> RFD-09 reply; ASMT-10 -> ASMT-11 reply; DRC-01A -> Part B reply; DRC-01 / Section
+    73/74/74A SCN -> reply to the SCN; DRC-22 attachment -> Rule 159(5) objection; recovery letter / DRC-13 ->
+    representation.
+  - Rule: a card's STAGES value and any stage word in its DECISIVE text ("appeal", "APL-01", "reply", "RFD-09",
+    "REG-21", "objection", "representation") describe the RESPONSE the firm will draft and are satisfied when the
+    input document is the one that response answers per the table. The stage is never "contradicted" merely
+    because the input document is the order, notice or intimation itself; it is contradicted only when the input
+    calls for a different response (an appeal card against a DRC-01 SCN that still awaits a reply; a reply card
+    against a confirmed order). Sibling cards that differ only by response stage are picked by the table, the
+    other sibling goes to `alternates`. The test is written in `why` as
+    `stage: <input document> -> <response> vs card <stage> -> satisfied|not satisfied`.
+  - The "Stage" bullet of the status rules now names the response stage as the DECISIVE fact tested (the input
+    document's form still comes from its form name and heading). Self-check gains "Every stage test was made
+    against the response stage from the table, not against the input document's own name". The JSON example
+    carries a stage line.
+- Tests: `MatchingPromptRulesTest` (version, section placement, table header and rows, rule wording, example and
+  self-check lines; the v3.2 stage wording is asserted gone).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`): **322 tests, 0 failures, 0 errors** on 14-10-2026 after prompt v3.2 (316 after
-  v3.1 the same day; no live API
+- Offline unit suite (`mvn test`): **323 tests, 0 failures, 0 errors** on 14-10-2026 after prompt v3.3 (322 after
+  v3.2 and 316 after v3.1 the same day; no live API
   calls; all models and IndianKanoon mocked or served from local fixtures), plus the Spring context test
   `NoticedeskApiApplicationTests`, which needs the local Postgres (pgvector) and was not run in that
   container. A plain `mvn test` no longer modifies `output/`. V23 to V28 applied on Postgres 16.

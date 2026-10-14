@@ -20,11 +20,12 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.2: grounds-first splitting, one
+ * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.3: grounds-first splitting, one
  * primary card plus alternates, status decided on notice-visible DECISIVE facts only with the card's CLIENT facts
- * returned as client_facts_to_confirm, visible-defect grounds with a kind, written date-boundary checks for the
- * chosen cards only, primary-only not_this_if_checked, capped why) and the testbench answer keys that follow the
- * splitting rules (live runs split notices 001 and 010 differently from run to run). No model calls.
+ * returned as client_facts_to_confirm, a card's stage tested against the response the input document calls for,
+ * visible-defect grounds with a kind, written date-boundary checks for the chosen cards only, primary-only
+ * not_this_if_checked, capped why) and the testbench answer keys that follow the splitting rules (live runs split
+ * notices 001 and 010 differently from run to run). No model calls.
  */
 class MatchingPromptRulesTest {
 
@@ -43,8 +44,8 @@ class MatchingPromptRulesTest {
 
     @Test
     void agentLoadsTheV3Prompt_andV1V2StayUntouched() throws IOException {
-        assertEquals("issue_matching_v3_2", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
-        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.2 is edited in place in the v3 file");
+        assertEquals("issue_matching_v3_3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.3 is edited in place in the v3 file");
         String v1 = resource("/prompts/issue_matching_v1.md");
         assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
         assertFalse(v1.contains("alternates"));
@@ -54,9 +55,65 @@ class MatchingPromptRulesTest {
         assertFalse(v2.contains("\"kind\""), "v2 has no issue kind");
         assertFalse(v2.contains("Step 1b"), "v2 has no visible-defect step");
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.2)"));
-        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.2 version");
-        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.2 version");
+        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.3)"));
+        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.3 version");
+        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.3 version");
+        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.3 version");
+    }
+
+    /**
+     * v3.3 (live, 35 private notices: the cards describe the stage of the FIRM'S RESPONSE, the input document is the
+     * DEPARTMENT'S document that the response answers; the model read a card's "APL-01 appeal stage" and wrote
+     * "contradicted - the document is the DRC-07 order", downgrading a correct card to partial). The prompt now carries
+     * an input-document to response-stage table, tests a card's stage against the response the input calls for, and
+     * writes the test out in why.
+     */
+    @Test
+    void v3_3_cardStageIsTestedAgainstTheResponseTheInputDocumentCallsFor() throws IOException {
+        String prompt = resource(PROMPT);
+        // the section sits right before the status rules
+        int section = prompt.indexOf("### Stage of the response");
+        int statusRules = prompt.indexOf("3. **Status rules (apply exactly).**");
+        assertTrue(section > 0 && statusRules > section, "the stage section precedes the status rules");
+        assertTrue(prompt.indexOf("2. **One primary card per issue, up to two alternates.**") < section);
+        assertTrue(prompt.contains("The catalogue cards describe the stage of the FIRM'S RESPONSE"));
+        assertTrue(prompt.contains("The input document is the DEPARTMENT'S document that this response answers."));
+        // (a) the table header and every row of the live finding
+        assertTrue(prompt.contains("| Input document (the department's) | Response stage the card describes |"));
+        for (String row : new String[]{
+                "| DRC-07 order (summary of order under Section 73 / 74 / 74A) | APL-01 appeal |",
+                "| RFD-06 refund rejection order | APL-01 appeal |",
+                "| REG-19 cancellation order | REG-21 revocation application, or APL-01 appeal |",
+                "| MOV-09 penalty order (Section 129) | APL-01 appeal |",
+                "| REG-17 SCN for cancellation of registration | REG-18 reply to the SCN |",
+                "| RFD-08 refund rejection notice | RFD-09 reply |",
+                "| ASMT-10 scrutiny notice | ASMT-11 reply |",
+                "| DRC-01A intimation (Rule 142(1A)) | DRC-01A Part B reply |",
+                "| DRC-01 / Section 73 / 74 / 74A SCN | reply to the SCN (DRC-06) |",
+                "| DRC-22 provisional attachment (Section 83) | Rule 159(5) objection |",
+                "| Recovery letter / DRC-13 garnishee | representation to the proper officer |"}) {
+            assertTrue(prompt.contains(row), row);
+        }
+        // (b) the rule: STAGES and stage words describe the response; satisfied per the table; never contradicted by the input's own name
+        assertTrue(prompt.contains("A card's STAGES value and any stage word in its DECISIVE text (\"appeal\", \"APL-01\", \"reply\", \"RFD-09\", \"REG-21\", \"objection\", \"representation\") describe the RESPONSE the firm will draft."));
+        assertTrue(prompt.contains("They are satisfied when the input document is the one that this response answers per the table."));
+        assertTrue(prompt.contains("The stage is NEVER \"contradicted\" merely because the input document is the order, notice or intimation itself"));
+        assertTrue(prompt.contains("a card for an APL-01 appeal is satisfied by a DRC-07 order"));
+        // (c) contradicted only when the input calls for a different response
+        assertTrue(prompt.contains("The stage is contradicted only when the input document calls for a DIFFERENT response per the table"));
+        assertTrue(prompt.contains("a card for an APL-01 appeal when the input is a DRC-01 SCN that still awaits a reply, or a reply card when the input is already a confirmed order"));
+        // (d) sibling cards that differ only by stage
+        assertTrue(prompt.contains("When two sibling cards differ only by response stage"));
+        assertTrue(prompt.contains("pick the primary by the table from the input document's form name and heading, and put the other sibling in `alternates`"));
+        // (e) the written stage test, in the rule, in the example and in the self-check
+        assertTrue(prompt.contains("`stage: <input document> -> <response> vs card <stage> -> satisfied|not satisfied`"));
+        assertTrue(prompt.contains("`stage: DRC-07 order -> APL-01 appeal vs card APL-01 appeal -> satisfied`"));
+        assertTrue(prompt.contains("stage: DRC-01 SCN -> reply vs card reply -> satisfied. tax period:"));
+        // the status-rule Stage bullet now tests the response stage, and the self-check carries the new line
+        assertTrue(prompt.contains("The stage test counts as a DECISIVE fact and is made against that RESPONSE stage, never against the input document's own name"));
+        assertFalse(prompt.contains("a card whose STAGES do not include the document's stage is at most an alternate"), "v3.2 wording: the input document's stage");
+        assertFalse(prompt.contains("a card whose DECISIVE text names a different form or stage cannot be"), "v3.2 wording");
+        assertTrue(prompt.contains("Every stage test was made against the response stage from the table, not against the input document's own name"));
     }
 
     /**

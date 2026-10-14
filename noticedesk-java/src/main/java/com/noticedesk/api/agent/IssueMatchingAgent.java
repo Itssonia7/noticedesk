@@ -160,14 +160,16 @@ public class IssueMatchingAgent {
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
     /**
-     * Version of the live matching prompt (v3.2: status decided on notice-visible DECISIVE facts only, the card's
-     * CLIENT facts returned as {@code client_facts_to_confirm}, an untestable NOT THIS IF rule no longer lowers the
-     * status; v3.1: boundary lines and {@code not_this_if_checked} written only for the chosen cards, {@code why}
-     * capped at 60 words of prose, DIN/signature and proper-officer guards; v3 added visible-defect issues with
-     * {@code kind}, written date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one
-     * primary card + alternates and grounds-first splitting).
+     * Version of the live matching prompt (v3.3: a card's stage is tested against the RESPONSE the input document
+     * calls for, per an input-document to response-stage table, never against the input document's own name;
+     * v3.2: status decided on notice-visible DECISIVE facts only, the card's CLIENT facts returned as
+     * {@code client_facts_to_confirm}, an untestable NOT THIS IF rule no longer lowers the status; v3.1: boundary
+     * lines and {@code not_this_if_checked} written only for the chosen cards, {@code why} capped at 60 words of
+     * prose, DIN/signature and proper-officer guards; v3 added visible-defect issues with {@code kind}, written
+     * date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one primary card + alternates
+     * and grounds-first splitting).
      */
-    public static final String PROMPT_VERSION = "issue_matching_v3_2";
+    public static final String PROMPT_VERSION = "issue_matching_v3_3";
     /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
     public static final String PROMPT_FILE = "issue_matching_v3";
 
