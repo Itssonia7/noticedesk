@@ -96,7 +96,7 @@ class LlmFixtureReplayTest {
 
         MatchingResult r = matcher().matchNoticeWithOcrText("synthetic notice text", "scn_74", UUID.randomUUID(), UUID.randomUUID());
 
-        assertTrue(r.flags().isEmpty(), "no fallback flags: " + r.flags());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), r.flags(), "no fallback flags (pre-v3.4 fixture: only defect_checks_missing): " + r.flags());
         assertEquals("SCN/DL/2021-22/740", r.notice().noticeNumber());
         assertEquals(500000.0, r.notice().totalDemandAmount());
         assertEquals(1, r.issues().size());
@@ -123,7 +123,7 @@ class LlmFixtureReplayTest {
 
         MatchingResult r = matcher().matchNoticeWithOcrText("synthetic notice text", "scn_74", UUID.randomUUID(), UUID.randomUUID());
 
-        assertTrue(r.flags().isEmpty(), "quotes must be repaired, not a fallback: " + r.missingOrDoubtful());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), r.flags(), "quotes must be repaired, not a fallback: " + r.missingOrDoubtful());
         assertEquals("partial", r.issues().get(0).status());
         assertTrue(r.issues().get(0).why().contains("\"willful suppression\""), r.issues().get(0).why());
         assertEquals(1, server.callCount(), "a repairable response needs no retry");
@@ -135,7 +135,7 @@ class LlmFixtureReplayTest {
 
         MatchingResult r = matcher().matchNoticeWithOcrText("synthetic notice text", "scn_74", UUID.randomUUID(), UUID.randomUUID());
 
-        assertTrue(r.flags().isEmpty());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), r.flags(), "pre-v3.4 fixture: only defect_checks_missing");
         assertEquals(2, server.callCount());
         assertEquals(props.getLlm().maxTokensForAgent("matching", false), server.requests().get(0).path("max_tokens").asInt());
         assertEquals(props.getLlm().maxTokensForAgent("matching", true), server.requests().get(1).path("max_tokens").asInt());

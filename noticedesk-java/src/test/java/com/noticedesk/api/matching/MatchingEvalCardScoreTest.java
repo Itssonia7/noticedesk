@@ -279,6 +279,61 @@ class MatchingEvalCardScoreTest {
     }
 
     @Test
+    void v3_4_defectChecksLine_setCounts_andConsequentialGotColumn() throws Exception {
+        Map<String, com.noticedesk.api.agent.IssueMatchingAgent.DefectCheck> ten = new java.util.LinkedHashMap<>();
+        for (String name : com.noticedesk.api.agent.IssueMatchingAgent.DEFECT_CHECK_NAMES) {
+            ten.put(name, new com.noticedesk.api.agent.IssueMatchingAgent.DefectCheck("ok", "basis " + name));
+        }
+        ten.put("limitation", new com.noticedesk.api.agent.IssueMatchingAgent.DefectCheck("defect", "SCN 15.02.2024 vs deadline 31.01.2024 FY 2018-19"));
+        ten.put("non_speaking", new com.noticedesk.api.agent.IssueMatchingAgent.DefectCheck("cannot test", "last page cut off"));
+        ten.put("hearing", new com.noticedesk.api.agent.IssueMatchingAgent.DefectCheck("defect", "para 7: hearing NA"));
+
+        // compact line: check=result in the model's order, "cannot test" as one token, basis never printed
+        String line = MatchingEvalRunnerTest.defectChecksLine("notice_syn_09", ten);
+        assertEquals("  notice_syn_09 defect_checks: din_rfn=ok, signature=ok, limitation=defect, premature_74=ok, drc01a_missing=ok, "
+                + "hearing=defect, reply_time=ok, officer=ok, recovery_without_demand=ok, non_speaking=cannot_test", line);
+        assertFalse(line.contains("31.01.2024") || line.contains("cut off"), "the basis is not printed");
+        assertEquals("  notice_syn_09 defect_checks: (absent)", MatchingEvalRunnerTest.defectChecksLine("notice_syn_09", Map.of()));
+        assertEquals("  notice_syn_09 defect_checks: (absent)", MatchingEvalRunnerTest.defectChecksLine("notice_syn_09", null));
+        assertEquals("  n defect_checks: din_rfn=?", MatchingEvalRunnerTest.defectChecksLine("n",
+                Map.of("din_rfn", new com.noticedesk.api.agent.IssueMatchingAgent.DefectCheck("", ""))));
+
+        // set counts: present needs all ten entries; defect results counted per result
+        var withTen = new com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult(null, List.of(), Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0, ten);
+        assertTrue(MatchingEvalRunnerTest.defectChecksPresent(withTen));
+        assertEquals(2, MatchingEvalRunnerTest.defectResultsTotal(withTen));
+        Map<String, com.noticedesk.api.agent.IssueMatchingAgent.DefectCheck> nine = new java.util.LinkedHashMap<>(ten);
+        nine.remove("officer");
+        var withNine = new com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult(null, List.of(), Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0, nine);
+        assertFalse(MatchingEvalRunnerTest.defectChecksPresent(withNine));
+        assertEquals(2, MatchingEvalRunnerTest.defectResultsTotal(withNine));
+        var none = new com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult(null, List.of(), Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0);
+        assertFalse(MatchingEvalRunnerTest.defectChecksPresent(none));
+        assertEquals(0, MatchingEvalRunnerTest.defectResultsTotal(none));
+        assertFalse(MatchingEvalRunnerTest.defectChecksPresent(null));
+        assertEquals(0, MatchingEvalRunnerTest.defectResultsTotal(null));
+
+        // a consequential issue names its parent in the got column and is scored like a demand issue
+        MatchedIssue demand = new MatchedIssue(1, "full", "demand", List.of("NDK-006"), List.of(), "w", List.of(), Map.of(), List.of("3"), List.of());
+        MatchedIssue interest = new MatchedIssue(2, "full", "consequential", List.of("NDK-050"), List.of("NDK-051"), "w", List.of(), Map.of(),
+                List.of("4"), List.of(), List.of(), 1);
+        MatchedIssue noParent = new MatchedIssue(3, "partial", "consequential", List.of("NDK-052"), List.of(), "w", List.of(), Map.of(),
+                List.of("4"), List.of(), List.of(), null);
+        assertEquals("consequential(parent 1):full[NDK-050] alt[NDK-051]", MatchingEvalRunnerTest.gotColumn(interest));
+        assertEquals("consequential:partial[NDK-052]", MatchingEvalRunnerTest.gotColumn(noParent));
+        assertEquals("demand:full[NDK-006]", MatchingEvalRunnerTest.gotColumn(demand));
+        assertEquals(0, MatchingEvalRunnerTest.defectIssuesReturned(List.of(demand, interest, noParent)), "consequential is not a defect");
+        JsonNode key = key("""
+                {"expected_issues": 2, "issues": [
+                  {"issue_no": 1, "status": "full", "card_ids": ["NDK-006"]},
+                  {"issue_no": 2, "status": "full", "card_ids": ["NDK-050"]}]}
+                """);
+        var score = MatchingEvalRunnerTest.scoreCards("notice_syn_09", key, List.of(demand, interest), false);
+        assertEquals(2, score.correct());
+        assertTrue(score.allCorrect());
+    }
+
+    @Test
     void answerKeyWithoutIssues_scoresNothing() throws Exception {
         var score = MatchingEvalRunnerTest.scoreCards("n7", key("{\"para_count\": 3}"), List.of(issue("full", "a", "NDK-001")), false);
         assertEquals(0, score.expected());

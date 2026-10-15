@@ -20,14 +20,20 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.3: grounds-first splitting, one
+ * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.4: grounds-first splitting, one
  * primary card plus alternates, status decided on notice-visible DECISIVE facts only with the card's CLIENT facts
  * returned as client_facts_to_confirm, a card's stage tested against the response the input document calls for,
- * visible-defect grounds with a kind, written date-boundary checks for the chosen cards only, primary-only
- * not_this_if_checked, capped why) and the testbench answer keys that follow the splitting rules (live runs split
- * notices 001 and 010 differently from run to run). No model calls.
+ * a mandatory ten-item defect_checks object with one defect ground per "defect" result, consequential interest /
+ * penalty with a dedicated card as its own issue with a parent, written date-boundary checks for the chosen cards
+ * only, primary-only not_this_if_checked, capped why) and the testbench answer keys that follow the splitting rules
+ * (live runs split notices 001 and 010 differently from run to run). No model calls.
  */
 class MatchingPromptRulesTest {
+
+    /** The ten defect_checks entries of v3.4, in the prompt's order. */
+    private static final java.util.List<String> DEFECT_CHECKS = java.util.List.of(
+            "din_rfn", "signature", "limitation", "premature_74", "drc01a_missing",
+            "hearing", "reply_time", "officer", "recovery_without_demand", "non_speaking");
 
     private static final String PROMPT = "/prompts/" + com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE + ".md";
 
@@ -44,8 +50,8 @@ class MatchingPromptRulesTest {
 
     @Test
     void agentLoadsTheV3Prompt_andV1V2StayUntouched() throws IOException {
-        assertEquals("issue_matching_v3_3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
-        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.3 is edited in place in the v3 file");
+        assertEquals("issue_matching_v3_4", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.4 is edited in place in the v3 file");
         String v1 = resource("/prompts/issue_matching_v1.md");
         assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
         assertFalse(v1.contains("alternates"));
@@ -55,10 +61,111 @@ class MatchingPromptRulesTest {
         assertFalse(v2.contains("\"kind\""), "v2 has no issue kind");
         assertFalse(v2.contains("Step 1b"), "v2 has no visible-defect step");
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.3)"));
-        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.3 version");
-        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.3 version");
-        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.3 version");
+        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.4)"));
+        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.4 version");
+        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.4 version");
+        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.4 version");
+        assertFalse(v3.contains("Matching Agent (v3.3)"), "the heading carries the v3.4 version");
+    }
+
+    /**
+     * v3.4 (live, 40 private notices on v3.3: procedural defects were found in 3 of 12 expected cases, the same
+     * time-barred Section 73 notice caught in two earlier runs and missed in this one; the free-form defect scan was
+     * treated as optional). The prompt now forces a ten-item defect_checks object on every notice, one defect ground
+     * per "defect" result, and the self-check counts them.
+     */
+    @Test
+    void v3_4_forcedTenItemDefectChecklist() throws IOException {
+        String prompt = resource(PROMPT);
+        // the step is now the checklist, mandatory, with exactly these ten entries in this order
+        assertTrue(prompt.contains("Step 1b, **defect checklist (`defect_checks`)**"));
+        assertFalse(prompt.contains("Step 1b, **visible defects**"), "v3 to v3.3 wording: the free-form scan");
+        assertTrue(prompt.contains("you MUST fill the top-level `defect_checks` object for EVERY notice, with exactly these ten entries, in this order"));
+        assertTrue(prompt.contains("`{\"result\": \"ok\" | \"defect\" | \"cannot test\", \"basis\": \"<15 words or fewer citing the header line or paragraph>\"}`"));
+        assertTrue(prompt.contains("The checklist is NEVER optional and no entry may be left out"));
+        int last = -1;
+        for (int i = 0; i < DEFECT_CHECKS.size(); i++) {
+            String marker = (i + 1) + ". `" + DEFECT_CHECKS.get(i) + "`:";
+            int at = prompt.indexOf(marker);
+            assertTrue(at > last, marker + " is listed, in order");
+            last = at;
+        }
+        // the wording of each check
+        assertTrue(prompt.contains("`din_rfn`: DIN / RFN missing, blank or a placeholder on a central-tax document dated on or after 08.11.2019"));
+        assertTrue(prompt.contains("`signature`: Document unsigned, or not digitally signed / authenticated"));
+        assertTrue(prompt.contains("`limitation`: SCN or order date vs the Section 73(10) / 74(10) / 74A limitation for the financial year: compute the deadline as in section 5"));
+        assertTrue(prompt.contains("write BOTH dates in `basis` (`SCN 02.05.2024 vs deadline 31.05.2024 FY 2019-20`)"));
+        assertTrue(prompt.contains("`premature_74`: Section 74 SCN dated before the GSTR-9 due date of that financial year"));
+        assertTrue(prompt.contains("`drc01a_missing`: No DRC-01A (intimation under Rule 142(1A)) before a DRC-01 whose SCN date falls in the mandatory window 09.10.2019 to 14.10.2020"));
+        assertTrue(prompt.contains("`hearing`: No personal hearing offered"));
+        assertTrue(prompt.contains("or an order passed with no hearing offered, or an order silent on a hearing after a reply was filed"));
+        assertTrue(prompt.contains("`reply_time`: Reply time shorter than the statutory minimum"));
+        assertTrue(prompt.contains("`officer`: Issuing officer's rank or jurisdiction not matching the power exercised"));
+        assertTrue(prompt.contains("Tested ONLY when the document states the officer's designation AND a card states the monetary limit or jurisdiction rule"));
+        assertTrue(prompt.contains("`recovery_without_demand`: Recovery, bank attachment or garnishee (DRC-13, Section 79, Section 83) without an adjudicated demand"));
+        assertTrue(prompt.contains("`non_speaking`: Order with no reasons on the taxpayer's reply"));
+        // not applicable = ok; cannot test only for missing / unreadable text
+        assertTrue(prompt.contains("an entry that does not apply to this document (for example `premature_74` on a Section 73 SCN, `non_speaking` on a notice that is not an order) is `\"ok\"` with the basis `not applicable: <reason>`"));
+        assertTrue(prompt.contains("`\"cannot test\"` is used only when the text needed is cut off, unreadable or not stated"));
+        // one defect ground per "defect" result, both ways
+        assertTrue(prompt.contains("Rule: every entry with result `\"defect\"` MUST produce a ground with kind `\"defect\"` (matched to a card as below; status `\"none\"` with `card_id` null when no card covers it), and every defect ground MUST correspond to an entry with result `\"defect\"`."));
+        assertTrue(prompt.contains("The number of defect grounds equals the number of `\"defect\"` results. No defect ground exists for an `\"ok\"` or `\"cannot test\"` entry."));
+        // the guard lines are kept
+        assertTrue(prompt.contains("A placeholder such as \"[____]\", \"XXXX\", \"not generated\", \"N/A\" or an empty DIN field IS a missing DIN"));
+        assertTrue(prompt.contains("a department header that carries a DIN, a reference number and a signed or digitally signed block has no DIN/signature defect (`din_rfn` and `signature` are `\"ok\"`)"));
+        assertTrue(prompt.contains("Rule: do NOT invent a defect. The date, field or omission must be visible in the text"));
+        assertTrue(prompt.contains("A DIN that is present, a hearing that is offered, an SCN within time: result `\"ok\"`, no defect ground."));
+        // limitation: the two dates go into basis; the DIN placeholder rule names the check; output format says mandatory
+        assertTrue(prompt.contains("`defect_checks.limitation` is `\"defect\"` and a defect ground exists. The same two dates go into the `basis` of `defect_checks.limitation` whatever the result."));
+        assertTrue(prompt.contains("AND as `defect_checks.din_rfn` = `\"defect\"` with its missing-DIN defect ground (Step 1b)"));
+        assertTrue(prompt.contains("The `defect_checks` object with its ten entries is mandatory on every output."));
+        // splitting rule (f) and the count check name the checklist
+        assertTrue(prompt.contains("(f) **Each visible defect is its own ground** with kind `\"defect\"` (Step 1b, one per `\"defect\"` result)"));
+        assertTrue(prompt.contains("plus the number of `\"defect\"` results in `defect_checks` after applying (f)"));
+        // self-check line
+        assertTrue(prompt.contains("1a. `defect_checks` has all ten entries (`din_rfn`, `signature`, `limitation`, `premature_74`, `drc01a_missing`, `hearing`, `reply_time`, `officer`, `recovery_without_demand`, `non_speaking`), each with a `result` and a `basis`; the number of defect grounds equals the number of entries with result `\"defect\"`."));
+        assertEquals(DEFECT_CHECKS, com.noticedesk.api.agent.IssueMatchingAgent.DEFECT_CHECK_NAMES, "the parser knows the same ten names");
+    }
+
+    /**
+     * v3.4 (live: the catalogue has cards whose ground is the interest or penalty itself, e.g. "no Section 50(3)
+     * interest on ITC availed but never utilised"; rule 4(b) folded consequential interest / penalty into the main
+     * issue, so those cards were never selected and the reply lost that defence; the firm's own drafts argue them
+     * separately in 28 of 288 cases). Consequential interest / penalty with such a card is now its own issue of kind
+     * "consequential" with a parent_issue_no; without such a card it stays inside the main issue as before.
+     */
+    @Test
+    void v3_4_consequentialInterestOrPenaltyWithADedicatedCard_isItsOwnIssueWithAParent() throws IOException {
+        String prompt = resource(PROMPT);
+        // the third kind
+        assertTrue(prompt.contains("`\"consequential\"`: interest or penalty that rides on a demand ground of the same notice AND has a dedicated catalogue card of its own (rule 4(c))"));
+        assertTrue(prompt.contains("It carries `\"parent_issue_no\"` = the `ground_no` of the demand ground it rides on. Without such a card the interest or penalty stays inside the demand ground (rule 4(b))."));
+        // rule 4(b): inside the main issue unless a dedicated card exists; never without one
+        assertTrue(prompt.contains("(b) **Consequential interest and penalty stay inside the main issue UNLESS the catalogue has a card for that interest or penalty itself.**"));
+        assertFalse(prompt.contains("Consequential interest and penalty are part of the main issue, NOT separate issues"), "v2 to v3.3 wording");
+        assertTrue(prompt.contains("Never create a consequential ground when no card of the kind described in (c) exists."));
+        // rule 4(c): the card test, the kind, the placement, the parent, matched like any other ground
+        assertTrue(prompt.contains("(c) **Consequential ground with a dedicated card (kind `\"consequential\"`).**"));
+        assertTrue(prompt.contains("a card whose ground IS that interest or penalty itself (its TITLE or ALLEGES is about Section 50 interest, Section 47 late fee, Section 122 / 125 penalty, or an \"interest-only\" / \"penalty-only\" demand"));
+        for (String example : new String[]{"no Section 50(3) interest on ITC availed but never utilised", "Section 50(1) interest on the net cash liability only",
+                "interest-only DRC-01 cannot carry penalty", "late fee only, no Section 125 penalty"}) {
+            assertTrue(prompt.contains(example), example);
+        }
+        assertTrue(prompt.contains("becomes its OWN ground with kind `\"consequential\"`, placed immediately after the demand ground it rides on, with `\"parent_issue_no\"` set to that demand ground's `ground_no` (on the ground and on its issue)"));
+        assertTrue(prompt.contains("It is matched to the card like any other ground (primary, alternates, status by DECISIVE facts, CLIENT facts copied to `client_facts_to_confirm`)."));
+        assertTrue(prompt.contains("A consequential ground never carries the demand's own card."));
+        // rule 4(d): the old exceptions stay, as demand grounds without a parent
+        assertTrue(prompt.contains("(d) **Independent interest or penalty IS a demand ground** (kind `\"demand\"`, no `parent_issue_no`) only when"));
+        assertTrue(prompt.contains("the notice's ONLY demand is interest or penalty"));
+        assertTrue(prompt.contains("interest computed on the gross tax liability"));
+        // Step 2 and para_map
+        assertTrue(prompt.contains("(for a consequential ground) `parent_issue_no` equal to the ground's `parent_issue_no`"));
+        assertTrue(prompt.contains("The paragraph that proposes consequential interest / penalty maps to the parent demand issue AND, when a consequential ground exists for it (rule 4(c)), to that consequential issue as well."));
+        // self-check lines
+        assertTrue(prompt.contains("every `\"consequential\"` ground and issue carries `parent_issue_no` naming a `\"demand\"` ground that precedes it, and no other kind carries one"));
+        assertTrue(prompt.contains("1b. Every consequential interest or penalty became its own `\"consequential\"` ground ONLY because a card whose ground is that interest or penalty itself exists in the catalogue"));
+        assertTrue(prompt.contains("every ground is `\"demand\"`, `\"consequential\"` or `\"defect\"`"));
+        assertFalse(prompt.contains("every ground is `\"demand\"` or `\"defect\"`"), "v3 to v3.3 wording");
     }
 
     /**
@@ -163,7 +270,7 @@ class MatchingPromptRulesTest {
         assertTrue(prompt.contains("No `not_this_if_checked` entry that reads \"cannot test\" lowered a status, except a date boundary written `-> cannot test (date not stated)`."));
         assertTrue(prompt.contains("has a `client_facts_to_confirm` list holding the primary card's CLIENT facts in the card's words, minus any the notice already evidences; it is `[]` for `CLIENT: none` and for status `\"none\"`; it holds no DECISIVE fact."));
         // (f) v3.1 rules kept: grounds, defects, boundary lines for primary + alternates only, 60-word why
-        assertTrue(prompt.contains("Step 1b, **visible defects**"));
+        assertTrue(prompt.contains("Step 1b, **defect checklist (`defect_checks`)**"));
         assertTrue(prompt.contains("WRITE lines only for the chosen primary card and for each listed alternate (at most 2)"));
         assertTrue(prompt.contains("`why` is at most 60 words of prose plus the boundary lines of section 5"));
         assertTrue(prompt.contains("`not_this_if_checked` lists ONLY the primary card's NOT THIS IF rules"));
@@ -190,7 +297,7 @@ class MatchingPromptRulesTest {
         assertTrue(prompt.contains("`why` is at most 60 words of prose plus the boundary lines of section 5"));
         assertTrue(prompt.contains("Do not restate the notice; cite paragraph numbers."));
         // (d) defect guards: DIN / signature present in the header; "proper officer" only with a stated designation and a card rule
-        assertTrue(prompt.contains("A defect ground is raised only when the document itself shows the defect; a department header that carries a DIN, a reference number and a signed or digitally signed block has no DIN/signature defect."));
+        assertTrue(prompt.contains("A defect ground is raised only when the document itself shows the defect; a department header that carries a DIN, a reference number and a signed or digitally signed block has no DIN/signature defect (`din_rfn` and `signature` are `\"ok\"`)."));
         assertTrue(prompt.contains("Do not raise a \"proper officer\" defect unless the document states the officer's designation AND the monetary limit or jurisdiction rule the designation breaches is stated on a card."));
         // (e) self-check items follow (a) and (b)
         assertTrue(prompt.contains("every NOT THIS IF rule was tested and listed in `not_this_if_checked` (one short entry per rule; no entries for alternates)"));
@@ -206,13 +313,13 @@ class MatchingPromptRulesTest {
         // issue types
         assertTrue(prompt.contains("`\"demand\"`: a ground of demand or action stated by the department"));
         assertTrue(prompt.contains("`\"defect\"`: a procedural, jurisdictional, limitation, service, signature, DIN, hearing or form defect that is VISIBLE in the document itself"));
-        assertTrue(prompt.contains("Step 1b, **visible defects**"));
-        assertTrue(prompt.contains("scan the document for visible defects, each as its own ground with kind `\"defect\"`"));
-        // the defect checklist
+        assertTrue(prompt.contains("Step 1b, **defect checklist (`defect_checks`)**"));
+        assertTrue(prompt.contains("you must find them with the checklist of Step 1b"));
+        // the defect checklist (v3.4: the ten named checks carry the same wording)
         for (String item : new String[]{
                 "DIN / RFN missing, blank or a placeholder on a central-tax document dated on or after 08.11.2019",
                 "Document unsigned, or not digitally signed / authenticated",
-                "SCN date vs the Section 73(10) / 74(10) / 74A limitation for the financial year: compute the deadline",
+                "SCN or order date vs the Section 73(10) / 74(10) / 74A limitation for the financial year: compute the deadline",
                 "Section 74 SCN dated before the GSTR-9 due date of that financial year",
                 "No DRC-01A (intimation under Rule 142(1A)) before a DRC-01 whose SCN date falls in the mandatory window 09.10.2019 to 14.10.2020",
                 "No personal hearing offered",
@@ -230,7 +337,7 @@ class MatchingPromptRulesTest {
         assertTrue(prompt.contains("use `\"header\"` when the defect sits in the DIN / date / signature block"));
         assertTrue(prompt.contains("Each defect ground is matched to a card exactly like a demand ground (`card_id`, `alternates`, `status`, `why`, `not_this_if_checked`, `notice_paras`)"));
         assertTrue(prompt.contains("Never fold a defect into a demand issue"));
-        assertTrue(prompt.contains("(e) **Each visible defect is its own ground** with kind `\"defect\"`"));
+        assertTrue(prompt.contains("(f) **Each visible defect is its own ground** with kind `\"defect\"`"));
         // para_map: header defects need no entry; demand paragraphs map to all DEMAND issues
         assertTrue(prompt.contains("Defect grounds that have no numbered paragraph (DIN / date / signature block, `\"header\"`) need no `para_map` entry"));
         assertTrue(prompt.contains("The \"show cause why\" / demand paragraph maps to ALL demand issues"));
@@ -316,6 +423,27 @@ class MatchingPromptRulesTest {
         // v3: one demand ground + one defect ground (missing DIN), the written date lines, header paras
         assertTrue(example.contains("\"kind\": \"demand\""));
         assertTrue(example.contains("\"kind\": \"defect\""));
+        // v3.4: the ten defect checks (one "defect", nine "ok"), and a consequential interest issue riding on issue 1
+        int checks = example.indexOf("\"defect_checks\": {");
+        assertTrue(checks > 0 && checks < example.indexOf("\"grounds\""), "defect_checks precedes grounds in the example");
+        int lastCheck = -1;
+        for (String name : DEFECT_CHECKS) {
+            int at = example.indexOf("\"" + name + "\": {\"result\": ");
+            assertTrue(at > lastCheck, name + " in order");
+            lastCheck = at;
+        }
+        assertTrue(example.contains("\"din_rfn\": {\"result\": \"defect\", \"basis\": \"header: DIN field reads [____], central-tax SCN dated 02.05.2024\"}"));
+        assertTrue(example.contains("\"limitation\": {\"result\": \"ok\", \"basis\": \"SCN 02.05.2024 vs deadline 31.05.2024 FY 2019-20\"}"));
+        assertTrue(example.contains("\"premature_74\": {\"result\": \"ok\", \"basis\": \"not applicable: Section 73 SCN\"}"));
+        assertEquals(1, example.split("\"result\": \"defect\"", -1).length - 1, "one defect result = one defect ground");
+        assertEquals(9, example.split("\"result\": \"ok\"", -1).length - 1);
+        assertTrue(example.contains("{\"ground_no\": 2, \"kind\": \"consequential\", \"parent_issue_no\": 1, \"label\": \"Section 50(3) interest on ITC availed, not utilised\", \"paras\": [\"4\"]}"));
+        assertTrue(example.contains("{\"ground_no\": 3, \"kind\": \"defect\""));
+        assertTrue(example.contains("\"issue_no\": 2,\n      \"kind\": \"consequential\",\n      \"parent_issue_no\": 1,"));
+        assertTrue(example.contains("\"card_id\": \"CARD-017\""));
+        assertTrue(example.contains("penalty (para 4) is consequential; interest: ground 2."));
+        assertTrue(example.contains("\"4\": [1, 2]"), "the interest paragraph maps to the parent and the consequential issue");
+        assertTrue(example.contains("defect_checks.din_rfn"));
         assertTrue(example.contains("DIN missing"));
         assertTrue(example.contains("\"notice_paras\": [\"header\"]"));
         assertTrue(example.contains("vs PERIOD 01.07.2017 to 31.12.2021 -> satisfied"));
@@ -329,7 +457,7 @@ class MatchingPromptRulesTest {
         assertTrue(example.contains("(paras 3, 3.1, 4)"));
         // v3.2: client_facts_to_confirm on every issue (facts for the demand issue, [] for the defect); an untestable
         // client-side NOT THIS IF rule is "cannot test" and the issue stays full
-        assertEquals(2, example.split("\"client_facts_to_confirm\"", -1).length - 1, "one client_facts_to_confirm per issue");
+        assertEquals(3, example.split("\"client_facts_to_confirm\"", -1).length - 1, "one client_facts_to_confirm per issue");
         assertTrue(example.contains("\"client_facts_to_confirm\": [\"Recipient holds the tax invoices and bank proof of payment to the supplier\", \"Supplier was active on the portal on the invoice dates\"]"));
         assertTrue(example.contains("\"client_facts_to_confirm\": []"));
         assertTrue(example.contains("\"Not this if the supplier has since filed GSTR-1 - cannot test\"]"));
@@ -348,7 +476,7 @@ class MatchingPromptRulesTest {
         java.util.List<String> out = new java.util.ArrayList<>();
         java.util.regex.Matcher m = Pattern.compile("\"why\": \"((?:[^\"\\\\]|\\\\.)*)\"").matcher(example);
         while (m.find()) out.add(m.group(1));
-        assertEquals(2, out.size(), "two why values in the example");
+        assertEquals(3, out.size(), "three why values in the example (demand, consequential, defect)");
         return out;
     }
 
@@ -357,7 +485,7 @@ class MatchingPromptRulesTest {
         String prompt = resource(PROMPT);
         assertTrue(prompt.contains("NEVER invent or fabricate values"));
         assertTrue(prompt.contains("One issue per distinct ground of demand"));
-        assertTrue(prompt.contains("Consequential interest and penalty are part of the main issue, NOT separate issues"));
+        assertTrue(prompt.contains("Consequential interest and penalty stay inside the main issue UNLESS the catalogue has a card for that interest or penalty itself"));
         assertTrue(prompt.contains("the notice's ONLY demand is interest or penalty"));
         assertTrue(prompt.contains("interest computed on the gross tax liability"));
         for (String provision : new String[]{"Section 50", "73(9)", "74(9)", "122", "171(3A)"}) {

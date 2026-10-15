@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 14-10-2026 (matching prompt v3.3: a card's stage is tested against the response the input document calls for, not against the input document's own name)
+Last updated: 15-10-2026 (matching prompt v3.4: a forced ten-item defect checklist; consequential interest / penalty with a dedicated card becomes its own issue)
 
 ---
 
@@ -434,13 +434,74 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
 - Tests: `MatchingPromptRulesTest` (version, section placement, table header and rows, rule wording, example and
   self-check lines; the v3.2 stage wording is asserted gone).
 
+## (b15) Matching prompt v3.4: forced ten-item defect checklist; consequential interest / penalty with a dedicated card (15-10-2026)
+
+- **Live findings (40 private notices on v3.3)**: (1) procedural defects were found in 3 of 12 expected cases; the
+  same time-barred Section 73 notice was caught in two earlier runs and missed in this one, so the free-form defect
+  scan (Step 1b) was being treated as optional. (2) The catalogue has cards whose ground is the interest or penalty
+  itself ("no Section 50(3) interest on ITC availed but never utilised", "Section 50(1) interest on net cash
+  liability only", "interest-only DRC-01 cannot carry penalty", "late fee only, no Section 125 penalty"); rule 4(b)
+  folded consequential interest / penalty into the main issue, so those cards were never selected and the reply lost
+  that defence paragraph. The firm's own drafts argue them separately in 28 of 288 cases.
+- `prompts/issue_matching_v3.md` edited in place as **v3.4** (heading "(v3.4)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_4`; the resource name stays `issue_matching_v3`). No change to writers, assembly, caps, models,
+  the loader or the database.
+  - **Forced defect checklist.** Step 1b is now a mandatory top-level `defect_checks` object the model fills for
+    every notice, ten entries in this order, each `{"result": "ok" | "defect" | "cannot test", "basis": "<15 words
+    citing the header line or paragraph>"}`: `din_rfn`, `signature`, `limitation` (SCN or order date vs the Section
+    73/74/74A deadline computed as in section 5, both dates written in the basis), `premature_74`, `drc01a_missing`,
+    `hearing` (no hearing offered on a proposed adverse order, an order with no hearing, an order silent on a hearing
+    after a reply; the refund-rejection-without-RFD-08 case sits here), `reply_time`, `officer` (only when the
+    designation and the rule are both stated), `recovery_without_demand`, `non_speaking`. A check that does not apply
+    to the document is `ok` with basis `not applicable: <reason>`; `cannot test` only when the text is cut off,
+    unreadable or the date not stated. Rule: every `defect` result produces a ground of kind `defect` (matched to a
+    card as before, status none when no card covers it) and every defect ground corresponds to a `defect` result.
+    Self-check 1a: "`defect_checks` has all ten entries; the number of defect grounds equals the number of entries
+    with result `defect`". The guard lines stay (a placeholder counts as a missing DIN; a DIN present and a signed
+    block means ok; do not invent a defect).
+  - **Consequential interest / penalty with a dedicated card.** Rule 4(b)/(c) amended: interest or penalty
+    consequential to a demand stays inside the main issue UNLESS the catalogue has a card whose ground is that
+    interest or penalty itself (its TITLE or ALLEGES is about Section 50 interest, Section 47 late fee, Section
+    122/125 penalty, or an "interest-only" / "penalty-only" demand). Then it becomes its own ground with kind
+    `consequential`, placed immediately after the demand ground it rides on, with `parent_issue_no` = that ground's
+    number, matched to the card like any other ground (primary, alternates, status by DECISIVE facts, CLIENT facts).
+    Never created when no such card exists. The old exceptions (interest-only notice, interest challenged on an
+    independent ground) stay as demand grounds under 4(d). `para_map`: the interest / penalty paragraph maps to both
+    the parent demand issue and the consequential issue. The JSON example now has three issues (demand, consequential
+    with parent 1, defect) and the ten checks.
+- **Parser** (`IssueMatchingAgent`): kind `consequential` (`KIND_CONSEQUENTIAL`, `MatchedIssue.isConsequential()`)
+  and `MatchedIssue.parentIssueNo` (Integer, nullable; integral or numeric-string `parent_issue_no`, null otherwise);
+  `MatchingResult.defectChecks` (`Map<String, DefectCheck{result, basis}>` in the model's order, empty before v3.4);
+  `DEFECT_CHECK_NAMES` (the ten names). Result flags: `defect_checks_missing` (object absent, not an object, or fewer
+  than ten entries) and `defect_count_mismatch` (number of defect issues differs from the number of `defect` results;
+  tested only when the object has at least one entry, so a pre-v3.4 output carries only the missing flag). Both
+  informational: the issues are kept. Older constructors keep working (no parent, no checks). Downstream was read:
+  no code outside the agent switches on `kind` (`TemplateFillService`, `ReplyAssemblyService`, the writers and the
+  pipeline read `cardIds`, `status`, `facts`, `why`, `clientFactsToConfirm` only), so a consequential issue is
+  already filled, written and assembled exactly like a demand issue. Nothing new is stored in the database.
+- **Eval runner** (`MatchingEvalRunnerTest`): with `MATCHING_EVAL_SHOW_WHY=true` one compact `defect_checks` line per
+  notice (`din_rfn=defect, signature=ok, ...`, basis never printed, `(absent)` when none); per set "Defect checks
+  (v3.4): present on N of M successful | defect results total | defect_checks_missing flags | defect_count_mismatch
+  flags" (`defect_checks_present`, `defect_results_total`, `defect_checks_missing_flags`,
+  `defect_count_mismatch_flags` in the results JSON, `defect_checks_present` and `defect_results` per notice). The
+  "got" column shows `consequential(parent 1):...`. Scoring unchanged: a consequential issue is scored like a demand
+  issue against the answer key.
+- Tests: `IssueMatchingAgentTest` (consequential kind and parent, defect_checks read in order with result normalised,
+  the two flags: absent, nine entries, not an object, too many / too few defect grounds, all-ok with a consequential
+  issue and no flag, readers and record defaults; the pre-v3.4 fixtures now assert the `defect_checks_missing` flag),
+  `MatchingPromptRulesTest` (version, the ten check names in order and their wording, not-applicable / cannot-test
+  rule, the one-ground-per-defect-result rule both ways, the kept guard lines, rule 4(b)/(c)/(d) wording, Step 2 and
+  `para_map` lines, self-check lines, the example's checks and consequential issue), `MatchingEvalCardScoreTest`
+  (defect_checks line, set counts, got column, consequential scored like demand).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`): **323 tests, 0 failures, 0 errors** on 14-10-2026 after prompt v3.3 (322 after
-  v3.2 and 316 after v3.1 the same day; no live API
-  calls; all models and IndianKanoon mocked or served from local fixtures), plus the Spring context test
-  `NoticedeskApiApplicationTests`, which needs the local Postgres (pgvector) and was not run in that
-  container. A plain `mvn test` no longer modifies `output/`. V23 to V28 applied on Postgres 16.
+- Offline unit suite (`mvn test`, `RealNoticesBatchRunnerTest` excluded as before): **329 tests, 0 failures, 0 errors**
+  on 15-10-2026 after prompt v3.4 (323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
+  calls; all models and IndianKanoon mocked or served from local fixtures). The 329 include the Spring context test
+  `NoticedeskApiApplicationTests`, which passed in that container (it retries the local Postgres connection for
+  about five minutes before the context comes up). A plain `mvn test` no longer modifies `output/`. V23 to V28
+  applied on Postgres 16.
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
   - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.

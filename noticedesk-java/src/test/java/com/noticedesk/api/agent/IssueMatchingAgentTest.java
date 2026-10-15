@@ -135,7 +135,7 @@ class IssueMatchingAgentTest {
                 """;
         IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006", "NDK-007", "NDK-008"));
 
-        assertTrue(result.flags().isEmpty(), result.flags().toString());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), result.flags(), "pre-v3.4 output: only defect_checks_missing");
         assertEquals(2, result.issues().size());
         IssueMatchingAgent.MatchedIssue first = result.issues().get(0);
         assertEquals("full", first.status());
@@ -165,7 +165,8 @@ class IssueMatchingAgentTest {
         assertEquals(List.of("NDK-006"), issue.cardIds());
         assertEquals(List.of("NDK-007", "NDK-008"), issue.alternateCardIds());
         assertTrue(issue.flags().isEmpty());
-        assertTrue(result.flags().isEmpty(), "no grounds list in v1 output: no issue_count_mismatch check");
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), result.flags(),
+                "no grounds list in v1 output: no issue_count_mismatch check; pre-v3.4 output carries only defect_checks_missing");
     }
 
     @Test
@@ -221,7 +222,8 @@ class IssueMatchingAgentTest {
         assertEquals(List.of("NDK-006", "NDK-007"), first.alternateCardIds());
         assertEquals(List.of(IssueMatchingAgent.FLAG_HEDGED), first.flags());
         assertEquals(List.of(IssueMatchingAgent.FLAG_HEDGED), result.issues().get(1).flags());
-        assertTrue(result.flags().isEmpty(), "two grounds, two issues: no count mismatch");
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), result.flags(),
+                "two grounds, two issues: no count mismatch (pre-v3.4 output: only defect_checks_missing)");
     }
 
     @Test
@@ -237,7 +239,8 @@ class IssueMatchingAgentTest {
                 """;
         IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006"));
 
-        assertEquals(List.of(IssueMatchingAgent.FLAG_ISSUE_COUNT_MISMATCH), result.flags());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_ISSUE_COUNT_MISMATCH, IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), result.flags(),
+                "pre-v3.4 output (no defect_checks) also carries defect_checks_missing");
         assertEquals(2, result.issues().size());
         assertEquals("full", result.issues().get(0).status());
         assertTrue(result.issues().get(0).flags().isEmpty());
@@ -264,7 +267,7 @@ class IssueMatchingAgentTest {
                 """;
         IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006", "NDK-007", "NDK-141", "NDK-143"));
 
-        assertTrue(result.flags().isEmpty(), result.flags().toString());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), result.flags(), "pre-v3.4 output: only defect_checks_missing");
         assertEquals(5, result.issues().size());
         IssueMatchingAgent.MatchedIssue demand = result.issues().get(0);
         assertEquals(IssueMatchingAgent.KIND_DEMAND, demand.kind());
@@ -340,7 +343,7 @@ class IssueMatchingAgentTest {
                 """;
         IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006", "NDK-007"));
 
-        assertTrue(result.flags().isEmpty(), result.flags().toString());
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), result.flags(), "pre-v3.4 output: only defect_checks_missing");
         assertEquals(4, result.issues().size());
 
         IssueMatchingAgent.MatchedIssue full = result.issues().get(0);
@@ -408,12 +411,194 @@ class IssueMatchingAgentTest {
         assertEquals(List.of("nil returns were filed"), v3_2.clientFactsToConfirm());
     }
 
+    // ---------------------------------------------------------------- v3.4: consequential kind, parent_issue_no, defect_checks
+
+    private static final String TEN_CHECKS_ONE_DEFECT = """
+            "defect_checks": {
+              "din_rfn": {"result": "defect", "basis": "header: DIN field reads [____]"},
+              "signature": {"result": "ok", "basis": "header: digitally signed"},
+              "limitation": {"result": "ok", "basis": "SCN 02.05.2024 vs deadline 31.05.2024 FY 2019-20"},
+              "premature_74": {"result": "ok", "basis": "not applicable: Section 73 SCN"},
+              "drc01a_missing": {"result": "ok", "basis": "outside the window"},
+              "hearing": {"result": "ok", "basis": "para 6 offers a hearing"},
+              "reply_time": {"result": "ok", "basis": "para 5 gives 30 days"},
+              "officer": {"result": "ok", "basis": "not applicable: designation not stated"},
+              "recovery_without_demand": {"result": "ok", "basis": "not applicable: SCN"},
+              "non_speaking": {"result": "Cannot Test ", "basis": "last page cut off"}
+            }""";
+
+    @Test
+    void v3_4ConsequentialIssue_hasKindAndParent_andIsMatchedLikeADemandIssue() {
+        String json = "{\"notice\": {}, " + TEN_CHECKS_ONE_DEFECT + ","
+                + """
+                 "grounds": [{"ground_no": 1, "kind": "demand", "label": "ITC mismatch", "paras": ["3", "4"]},
+                             {"ground_no": 2, "kind": "consequential", "parent_issue_no": 1, "label": "Section 50(3) interest", "paras": ["4"]},
+                             {"ground_no": 3, "kind": "defect", "label": "DIN missing", "paras": ["header"]}],
+                 "issues": [
+                   {"issue_no": 1, "kind": "demand", "status": "full", "card_id": "NDK-006", "alternates": [], "why": "a; interest: ground 2", "notice_paras": ["3", "4"]},
+                   {"issue_no": 2, "kind": " Consequential ", "parent_issue_no": 1, "status": "full", "card_id": "NDK-050", "alternates": ["NDK-051"],
+                    "why": "Consequential to ground 1", "client_facts_to_confirm": ["ITC was reversed before utilisation"], "notice_paras": ["4"]},
+                   {"issue_no": 3, "kind": "defect", "status": "full", "card_id": "NDK-141", "alternates": [], "why": "DIN missing", "notice_paras": ["header"]}],
+                 "para_map": {"3": [1], "4": [1, 2]}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006", "NDK-050", "NDK-051", "NDK-141"));
+
+        assertTrue(result.flags().isEmpty(), result.flags().toString());
+        assertEquals(3, result.issues().size());
+
+        IssueMatchingAgent.MatchedIssue demand = result.issues().get(0);
+        assertEquals(IssueMatchingAgent.KIND_DEMAND, demand.kind());
+        assertNull(demand.parentIssueNo(), "a demand issue has no parent");
+        assertFalse(demand.isConsequential());
+
+        IssueMatchingAgent.MatchedIssue consequential = result.issues().get(1);
+        assertEquals(IssueMatchingAgent.KIND_CONSEQUENTIAL, consequential.kind(), "kind is trimmed and case-insensitive");
+        assertEquals("consequential", IssueMatchingAgent.KIND_CONSEQUENTIAL);
+        assertTrue(consequential.isConsequential());
+        assertFalse(consequential.isDefect());
+        assertEquals(1, consequential.parentIssueNo());
+        assertEquals("full", consequential.status());
+        assertEquals(List.of("NDK-050"), consequential.cardIds(), "matched like any other issue: primary only in cardIds");
+        assertEquals(List.of("NDK-051"), consequential.alternateCardIds());
+        assertEquals(List.of("ITC was reversed before utilisation"), consequential.clientFactsToConfirm());
+        assertTrue(consequential.flags().isEmpty());
+
+        IssueMatchingAgent.MatchedIssue defect = result.issues().get(2);
+        assertTrue(defect.isDefect());
+        assertNull(defect.parentIssueNo());
+        assertEquals(List.of(1, 2), result.paraMap().get("4"), "the interest paragraph maps to the parent and the consequential issue");
+
+        // the ten checks are read in order, result lower-cased and trimmed, basis kept
+        assertEquals(IssueMatchingAgent.DEFECT_CHECK_NAMES, List.copyOf(result.defectChecks().keySet()));
+        assertEquals(new IssueMatchingAgent.DefectCheck("defect", "header: DIN field reads [____]"), result.defectChecks().get("din_rfn"));
+        assertTrue(result.defectChecks().get("din_rfn").isDefect());
+        assertEquals("cannot test", result.defectChecks().get("non_speaking").result());
+        assertFalse(result.defectChecks().get("non_speaking").isDefect());
+        assertEquals(1, IssueMatchingAgent.defectResultCount(result.defectChecks()));
+    }
+
+    @Test
+    void v3_4DefectChecksMissing_whenAbsentOrFewerThanTen() {
+        // absent (v3.3 output): defect_checks_missing only; no count mismatch is tested against an absent object
+        String absent = """
+                {"notice": {},
+                 "grounds": [{"ground_no": 1, "kind": "defect", "label": "DIN missing", "paras": ["header"]}],
+                 "issues": [{"issue_no": 1, "kind": "defect", "status": "full", "card_id": "NDK-141", "alternates": [], "why": "w", "notice_paras": ["header"]}],
+                 "para_map": {}}
+                """;
+        IssueMatchingAgent.MatchingResult noChecks = run(agentReturning(absent, "NDK-141"));
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), noChecks.flags());
+        assertEquals("defect_checks_missing", IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING);
+        assertTrue(noChecks.defectChecks().isEmpty());
+        assertEquals("full", noChecks.issues().get(0).status(), "informational: the issues are kept");
+
+        // nine entries (one "defect", one defect ground): missing, but the counts agree so no mismatch
+        String nine = """
+                {"notice": {},
+                 "defect_checks": {"din_rfn": {"result": "defect", "basis": "header"}, "signature": {"result": "ok"}, "limitation": {"result": "ok"},
+                                   "premature_74": {"result": "ok"}, "drc01a_missing": {"result": "ok"}, "hearing": {"result": "ok"},
+                                   "reply_time": {"result": "ok"}, "officer": {"result": "ok"}, "recovery_without_demand": {"result": "ok"}},
+                 "grounds": [{"ground_no": 1, "kind": "defect", "label": "DIN missing", "paras": ["header"]}],
+                 "issues": [{"issue_no": 1, "kind": "defect", "status": "none", "card_id": null, "alternates": [], "why": "w", "notice_paras": ["header"]}],
+                 "para_map": {}}
+                """;
+        IssueMatchingAgent.MatchingResult nineChecks = run(agentReturning(nine, "NDK-141"));
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), nineChecks.flags());
+        assertEquals(9, nineChecks.defectChecks().size());
+        assertEquals("", nineChecks.defectChecks().get("signature").basis(), "a missing basis reads as empty");
+
+        // not an object: read as absent
+        String notObject = """
+                {"notice": {}, "defect_checks": ["din_rfn"], "grounds": [], "issues": [], "para_map": {}}
+                """;
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING), run(agentReturning(notObject)).flags());
+    }
+
+    @Test
+    void v3_4DefectCountMismatch_whenDefectGroundsDifferFromDefectResults() {
+        // ten checks, one "defect" result, but two defect grounds
+        String tooManyGrounds = "{\"notice\": {}, " + TEN_CHECKS_ONE_DEFECT + ","
+                + """
+                 "grounds": [{"ground_no": 1, "kind": "defect", "label": "DIN missing", "paras": ["header"]},
+                             {"ground_no": 2, "kind": "defect", "label": "no hearing", "paras": ["6"]}],
+                 "issues": [{"issue_no": 1, "kind": "defect", "status": "full", "card_id": "NDK-141", "alternates": [], "why": "w", "notice_paras": ["header"]},
+                            {"issue_no": 2, "kind": "defect", "status": "none", "card_id": null, "alternates": [], "why": "w", "notice_paras": ["6"]}],
+                 "para_map": {"6": [2]}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(tooManyGrounds, "NDK-141"));
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_COUNT_MISMATCH), result.flags());
+        assertEquals("defect_count_mismatch", IssueMatchingAgent.FLAG_DEFECT_COUNT_MISMATCH);
+        assertEquals(2, result.issues().size(), "informational: both defect issues are kept");
+
+        // ten checks, one "defect" result, no defect ground (the finding the checklist exists for): mismatch
+        String noGround = "{\"notice\": {}, " + TEN_CHECKS_ONE_DEFECT + ","
+                + """
+                 "grounds": [{"ground_no": 1, "kind": "demand", "label": "x", "paras": ["1"]}],
+                 "issues": [{"issue_no": 1, "kind": "demand", "status": "full", "card_id": "NDK-006", "alternates": [], "why": "w", "notice_paras": ["1"]}],
+                 "para_map": {"1": [1]}}
+                """;
+        assertEquals(List.of(IssueMatchingAgent.FLAG_DEFECT_COUNT_MISMATCH), run(agentReturning(noGround, "NDK-006")).flags());
+
+        // ten checks, no "defect" result, no defect ground, a consequential issue: no flag at all
+        String allOk = """
+                {"notice": {},
+                 "defect_checks": {"din_rfn": "ok", "signature": "ok", "limitation": "ok", "premature_74": "ok", "drc01a_missing": "ok",
+                                   "hearing": "ok", "reply_time": "ok", "officer": "ok", "recovery_without_demand": "ok", "non_speaking": "ok"},
+                 "grounds": [{"ground_no": 1, "kind": "demand", "label": "x", "paras": ["1"]},
+                             {"ground_no": 2, "kind": "consequential", "parent_issue_no": 1, "label": "penalty", "paras": ["1"]}],
+                 "issues": [{"issue_no": 1, "kind": "demand", "status": "full", "card_id": "NDK-006", "alternates": [], "why": "w", "notice_paras": ["1"]},
+                            {"issue_no": 2, "kind": "consequential", "parent_issue_no": "1", "status": "partial", "card_id": "NDK-050", "alternates": [],
+                             "why": "DECISIVE \\"x\\": absent - y", "notice_paras": ["1"]}],
+                 "para_map": {"1": [1, 2]}}
+                """;
+        IssueMatchingAgent.MatchingResult ok = run(agentReturning(allOk, "NDK-006", "NDK-050"));
+        assertTrue(ok.flags().isEmpty(), ok.flags().toString());
+        assertEquals(10, ok.defectChecks().size(), "a bare text value is read as the result");
+        assertEquals(new IssueMatchingAgent.DefectCheck("ok", ""), ok.defectChecks().get("hearing"));
+        assertEquals(1, ok.issues().get(1).parentIssueNo(), "a numeric string parent is read");
+        assertTrue(ok.issues().get(1).isConsequential());
+    }
+
+    @Test
+    void v3_4Readers_andRecordDefaults() throws Exception {
+        assertEquals(3, IssueMatchingAgent.readParentIssueNo(objectMapper.readTree("{\"parent_issue_no\": 3}")));
+        assertEquals(2, IssueMatchingAgent.readParentIssueNo(objectMapper.readTree("{\"parent_issue_no\": \" 2 \"}")));
+        assertNull(IssueMatchingAgent.readParentIssueNo(objectMapper.readTree("{\"parent_issue_no\": null}")));
+        assertNull(IssueMatchingAgent.readParentIssueNo(objectMapper.readTree("{\"parent_issue_no\": \"one\"}")));
+        assertNull(IssueMatchingAgent.readParentIssueNo(objectMapper.readTree("{\"parent_issue_no\": 1.5}")));
+        assertNull(IssueMatchingAgent.readParentIssueNo(objectMapper.readTree("{\"issue_no\": 1}")));
+
+        var checks = IssueMatchingAgent.readDefectChecks(objectMapper.readTree(
+                "{\"defect_checks\": {\" hearing \": {\"result\": \" DEFECT \", \"basis\": \" para 6 \"}, \"\": {\"result\": \"ok\"}, \"officer\": 7, \"din_rfn\": \"ok\"}}"));
+        assertEquals(List.of("hearing", "din_rfn"), List.copyOf(checks.keySet()), "keys trimmed, blank keys and non-object/non-text values dropped, order kept");
+        assertEquals(new IssueMatchingAgent.DefectCheck("defect", "para 6"), checks.get("hearing"));
+        assertEquals(1, IssueMatchingAgent.defectResultCount(checks));
+        assertTrue(IssueMatchingAgent.readDefectChecks(objectMapper.readTree("{\"defect_checks\": null}")).isEmpty());
+        assertTrue(IssueMatchingAgent.readDefectChecks(objectMapper.readTree("{\"issues\": []}")).isEmpty());
+        assertEquals(0, IssueMatchingAgent.defectResultCount(null));
+        assertEquals(List.of("din_rfn", "signature", "limitation", "premature_74", "drc01a_missing",
+                "hearing", "reply_time", "officer", "recovery_without_demand", "non_speaking"), IssueMatchingAgent.DEFECT_CHECK_NAMES);
+
+        // record defaults: the older constructors have no parent and no checks
+        IssueMatchingAgent.MatchedIssue v3_3 = new IssueMatchingAgent.MatchedIssue(1, "full", "demand", List.of("NDK-006"), List.of(), "w", List.of(), java.util.Map.of(), List.of(), List.of(), List.of("f"));
+        assertNull(v3_3.parentIssueNo());
+        IssueMatchingAgent.MatchedIssue v3_4 = new IssueMatchingAgent.MatchedIssue(2, "full", "consequential", List.of("NDK-050"), List.of(), "w", List.of(), java.util.Map.of(), List.of(), List.of(), List.of(), 1);
+        assertEquals(1, v3_4.parentIssueNo());
+        assertTrue(v3_4.isConsequential());
+        IssueMatchingAgent.MatchingResult old = new IssueMatchingAgent.MatchingResult(null, List.of(), java.util.Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0);
+        assertTrue(old.defectChecks().isEmpty());
+        IssueMatchingAgent.MatchingResult nullChecks = new IssueMatchingAgent.MatchingResult(null, List.of(), java.util.Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0, null);
+        assertTrue(nullChecks.defectChecks().isEmpty());
+        assertEquals(new IssueMatchingAgent.DefectCheck("", ""), new IssueMatchingAgent.DefectCheck(null, null));
+    }
+
     @Test
     void matchedIssue_kindIsNormalized_andOldConstructorsAreDemand() {
         assertEquals("demand", IssueMatchingAgent.normalizeKind(null));
         assertEquals("demand", IssueMatchingAgent.normalizeKind(""));
         assertEquals("demand", IssueMatchingAgent.normalizeKind("demand"));
         assertEquals("defect", IssueMatchingAgent.normalizeKind(" Defect "));
+        assertEquals("consequential", IssueMatchingAgent.normalizeKind("CONSEQUENTIAL "));
         assertEquals("demand", IssueMatchingAgent.normalizeKind("procedural"));
 
         IssueMatchingAgent.MatchedIssue v1 = new IssueMatchingAgent.MatchedIssue(1, "full", List.of("NDK-006"), "w", List.of(), java.util.Map.of(), List.of(), List.of());

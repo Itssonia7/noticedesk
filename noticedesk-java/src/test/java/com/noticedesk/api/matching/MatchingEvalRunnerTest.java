@@ -390,9 +390,14 @@ class MatchingEvalRunnerTest {
         return -1;
     }
 
-    /** "Got" column entry of one returned issue: kind, status, primary card and (when any) the alternates. */
+    /**
+     * "Got" column entry of one returned issue: kind (a consequential issue also names its parent, as
+     * {@code consequential(parent 1)}), status, primary card and (when any) the alternates.
+     */
     static String gotColumn(MatchedIssue i) {
-        String s = i.kind() + ":" + i.status() + cardList(i.cardIds());
+        String kind = i.kind();
+        if (i.isConsequential() && i.parentIssueNo() != null) kind += "(parent " + i.parentIssueNo() + ")";
+        String s = kind + ":" + i.status() + cardList(i.cardIds());
         if (i.alternateCardIds() != null && !i.alternateCardIds().isEmpty()) s += " alt" + cardList(i.alternateCardIds());
         return s;
     }
@@ -431,6 +436,35 @@ class MatchingEvalRunnerTest {
 
     private static int clientFactCount(MatchedIssue i) {
         return i.clientFactsToConfirm() == null ? 0 : i.clientFactsToConfirm().size();
+    }
+
+    /**
+     * The v3.4 defect_checks line printed per notice when {@code MATCHING_EVAL_SHOW_WHY=true}, compact:
+     * {@code check=result, ...} in the model's order (the basis text is not printed), or {@code (absent)} when the
+     * model returned no checks. Never the notice text.
+     */
+    static String defectChecksLine(String noticeId, Map<String, IssueMatchingAgent.DefectCheck> defectChecks) {
+        StringBuilder sb = new StringBuilder("  ").append(noticeId).append(" defect_checks: ");
+        if (defectChecks == null || defectChecks.isEmpty()) return sb.append("(absent)").toString();
+        boolean first = true;
+        for (Map.Entry<String, IssueMatchingAgent.DefectCheck> e : defectChecks.entrySet()) {
+            if (!first) sb.append(", ");
+            first = false;
+            String result = e.getValue() == null ? "" : e.getValue().result();
+            sb.append(e.getKey()).append('=').append(result.isEmpty() ? "?" : result.replace(' ', '_'));
+        }
+        return sb.toString();
+    }
+
+    /** True when the result carries all ten mandatory defect checks (v3.4). */
+    static boolean defectChecksPresent(MatchingResult result) {
+        return result != null && result.defectChecks() != null
+                && result.defectChecks().size() >= IssueMatchingAgent.DEFECT_CHECK_NAMES.size();
+    }
+
+    /** The result's defect_checks entries whose result is "defect" (v3.4). */
+    static int defectResultsTotal(MatchingResult result) {
+        return result == null ? 0 : IssueMatchingAgent.defectResultCount(result.defectChecks());
     }
 
     /** Returned issues with a non-empty client_facts_to_confirm list (v3.2). */
@@ -554,6 +588,12 @@ class MatchingEvalRunnerTest {
         int clientFactIssues = 0;
         int partialOnClientFact = 0;
 
+        // v3.4: notices whose result carries the ten defect checks, "defect" results in total, and the two check flags
+        int defectChecksPresentCount = 0;
+        int defectResultsTotal = 0;
+        int defectChecksMissingFlags = 0;
+        int defectCountMismatchFlags = 0;
+
         BigDecimal startInr = spentInr[0];      // the INR cap applies across both sets
         BigDecimal totalCostInr = startInr;
         final BigDecimal INR_CAP = guard != null ? guard.maxRunCostInr() : LiveRunGuard.DEFAULT_MAX_RUN_COST_INR;
@@ -606,6 +646,7 @@ class MatchingEvalRunnerTest {
             System.out.printf("  catalogue_hash=%s issues(kind:status[primary] alt[...])=%s flags=%s cost=%.4f INR%n", result.catalogueHash(),
                     result.issues().stream().map(MatchingEvalRunnerTest::gotColumn).toList(), result.flags(), noticeInr.doubleValue());
             if (showWhy) {
+                System.out.println(defectChecksLine(noticeId, result.defectChecks()));
                 for (String line : reasonLines(noticeId, result.issues())) System.out.println(line);
             }
 
@@ -669,6 +710,10 @@ class MatchingEvalRunnerTest {
             if (defectCardIds != null) defectExpected += defectIssuesExpected(answerKey, defectCardIds);
             clientFactIssues += issuesWithClientFacts(result.issues());
             partialOnClientFact += partialOnClientFactFlags(result.issues());
+            if (defectChecksPresent(result)) defectChecksPresentCount++;
+            defectResultsTotal += defectResultsTotal(result);
+            if (result.flags().contains(IssueMatchingAgent.FLAG_DEFECT_CHECKS_MISSING)) defectChecksMissingFlags++;
+            if (result.flags().contains(IssueMatchingAgent.FLAG_DEFECT_COUNT_MISMATCH)) defectCountMismatchFlags++;
             cardIssuesExpected += cards.expected();
             cardIssuesCorrect += cards.correct();
             cardPrimaryRightStatusWrong += cards.primaryRightStatusWrong();
@@ -714,6 +759,8 @@ class MatchingEvalRunnerTest {
             if (defectCardIds != null) evalItem.put("defect_issues_expected", defectIssuesExpected(answerKey, defectCardIds));
             evalItem.put("issues_with_client_facts", issuesWithClientFacts(result.issues()));
             evalItem.put("partial_on_client_fact_flags", partialOnClientFactFlags(result.issues()));
+            evalItem.put("defect_checks_present", defectChecksPresent(result));
+            evalItem.put("defect_results", defectResultsTotal(result));
             evalItem.set("result_flags", objectMapper.valueToTree(result.flags()));
             noticeEvalResults.add(evalItem);
         }
@@ -749,6 +796,10 @@ class MatchingEvalRunnerTest {
                 + (defectCardIds == null ? "n/a (no defect_cards.txt)" : String.valueOf(defectExpected)));
         System.out.println("Client facts (v3.2): issues with client facts=" + clientFactIssues
                 + " | partial_on_client_fact flags=" + partialOnClientFact);
+        System.out.println("Defect checks (v3.4): present on " + defectChecksPresentCount + " of " + successfulCalls
+                + " successful | defect results total=" + defectResultsTotal
+                + " | defect_checks_missing flags=" + defectChecksMissingFlags
+                + " | defect_count_mismatch flags=" + defectCountMismatchFlags);
 
         if (successfulCalls == 0) {
             System.out.println("\nNo successful calls: accuracy metrics are N/A.");
@@ -795,6 +846,10 @@ class MatchingEvalRunnerTest {
         }
         summaryReport.put("issues_with_client_facts", clientFactIssues);
         summaryReport.put("partial_on_client_fact_flags", partialOnClientFact);
+        summaryReport.put("defect_checks_present", defectChecksPresentCount);
+        summaryReport.put("defect_results_total", defectResultsTotal);
+        summaryReport.put("defect_checks_missing_flags", defectChecksMissingFlags);
+        summaryReport.put("defect_count_mismatch_flags", defectCountMismatchFlags);
         summaryReport.set("notices", objectMapper.valueToTree(noticeEvalResults));
 
         spentInr[0] = totalCostInr;

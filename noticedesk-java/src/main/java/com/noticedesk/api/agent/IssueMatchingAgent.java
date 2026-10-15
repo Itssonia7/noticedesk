@@ -49,14 +49,22 @@ public class IssueMatchingAgent {
     public static final String KIND_DEMAND = "demand";
     /** Issue kind (v3): a procedural / jurisdictional / limitation / form defect visible in the document itself. */
     public static final String KIND_DEFECT = "defect";
+    /**
+     * Issue kind (v3.4): interest or penalty consequential to a demand ground of the same notice that has a dedicated
+     * catalogue card of its own; {@code parentIssueNo} names the demand issue it rides on. Downstream (template fill,
+     * assembly, writers) treats it exactly like a demand issue.
+     */
+    public static final String KIND_CONSEQUENTIAL = "consequential";
 
     /**
      * One matched issue. {@code cardIds} holds ONLY the primary card (one element, or empty for status
      * {@code none}), so template fill and every downstream consumer read it unchanged; the matcher's other
      * plausible cards are in {@code alternateCardIds} (at most two, never the primary). {@code kind} is
-     * {@link #KIND_DEMAND} (default, every v1 / v2 issue) or {@link #KIND_DEFECT} (v3 visible-defect ground).
-     * {@code clientFactsToConfirm} (v3.2) holds the primary card's CLIENT facts the notice does not evidence,
-     * in the card's words, for the partner to confirm with the client; empty before v3.2 and for status none.
+     * {@link #KIND_DEMAND} (default, every v1 / v2 issue), {@link #KIND_DEFECT} (v3 visible-defect ground) or
+     * {@link #KIND_CONSEQUENTIAL} (v3.4 interest / penalty with its own card). {@code clientFactsToConfirm} (v3.2)
+     * holds the primary card's CLIENT facts the notice does not evidence, in the card's words, for the partner to
+     * confirm with the client; empty before v3.2 and for status none. {@code parentIssueNo} (v3.4) is the
+     * {@code issue_no} of the demand issue a consequential issue rides on; null for every other issue and before v3.4.
      */
     public record MatchedIssue(
             int issueNo,
@@ -69,12 +77,20 @@ public class IssueMatchingAgent {
             Map<String, Object> facts,
             List<String> noticeParas,
             List<String> flags,
-            List<String> clientFactsToConfirm
+            List<String> clientFactsToConfirm,
+            Integer parentIssueNo
     ) {
         public MatchedIssue {
             if (alternateCardIds == null) alternateCardIds = List.of();
             if (clientFactsToConfirm == null) clientFactsToConfirm = List.of();
             kind = normalizeKind(kind);
+        }
+
+        /** An issue with client facts but no parent (the v3.2 / v3.3 shape). */
+        public MatchedIssue(int issueNo, String status, String kind, List<String> cardIds, List<String> alternateCardIds, String why,
+                            List<String> notThisIfChecked, Map<String, Object> facts, List<String> noticeParas, List<String> flags,
+                            List<String> clientFactsToConfirm) {
+            this(issueNo, status, kind, cardIds, alternateCardIds, why, notThisIfChecked, facts, noticeParas, flags, clientFactsToConfirm, null);
         }
 
         /** An issue with a kind and alternates but no client facts (the v3 / v3.1 shape). */
@@ -104,13 +120,50 @@ public class IssueMatchingAgent {
         public boolean isDefect() {
             return KIND_DEFECT.equals(kind);
         }
+
+        /** True for a consequential interest / penalty ground with its own card (kind {@code consequential}, v3.4). */
+        public boolean isConsequential() {
+            return KIND_CONSEQUENTIAL.equals(kind);
+        }
     }
 
-    /** {@code defect} for "defect" (any case, trimmed); everything else (null, blank, "demand", unknown) is {@code demand}. */
+    /**
+     * {@code defect} for "defect" and {@code consequential} for "consequential" (any case, trimmed); everything else
+     * (null, blank, "demand", unknown) is {@code demand}.
+     */
     static String normalizeKind(String kind) {
-        return kind != null && KIND_DEFECT.equalsIgnoreCase(kind.trim()) ? KIND_DEFECT : KIND_DEMAND;
+        if (kind == null) return KIND_DEMAND;
+        String k = kind.trim();
+        if (KIND_DEFECT.equalsIgnoreCase(k)) return KIND_DEFECT;
+        if (KIND_CONSEQUENTIAL.equalsIgnoreCase(k)) return KIND_CONSEQUENTIAL;
+        return KIND_DEMAND;
     }
 
+    /** One entry of the v3.4 {@code defect_checks} object: {@code result} is ok, defect or cannot test; {@code basis} cites the text. */
+    public record DefectCheck(String result, String basis) {
+        public DefectCheck {
+            result = result == null ? "" : result.trim().toLowerCase(Locale.ROOT);
+            basis = basis == null ? "" : basis.trim();
+        }
+
+        /** True when the model reported this check as a visible defect. */
+        public boolean isDefect() {
+            return DEFECT_CHECK_RESULT_DEFECT.equals(result);
+        }
+    }
+
+    /** The {@code result} value of a {@link DefectCheck} that found a defect. */
+    public static final String DEFECT_CHECK_RESULT_DEFECT = "defect";
+
+    /** The ten mandatory {@code defect_checks} entries of prompt v3.4, in the prompt's order. */
+    public static final List<String> DEFECT_CHECK_NAMES = List.of(
+            "din_rfn", "signature", "limitation", "premature_74", "drc01a_missing",
+            "hearing", "reply_time", "officer", "recovery_without_demand", "non_speaking");
+
+    /**
+     * The matcher's result. {@code defectChecks} (v3.4) is the model's {@code defect_checks} object in its own order,
+     * empty before v3.4 and when the object is absent; it is reported, never stored.
+     */
     public record MatchingResult(
             MatchedNoticeInfo notice,
             List<MatchedIssue> issues,
@@ -121,8 +174,21 @@ public class IssueMatchingAgent {
             int inputTokens,
             int outputTokens,
             int cacheReadTokens,
-            int cacheWriteTokens
-    ) {}
+            int cacheWriteTokens,
+            Map<String, DefectCheck> defectChecks
+    ) {
+        public MatchingResult {
+            if (defectChecks == null) defectChecks = Map.of();
+        }
+
+        /** A result without the v3.4 defect checks (the v1 to v3.3 shape). */
+        public MatchingResult(MatchedNoticeInfo notice, List<MatchedIssue> issues, Map<String, List<Integer>> paraMap,
+                              List<String> missingOrDoubtful, List<String> flags, String catalogueHash,
+                              int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens) {
+            this(notice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens, outputTokens,
+                    cacheReadTokens, cacheWriteTokens, Map.of());
+        }
+    }
 
     /**
      * Loads the UNTRUNCATED full OCR text of the notice document directly from the database
@@ -160,8 +226,11 @@ public class IssueMatchingAgent {
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
     /**
-     * Version of the live matching prompt (v3.3: a card's stage is tested against the RESPONSE the input document
-     * calls for, per an input-document to response-stage table, never against the input document's own name;
+     * Version of the live matching prompt (v3.4: a mandatory ten-item {@code defect_checks} object replaces the
+     * free-form defect scan, one defect ground per "defect" result; consequential interest / penalty with a dedicated
+     * card becomes its own {@code consequential} issue with {@code parent_issue_no}; v3.3: a card's stage is tested
+     * against the RESPONSE the input document calls for, per an input-document to response-stage table, never
+     * against the input document's own name;
      * v3.2: status decided on notice-visible DECISIVE facts only, the card's CLIENT facts returned as
      * {@code client_facts_to_confirm}, an untestable NOT THIS IF rule no longer lowers the status; v3.1: boundary
      * lines and {@code not_this_if_checked} written only for the chosen cards, {@code why} capped at 60 words of
@@ -169,7 +238,7 @@ public class IssueMatchingAgent {
      * date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one primary card + alternates
      * and grounds-first splitting).
      */
-    public static final String PROMPT_VERSION = "issue_matching_v3_3";
+    public static final String PROMPT_VERSION = "issue_matching_v3_4";
     /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
     public static final String PROMPT_FILE = "issue_matching_v3";
 
@@ -187,6 +256,17 @@ public class IssueMatchingAgent {
      * Never a failure; the status is kept.
      */
     public static final String FLAG_PARTIAL_ON_CLIENT_FACT = "partial_on_client_fact";
+    /**
+     * Result flag (v3.4): the {@code defect_checks} object is absent or has fewer than the ten mandatory entries
+     * (prompt self-check 1a). Informational: the issues are kept.
+     */
+    public static final String FLAG_DEFECT_CHECKS_MISSING = "defect_checks_missing";
+    /**
+     * Result flag (v3.4): the number of defect grounds (issues of kind {@code defect}) differs from the number of
+     * {@code defect_checks} entries whose result is "defect" (prompt self-check 1a). Tested only when the object
+     * holds at least one entry. Informational: the issues are kept.
+     */
+    public static final String FLAG_DEFECT_COUNT_MISMATCH = "defect_count_mismatch";
     /** Most alternates kept per issue; any beyond are dropped. */
     static final int MAX_ALTERNATES = 2;
 
@@ -356,6 +436,7 @@ public class IssueMatchingAgent {
                     if (facts == null) facts = Map.of();
 
                     List<String> clientFacts = readClientFactsToConfirm(issueNode);
+                    Integer parentIssueNo = readParentIssueNo(issueNode);
 
                     List<String> issueFlags = new ArrayList<>();
 
@@ -399,7 +480,7 @@ public class IssueMatchingAgent {
                         issueFlags.add(FLAG_PARTIAL_ON_CLIENT_FACT);
                     }
 
-                    issues.add(new MatchedIssue(issueNo, status, kind, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags, clientFacts));
+                    issues.add(new MatchedIssue(issueNo, status, kind, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags, clientFacts, parentIssueNo));
                 }
             }
 
@@ -408,6 +489,22 @@ public class IssueMatchingAgent {
             if (groundsNode.isArray() && groundsNode.size() != issues.size()) {
                 log.warn("matching_issue_count_mismatch grounds={} issues={} noticeId={}", groundsNode.size(), issues.size(), noticeId);
                 resultFlags.add(FLAG_ISSUE_COUNT_MISMATCH);
+            }
+
+            // Prompt self-check 1a (v3.4): the ten-item defect checklist, one defect ground per "defect" result
+            Map<String, DefectCheck> defectChecks = readDefectChecks(jsonNode);
+            if (defectChecks.size() < DEFECT_CHECK_NAMES.size()) {
+                log.warn("matching_defect_checks_missing entries={} noticeId={}", defectChecks.size(), noticeId);
+                resultFlags.add(FLAG_DEFECT_CHECKS_MISSING);
+            }
+            if (!defectChecks.isEmpty()) {
+                int defectResults = defectResultCount(defectChecks);
+                int defectGrounds = 0;
+                for (MatchedIssue i : issues) if (i.isDefect()) defectGrounds++;
+                if (defectResults != defectGrounds) {
+                    log.warn("matching_defect_count_mismatch defect_results={} defect_grounds={} noticeId={}", defectResults, defectGrounds, noticeId);
+                    resultFlags.add(FLAG_DEFECT_COUNT_MISMATCH);
+                }
             }
 
             Map<String, List<Integer>> paraMap = objectMapper.convertValue(jsonNode.path("para_map"), new TypeReference<Map<String, List<Integer>>>() {});
@@ -422,7 +519,7 @@ public class IssueMatchingAgent {
             }
 
             return new MatchingResult(noticeInfo, issues, paraMap, missingOrDoubtful, List.copyOf(resultFlags), catalogueHash,
-                    totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
+                    totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens, defectChecks);
 
         } catch (Exception e) {
             log.error("matching_parse_failed error={}", e.getMessage(), e);
@@ -481,6 +578,55 @@ public class IssueMatchingAgent {
             if (!s.isEmpty()) out.add(s);
         }
         return List.copyOf(out);
+    }
+
+    /**
+     * The v3.4 {@code parent_issue_no} of one issue: its integral value, or null when the key is absent (output before
+     * v3.4, or a demand / defect issue), null, or not a whole number.
+     */
+    static Integer readParentIssueNo(JsonNode issueNode) {
+        JsonNode node = issueNode.path("parent_issue_no");
+        if (node.isIntegralNumber()) return node.asInt();
+        if (node.isTextual()) {
+            try {
+                return Integer.valueOf(node.asText().trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The v3.4 {@code defect_checks} object of the output: one {@link DefectCheck} per entry, in the model's order,
+     * keys trimmed. An entry whose value is an object reads {@code result} and {@code basis}; a bare text value is
+     * read as the result with no basis. Empty when the key is absent (output before v3.4), null or not an object.
+     */
+    static Map<String, DefectCheck> readDefectChecks(JsonNode root) {
+        JsonNode node = root.path("defect_checks");
+        if (!node.isObject()) return Map.of();
+        Map<String, DefectCheck> out = new LinkedHashMap<>();
+        Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> e = fields.next();
+            String name = e.getKey() == null ? "" : e.getKey().trim();
+            if (name.isEmpty()) continue;
+            JsonNode v = e.getValue();
+            if (v != null && v.isObject()) {
+                out.put(name, new DefectCheck(v.path("result").asText(""), v.path("basis").asText("")));
+            } else if (v != null && v.isTextual()) {
+                out.put(name, new DefectCheck(v.asText(), ""));
+            }
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    /** Entries of a {@code defect_checks} map whose result is "defect". */
+    public static int defectResultCount(Map<String, DefectCheck> defectChecks) {
+        if (defectChecks == null) return 0;
+        int n = 0;
+        for (DefectCheck c : defectChecks.values()) if (c != null && c.isDefect()) n++;
+        return n;
     }
 
     /** {@link #FLAG_PARTIAL_ON_CLIENT_FACT} heuristic: status partial and the why text contains the token "CLIENT" (upper case). */
