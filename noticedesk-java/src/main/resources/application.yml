@@ -94,6 +94,9 @@ noticedesk:
     effort-partial-drafting: ${LLM_EFFORT_PARTIAL_DRAFTING:medium}
     effort-new-issue: ${LLM_EFFORT_NEW_ISSUE:medium}
     effort-high-stakes: ${LLM_EFFORT_HIGH_STAKES:medium}
+    # Template variable extraction (TemplateVariableAgent, one call per notice after matching, on the
+    # partial-drafting model): copies the values of card-specific template variables out of the notice text.
+    effort-template-variables: ${LLM_EFFORT_TEMPLATE_VARIABLES:low}
     # max_tokens per agent. Thinking tokens count against it, so it must leave room for thinking + JSON.
     # A max_tokens stop is treated as a failure and retried once with the *-retry cap.
     max-tokens-matching: ${LLM_MAX_TOKENS_MATCHING:12000}
@@ -104,6 +107,8 @@ noticedesk:
     max-tokens-new-issue-retry: ${LLM_MAX_TOKENS_NEW_ISSUE_RETRY:24000}
     max-tokens-high-stakes: ${LLM_MAX_TOKENS_HIGH_STAKES:16000}
     max-tokens-high-stakes-retry: ${LLM_MAX_TOKENS_HIGH_STAKES_RETRY:24000}
+    max-tokens-template-variables: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES:2000}
+    max-tokens-template-variables-retry: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES_RETRY:4000}
     # Per-notice cost control. Once either limit is reached, the remaining AI issues get a
     # [[PARTNER: ...]] placeholder and a block flag instead of another model call.
     max-cost-inr-per-notice: ${LLM_MAX_COST_INR_PER_NOTICE:60}

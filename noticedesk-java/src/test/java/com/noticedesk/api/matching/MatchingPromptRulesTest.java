@@ -20,7 +20,8 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.4: grounds-first splitting, one
+ * Rules of the live matching prompt (prompts/issue_matching_v3.md, version v3.5: a para_stance per paragraph for the
+ * para-wise reply, grounds-first splitting, one
  * primary card plus alternates, status decided on notice-visible DECISIVE facts only with the card's CLIENT facts
  * returned as client_facts_to_confirm, a card's stage tested against the response the input document calls for,
  * a mandatory ten-item defect_checks object with one defect ground per "defect" result, consequential interest /
@@ -50,8 +51,8 @@ class MatchingPromptRulesTest {
 
     @Test
     void agentLoadsTheV3Prompt_andV1V2StayUntouched() throws IOException {
-        assertEquals("issue_matching_v3_4", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
-        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.4 is edited in place in the v3 file");
+        assertEquals("issue_matching_v3_5", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.5 is edited in place in the v3 file");
         String v1 = resource("/prompts/issue_matching_v1.md");
         assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
         assertFalse(v1.contains("alternates"));
@@ -61,11 +62,45 @@ class MatchingPromptRulesTest {
         assertFalse(v2.contains("\"kind\""), "v2 has no issue kind");
         assertFalse(v2.contains("Step 1b"), "v2 has no visible-defect step");
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.4)"));
-        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.4 version");
-        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.4 version");
-        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.4 version");
-        assertFalse(v3.contains("Matching Agent (v3.3)"), "the heading carries the v3.4 version");
+        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.5)"));
+        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.5 version");
+        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.5 version");
+        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.5 version");
+        assertFalse(v3.contains("Matching Agent (v3.3)"), "the heading carries the v3.5 version");
+        assertFalse(v3.contains("Matching Agent (v3.4)"), "the heading carries the v3.5 version");
+    }
+
+    /**
+     * v3.5 (live, 10 private notices on v3.4: Section 05 printed "Denied. Please refer to ..." for EVERY paragraph,
+     * factual recitals and the department's own description of the proceedings included). The matcher now gives
+     * every para_map paragraph a stance; the assembly words the para-wise reply from it.
+     */
+    @Test
+    void v3_5_paraStancePerParagraph() throws IOException {
+        String prompt = resource(PROMPT);
+        // the task line and the rule
+        assertTrue(prompt.contains("give every numbered paragraph of the notice its stance for the taxpayer's para-wise reply (`para_stance`)"));
+        assertTrue(prompt.contains("7a. **Paragraph stance (`para_stance`)**"));
+        assertTrue(prompt.contains("a reply that \"denies\" the department's own recital of the facts reads badly and is wrong"));
+        assertTrue(prompt.contains("For EVERY key of `para_map` (the same paragraph keys, no more and no fewer), give the taxpayer's stance on that paragraph as ONE of exactly these four values"));
+        // the four values and their meaning
+        assertTrue(prompt.contains("`\"admitted\"`: a factual recital the taxpayer does not dispute: the jurisdiction and designation of the officer, the registration and GSTIN, the dates of the proceedings, that returns were filed, that a notice / intimation / order was issued or received"));
+        assertTrue(prompt.contains("the department's own description of the proceedings so far (scrutiny conducted, audit held, data compared)"));
+        assertTrue(prompt.contains("`\"denied\"`: an allegation, finding, computation or proposed demand the taxpayer disputes"));
+        assertTrue(prompt.contains("the \"show cause why\" paragraph"));
+        assertTrue(prompt.contains("`\"explained\"`: a factual statement that is correct as a fact but needs the taxpayer's context, for example the payment was made under protest"));
+        assertTrue(prompt.contains("`\"not_applicable\"`: closing formalities with no fact or allegation to answer: the time limit for the reply, the offer of personal hearing, the ex-parte / best-judgement warning"));
+        // mixed paragraphs and unreadable text
+        assertTrue(prompt.contains("a paragraph that mixes a recital with an allegation is `\"denied\"` (the allegation governs)"));
+        assertTrue(prompt.contains("A paragraph whose text is cut off or unreadable is `\"admitted\"` only when what is readable is pure recital; otherwise `\"denied\"`."));
+        // output format and self-check
+        assertTrue(prompt.contains("The `para_stance` object with one entry per `para_map` key is mandatory on every output."));
+        assertTrue(prompt.contains("2a. `para_stance` has exactly the keys of `para_map`, each with one of `\"admitted\"`, `\"denied\"`, `\"explained\"`, `\"not_applicable\"`; every paragraph that sets out a ground or the proposed demand is `\"denied\"`; no pure recital (jurisdiction, dates, returns filed, notice received, the department's description of the proceedings) is `\"denied\"`; the closing formalities (reply time, hearing, ex-parte warning) are `\"not_applicable\"`."));
+        // the parser knows the same four values
+        assertEquals(Set.of("admitted", "denied", "explained", "not_applicable"), com.noticedesk.api.agent.IssueMatchingAgent.PARA_STANCES);
+        // v3.4 rules are kept
+        assertTrue(prompt.contains("Step 1b, **defect checklist (`defect_checks`)**"));
+        assertTrue(prompt.contains("(c) **Consequential ground with a dedicated card (kind `\"consequential\"`).**"));
     }
 
     /**
@@ -443,6 +478,16 @@ class MatchingPromptRulesTest {
         assertTrue(example.contains("\"card_id\": \"CARD-017\""));
         assertTrue(example.contains("penalty (para 4) is consequential; interest: ground 2."));
         assertTrue(example.contains("\"4\": [1, 2]"), "the interest paragraph maps to the parent and the consequential issue");
+        // v3.5: para_stance follows para_map with the same keys; recitals admitted, grounds denied, formalities not applicable
+        int stanceAt = example.indexOf("\"para_stance\": {");
+        assertTrue(stanceAt > example.indexOf("\"para_map\": {") && stanceAt < example.indexOf("\"missing_or_doubtful\""), "para_stance sits after para_map");
+        assertEquals(exampleObjectKeys(example, "para_map"), exampleObjectKeys(example, "para_stance"), "para_stance has exactly the para_map keys");
+        assertTrue(example.contains("\"1\": \"admitted\""));
+        assertTrue(example.contains("\"3\": \"denied\""));
+        assertTrue(example.contains("\"3.1\": \"denied\""));
+        assertTrue(example.contains("\"4\": \"denied\""));
+        assertTrue(example.contains("\"5\": \"not_applicable\""));
+        assertTrue(example.contains("\"6\": \"not_applicable\""));
         assertTrue(example.contains("defect_checks.din_rfn"));
         assertTrue(example.contains("DIN missing"));
         assertTrue(example.contains("\"notice_paras\": [\"header\"]"));
@@ -470,6 +515,18 @@ class MatchingPromptRulesTest {
             }
             assertTrue(words <= 60, "why prose must be 60 words or fewer, was " + words + ": " + why);
         }
+    }
+
+    /** The keys of the top-level object {@code name} in the fenced example, in order. */
+    private static java.util.List<String> exampleObjectKeys(String example, String name) {
+        int start = example.indexOf("\"" + name + "\": {");
+        assertTrue(start >= 0, name + " in the example");
+        int end = example.indexOf("\n  }", start);
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        java.util.regex.Matcher m = Pattern.compile("\n    \"([^\"]+)\":").matcher(example.substring(start, end));
+        while (m.find()) keys.add(m.group(1));
+        assertFalse(keys.isEmpty(), name + " has keys");
+        return keys;
     }
 
     private static java.util.List<String> whyValues(String example) {

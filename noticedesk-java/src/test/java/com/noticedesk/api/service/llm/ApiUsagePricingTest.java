@@ -75,9 +75,15 @@ class ApiUsagePricingTest {
         if (System.getenv("LLM_MAX_TOKENS_MATCHING") == null) assertEquals(12000, llm.maxTokensForAgent("matching", false));
         if (System.getenv("LLM_MAX_TOKENS_MATCHING_RETRY") == null) assertEquals(20000, llm.maxTokensForAgent("matching", true));
         assertTrue(llm.maxTokensForAgent("matching", true) > llm.maxTokensForAgent("matching", false));
-        for (String a : List.of("partial_drafting", "new_issue", "high_stakes")) {
+        for (String a : List.of("partial_drafting", "new_issue", "high_stakes", "template_variables")) {
             assertTrue(llm.maxTokensForAgent(a, true) > llm.maxTokensForAgent(a, false), a);
         }
+        // the template variable step: a lookup task on the partial-drafting model, low effort, a short JSON answer
+        if (System.getenv("LLM_EFFORT_TEMPLATE_VARIABLES") == null) assertEquals("low", llm.effortForAgent("template_variables"));
+        if (System.getenv("LLM_MAX_TOKENS_TEMPLATE_VARIABLES") == null) assertEquals(2000, llm.maxTokensForAgent("template_variables", false));
+        if (System.getenv("LLM_MAX_TOKENS_TEMPLATE_VARIABLES_RETRY") == null) assertEquals(4000, llm.maxTokensForAgent("template_variables", true));
+        assertEquals(props.modelForAgent("partial_drafting", "anthropic"), props.modelForAgent("template_variables", "anthropic"),
+                "the variable step runs on the partial-drafting model: nothing new to price");
         if (System.getenv("ANTHROPIC_EFFORT_MODELS") == null) {
             assertTrue(llm.getAnthropic().getEffortModels().containsAll(List.of("claude-sonnet-5-5", "claude-opus-5-5")));
         }

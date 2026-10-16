@@ -294,5 +294,82 @@ class TemplateFillServiceTest {
         FilledTemplateResult resTrue = fillerService.fillTemplateForIssue(issue, noticeInfoThirdParty, inputWithThirdParty);
         assertEquals(2, resTrue.blocks().size());
     }
-}
 
+    /**
+     * Live finding: a template's "order dated {{notice.issue_date}}" printed the covering letter's date. notice.issue_date
+     * is the date of the document being answered; the ORDER's date is an issue.* variable (issue.order_date) that the
+     * template variable step extracts and merges into the facts, where it always wins.
+     */
+    @Test
+    void issueVariablesFromFacts_winOverNoticeFallbacks_andNoticeIssueDateIsTheInputDocumentsDate() {
+        ReplyTemplate template = new ReplyTemplate(
+                "TPL-037", 1, "CARD-037",
+                LocalDate.of(2017, 7, 1), LocalDate.of(2099, 12, 31), "active",
+                List.of(new TemplateBlock("BLK-1", 4,
+                        "<p>The order dated {{issue.order_date}} was received with the letter dated {{notice.issue_date}}; the return was filed on {{issue.return_filing_date}}, served on {{notice.date_of_service}}.</p>",
+                        List.of(), null)),
+                List.of("issue.order_date", "notice.issue_date", "issue.return_filing_date", "notice.date_of_service"),
+                List.of(), "Summary", List.of(), null, null, null);
+        fillerService.registerInMemoryTemplate(template);
+        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo("REF/1", null, "01.01.2024", null, "2022-23", "2022-23", null, null);
+        DraftingInput input = new DraftingInput(
+                UUID.randomUUID(), "formal", null, "ABC Corp", null, null, null, "27AAACB1234A1Z1", "Maharashtra", "CGST Act", "2022-23", null,
+                Map.of(), Map.of(), "OCR", List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null, null);
+
+        // before the variable step: the card-specific placeholders are missing, the notice date is the input document's
+        MatchedIssue bare = new MatchedIssue(1, "full", List.of("CARD-037"), "Why", List.of(), Map.of("period", "2022-23"), List.of(), List.of());
+        FilledTemplateResult before = fillerService.fillTemplateForIssue(bare, noticeInfo, input);
+        String html = before.blocks().get(0).filledHtml();
+        assertTrue(html.contains("order dated [[MISSING: issue.order_date]]"), html);
+        assertTrue(html.contains("letter dated 01.01.2024"), html);
+        assertTrue(html.contains("[[MISSING: issue.return_filing_date]]"), html);
+        assertTrue(html.contains("[[MISSING: notice.date_of_service]]"), html);
+        assertEquals(List.of("issue.order_date", "issue.return_filing_date", "notice.date_of_service"),
+                TemplateFillService.unknownVariables(template, fillerService.buildContextMap(bare, noticeInfo, input)),
+                "notice.issue_date is known; the three card-specific variables are asked of the model");
+
+        // after the variable step: values merged under factKeyForVariable
+        java.util.Map<String, Object> facts = new java.util.LinkedHashMap<>(bare.facts());
+        facts.put(TemplateFillService.factKeyForVariable("issue.order_date"), "16.08.2023");
+        facts.put(TemplateFillService.factKeyForVariable("issue.return_filing_date"), "20.08.2023");
+        facts.put(TemplateFillService.factKeyForVariable("notice.date_of_service"), "03.01.2024");
+        facts.put(TemplateFillService.factKeyForVariable("notice.issue_date"), "31.12.2023");   // a fallback only: the pipeline's value wins
+        FilledTemplateResult after = fillerService.fillTemplateForIssue(bare.withFacts(facts), noticeInfo, input);
+        html = after.blocks().get(0).filledHtml();
+        assertTrue(html.contains("order dated 16.08.2023"), html);
+        assertTrue(html.contains("letter dated 01.01.2024"), "notice.issue_date stays the input document's date: " + html);
+        assertTrue(html.contains("filed on 20.08.2023"), html);
+        assertTrue(html.contains("served on 03.01.2024"), "a notice.* value the pipeline lacks is taken from the facts: " + html);
+        assertTrue(after.missingVars().isEmpty(), after.missingVars().toString());
+        assertTrue(TemplateFillService.unknownVariables(template, fillerService.buildContextMap(bare.withFacts(facts), noticeInfo, input)).isEmpty());
+    }
+
+    @Test
+    void factKeyForVariable_andUnknownVariables() {
+        assertEquals("order_date", TemplateFillService.factKeyForVariable("issue.order_date"));
+        assertEquals("amount_tax", TemplateFillService.factKeyForVariable(" issue.amount_tax "));
+        assertEquals("reason", TemplateFillService.factKeyForVariable("facts.reason"));
+        assertEquals("notice.date_of_service", TemplateFillService.factKeyForVariable("notice.date_of_service"));
+        assertEquals("client.trade_name", TemplateFillService.factKeyForVariable("client.trade_name"));
+        assertEquals("bare_name", TemplateFillService.factKeyForVariable("bare_name"));
+
+        ReplyTemplate template = new ReplyTemplate("T", 1, "C", null, null, "active", List.of(),
+                List.of("issue.amount_tax", "issue.period", "issue.legal_section", "client.legal_name", "notice.issue_date",
+                        "issue.return_filing_date", "ref:BLK-1", " issue.return_filing_date ", "", "notice.date_of_service"),
+                List.of(), null, List.of(), null, null, null);
+        MatchedIssue issue = new MatchedIssue(1, "full", List.of("C"), "w", List.of(),
+                Map.of("period", "2022-23", "amount", 100.0, "legal_section", "Section 62"), List.of(), List.of());
+        MatchedNoticeInfo info = new MatchedNoticeInfo("REF/1", null, "01.01.2024", null, null, null, null, null);
+        DraftingInput input = createTestDraftingInput("ABC", "27AAACB1234A1Z1");
+        assertEquals(List.of("issue.return_filing_date", "notice.date_of_service"),
+                TemplateFillService.unknownVariables(template, fillerService.buildContextMap(issue, info, input)),
+                "known client.* / notice.* values and the matcher's own facts are excluded; ref: and duplicates too");
+        assertTrue(TemplateFillService.unknownVariables(null, Map.of()).isEmpty());
+        assertTrue(TemplateFillService.unknownVariables(new ReplyTemplate("T", 1, "C", null, null, "active", List.of(), null,
+                List.of(), null, List.of(), null, null, null), Map.of()).isEmpty());
+        // a blank matcher fact counts as unknown
+        MatchedIssue blankAmount = issue.withFacts(Map.of("period", "2022-23", "amount", "", "legal_section", "Section 62"));
+        assertEquals(List.of("issue.amount_tax", "issue.return_filing_date", "notice.date_of_service"),
+                TemplateFillService.unknownVariables(template, fillerService.buildContextMap(blankAmount, info, input)));
+    }
+}

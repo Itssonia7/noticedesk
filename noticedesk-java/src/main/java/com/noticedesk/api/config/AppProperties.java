@@ -67,6 +67,8 @@ public class AppProperties {
         private String effortPartialDrafting = "";
         private String effortNewIssue = "";
         private String effortHighStakes = "";
+        /** Template variable extraction step (runs on the partial-drafting model): a lookup task, low effort. */
+        private String effortTemplateVariables = "low";
 
         // Per-agent max_tokens. A thinking model spends output tokens on thinking before the JSON,
         // so the cap must leave room for both. A max_tokens stop is retried once with the *Retry cap.
@@ -79,6 +81,9 @@ public class AppProperties {
         private Integer maxTokensNewIssueRetry = 24000;
         private Integer maxTokensHighStakes = 16000;
         private Integer maxTokensHighStakesRetry = 24000;
+        /** The variable step returns a short JSON object (a few values per issue). */
+        private Integer maxTokensTemplateVariables = 2000;
+        private Integer maxTokensTemplateVariablesRetry = 4000;
 
         /** Per-notice spend cap (INR) across all v7 model calls; once reached, remaining AI issues are left to the partner. */
         private Double maxCostInrPerNotice = 60.0;
@@ -96,13 +101,14 @@ public class AppProperties {
             private Integer maxCallsPerNotice = 6;
         }
 
-        /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes); "" when unset. */
+        /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes, template_variables); "" when unset. */
         public String effortForAgent(String agent) {
             String v = switch (agent) {
                 case "matching" -> effortMatching;
                 case "partial_drafting" -> effortPartialDrafting;
                 case "new_issue" -> effortNewIssue;
                 case "high_stakes" -> effortHighStakes;
+                case TEMPLATE_VARIABLES -> effortTemplateVariables;
                 default -> "";
             };
             return v != null ? v.trim() : "";
@@ -115,9 +121,16 @@ public class AppProperties {
                 case "partial_drafting" -> orDefault(retry ? maxTokensPartialDraftingRetry : maxTokensPartialDrafting, retry ? 24000 : 16000);
                 case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 24000 : 16000);
                 case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 24000 : 16000);
+                case TEMPLATE_VARIABLES -> orDefault(retry ? maxTokensTemplateVariablesRetry : maxTokensTemplateVariables, retry ? 4000 : 2000);
                 default -> retry ? 16000 : 8000;
             };
         }
+
+        /**
+         * Agent key of the template variable extraction step ({@code TemplateVariableAgent}). It has no model of its
+         * own: it runs on the partial-drafting model ({@code LLM_MODEL_PARTIAL_DRAFTING}), so pricing needs nothing new.
+         */
+        public static final String TEMPLATE_VARIABLES = "template_variables";
 
         private static int orDefault(Integer value, int fallback) {
             return value != null && value > 0 ? value : fallback;
@@ -314,7 +327,7 @@ public class AppProperties {
             case "triage"     -> llm.modelTriage;
             case "parsing"    -> llm.modelParsing;
             case "matching"   -> llm.modelMatching;
-            case "partial_drafting" -> llm.modelPartialDrafting;
+            case "partial_drafting", Llm.TEMPLATE_VARIABLES -> llm.modelPartialDrafting;
             case "new_issue"        -> llm.modelNewIssue;
             case "high_stakes"      -> llm.modelHighStakes;
             default         -> "";

@@ -580,11 +580,19 @@ public class TemplateFillService {
     ) {
         Map<String, Object> map = new HashMap<>();
 
-        // Issue facts
+        // Issue facts: the matcher's generic facts ("period", "amount", "legal_section", and any value the template
+        // variable step merged in without a prefix) read as issue.<key> and facts.<key>; a fact stored under a full
+        // variable name (notice.* / client.*, see factKeyForVariable) is applied after the pipeline's own values below
+        Map<String, Object> prefixedFacts = new LinkedHashMap<>();
         if (issue.facts() != null) {
             for (Map.Entry<String, Object> entry : issue.facts().entrySet()) {
-                map.put("issue." + entry.getKey(), entry.getValue());
-                map.put("facts." + entry.getKey(), entry.getValue());
+                String key = entry.getKey();
+                if (hasVariablePrefix(key)) {
+                    prefixedFacts.put(key, entry.getValue());
+                    continue;
+                }
+                map.put("issue." + key, entry.getValue());
+                map.put("facts." + key, entry.getValue());
             }
             if (issue.facts().containsKey("amount")) {
                 map.put("issue.amount_tax", issue.facts().get("amount"));
@@ -627,7 +635,66 @@ public class TemplateFillService {
             if (ref != null && !ref.toString().isBlank()) map.put("notice.reference", ref);
         }
 
+        // Date semantics: notice.issue_date is the date of the document being answered (the input document, from
+        // the matcher's notice block or the intake record). A template that needs the ORDER's date uses an issue.*
+        // variable (issue.order_date), which the template variable step extracts: an issue.* / facts.* value present
+        // in the facts always wins; a notice.* / client.* value from the facts is only a fallback for one the
+        // pipeline does not have.
+        for (Map.Entry<String, Object> entry : prefixedFacts.entrySet()) {
+            String key = entry.getKey();
+            if (key.startsWith("issue.") || key.startsWith("facts.")) {
+                map.put(key, entry.getValue());
+            } else if (isBlank(map.get(key))) {
+                map.put(key, entry.getValue());
+            }
+        }
+
         return map;
+    }
+
+    /** The placeholder prefixes a template variable may carry. */
+    private static final List<String> VARIABLE_PREFIXES = List.of("issue.", "facts.", "notice.", "client.");
+
+    static boolean hasVariablePrefix(String key) {
+        if (key == null) return false;
+        for (String p : VARIABLE_PREFIXES) if (key.startsWith(p)) return true;
+        return false;
+    }
+
+    private static boolean isBlank(Object v) {
+        return v == null || v.toString().isBlank();
+    }
+
+    /**
+     * The facts-map key a value extracted for a template variable is stored under so that {@link #buildContextMap}
+     * resolves the placeholder: {@code issue.X} and {@code facts.X} become {@code X} (like the matcher's own
+     * facts, read back as both {@code issue.X} and {@code facts.X}); a {@code notice.*} / {@code client.*} variable
+     * keeps its full name (a fallback the pipeline's own value wins over); any other name is kept as given.
+     */
+    public static String factKeyForVariable(String variableName) {
+        String n = variableName != null ? variableName.trim() : "";
+        if (n.startsWith("issue.")) return n.substring("issue.".length());
+        if (n.startsWith("facts.")) return n.substring("facts.".length());
+        return n;
+    }
+
+    /**
+     * The template's declared variables whose value is unknown in {@code contextMap} (absent or blank), in the
+     * template's order, each once; {@code ref:} cross-references are never variables. These are the variables the
+     * template variable step asks the model for: a {@code client.*} / {@code notice.*} value the pipeline already
+     * has and the matcher's own facts ({@code issue.period}, {@code issue.amount_tax}, {@code issue.legal_section})
+     * are known and excluded.
+     */
+    public static List<String> unknownVariables(ReplyTemplate template, Map<String, Object> contextMap) {
+        if (template == null || template.variables() == null) return List.of();
+        Map<String, Object> ctx = contextMap != null ? contextMap : Map.of();
+        List<String> out = new ArrayList<>();
+        for (String raw : template.variables()) {
+            String v = raw != null ? raw.trim() : "";
+            if (v.isEmpty() || v.startsWith("ref:") || out.contains(v)) continue;
+            if (isBlank(ctx.get(v))) out.add(v);
+        }
+        return List.copyOf(out);
     }
 
     private boolean evaluateWhenCondition(String whenExpr, Map<String, Object> context) {

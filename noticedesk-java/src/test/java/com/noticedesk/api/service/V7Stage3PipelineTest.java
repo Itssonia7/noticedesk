@@ -20,6 +20,9 @@ import com.noticedesk.api.agent.PartialDraftingAgent;
 import com.noticedesk.api.agent.PartialDraftingAgent.PartialDraftingResult;
 import com.noticedesk.api.agent.PartialDraftingAgent.PartialSectionAddition;
 import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
+import com.noticedesk.api.agent.TemplateVariableAgent;
+import com.noticedesk.api.agent.TemplateVariableAgent.IssueVariableRequest;
+import com.noticedesk.api.agent.TemplateVariableAgent.TemplateVariablesResult;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.model.matching.ReplyTemplate;
@@ -590,5 +593,103 @@ class V7Stage3PipelineTest {
         assertTrue(section(r, 12).contains("[[MISSING: stage template for scn_74]]"));
         assertFalse(section(r, 12).contains("PRAYER"), "the scn_73 prayer must not be used");
         assertEquals("block", check(r, "FLAG_STAGE_TEMPLATE_MISSING").severity());
+    }
+
+    // ------------------------------------------------------------------ Stage 1b: template variables
+
+    private static final String TPL_C_HTML = "<p>The order dated {{issue.order_date}} was answered by a return filed on {{issue.return_filing_date}}"
+            + " by {{client.legal_name}} for {{issue.amount_tax}}.</p>";
+
+    /** A pipeline with a mocked template variable agent and a card whose template needs two card-specific variables. */
+    private V7DraftingPipelineService pipelineWithVariableAgent(TemplateVariableAgent variableAgent) {
+        fill.registerInMemoryTemplate(new ReplyTemplate("TPL-C", 1, "CARD-C",
+                LocalDate.of(2017, 7, 1), LocalDate.of(2099, 12, 31), "active",
+                List.of(new TemplateBlock("BLK-C-04", 4, TPL_C_HTML, List.of(), null)),
+                List.of("issue.order_date", "issue.return_filing_date", "client.legal_name", "issue.amount_tax"),
+                List.of("Template document C"), "Template C summary.", List.of(), null, null, null));
+        MatchedNoticeInfo info = new MatchedNoticeInfo("REF/1", "DIN-1", "01-04-2024", "within 30 days", "2022-23", "2022-23", 160000.0, "Officer");
+        MatchingResult mr = new MatchingResult(info, List.of(
+                new MatchedIssue(1, "full", List.of("CARD-C"), "w", List.of(), Map.of("period", "2022-23", "amount", 100000.0), List.of("2"), List.of()),
+                new MatchedIssue(2, "full", List.of("CARD-A"), "w", List.of(), Map.of("period", "2022-23", "amount", 50000.0), List.of("3"), List.of()),
+                new MatchedIssue(3, "none", List.of(), "w", List.of(), Map.of("period", "2022-23", "amount", 10000.0), List.of("4"), List.of())),
+                Map.of("record", List.of(1), "issue", List.of(2, 3, 4), "demand", List.of(5)),
+                List.of(), List.of(), "h", 1, 1, 0, 0);
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(mr);
+        return new V7DraftingPipelineService(matchingAgent, null, om, fill, assembly, new DraftCheckService(null),
+                partialAgent, newIssueAgent, highStakesAgent, citationAgent, variableAgent);
+    }
+
+    @Test
+    void templateVariableStep_isCalledOnceWithOnlyTheUnknownVariables_andTheValuesFillThePlaceholders() {
+        TemplateVariableAgent variableAgent = mock(TemplateVariableAgent.class);
+        when(variableAgent.extractVariables(anyString(), anyList(), any(), any()))
+                .thenReturn(new TemplateVariablesResult(
+                        Map.of(1, Map.of("issue.order_date", "16.08.2023", "issue.return_filing_date", "20.08.2023", "issue.made_up", "x")),
+                        List.of(), "test-model-partial", TemplateVariableAgent.PROMPT_VERSION));
+        V7DraftingPipelineService p = pipelineWithVariableAgent(variableAgent);
+
+        DraftingPipelineResult r = p.runPipeline(input("Section 73"));
+
+        // one call for the notice, after matching: only issue 1 has a template with unknown variables, and only those two
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<List<IssueVariableRequest>> requests = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(variableAgent, times(1)).extractVariables(eq("notice text"), requests.capture(), any(), any());
+        assertEquals(1, requests.getValue().size());
+        IssueVariableRequest req = requests.getValue().get(0);
+        assertEquals(1, req.issueNo());
+        assertEquals("CARD-C", req.cardId());
+        assertEquals(List.of("issue.order_date", "issue.return_filing_date"), req.variableNames(),
+                "client.legal_name (input) and issue.amount_tax (matcher fact) are known and not asked");
+        assertEquals(TemplateVariableAgent.hintFor("issue.order_date"), req.variables().get(0).hint());
+
+        // the values filled the template; the issue's own facts and the notice values are untouched
+        String s04 = section(r, 4);
+        assertTrue(s04.contains("The order dated 16.08.2023 was answered by a return filed on 20.08.2023 by Test Client Pvt Ltd for Rs 1,00,000."), s04);
+        assertFalse(allHtml(r).contains("[[MISSING: issue.order_date]]"));
+        assertFalse(allHtml(r).contains("[[MISSING: issue.return_filing_date]]"));
+        assertTrue(s04.contains("Template ground for Test Client Pvt Ltd on Rs 50,000."), "issue 2 (no unknown variable) is filled as before");
+        // the partner note records what was read; no skipped / failed flag
+        String s13 = section(r, 13);
+        assertTrue(s13.contains("Issue #1: template variables read from the document: issue.order_date=16.08.2023, issue.return_filing_date=20.08.2023."), s13);
+        assertTrue(r.checkResults().stream().noneMatch(c -> c.checkName().startsWith("FLAG_VARIABLE_AGENT")), r.checkResults().toString());
+        // a full match stays a template fill: no writer call for issues 1 and 2
+        verify(partialAgent, never()).generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any());
+        verify(newIssueAgent, times(1)).generateNewIssueDraft(argThat(i -> i.issueNo() == 3), any(), anyString(), anyString(), any(), anyBoolean(), any());
+    }
+
+    @Test
+    void templateVariableStep_isSkippedWithAnInfoFlag_whenNoTemplateHasAnUnknownVariable() {
+        TemplateVariableAgent variableAgent = mock(TemplateVariableAgent.class);
+        // the default fixture: TPL-A declares only known variables, TPL-B none, issue 3 has no card
+        V7DraftingPipelineService p = new V7DraftingPipelineService(matchingAgent, null, om, fill, assembly, new DraftCheckService(null),
+                partialAgent, newIssueAgent, highStakesAgent, citationAgent, variableAgent);
+
+        DraftingPipelineResult r = p.runPipeline(input("Section 73"));
+
+        verify(variableAgent, never()).extractVariables(anyString(), anyList(), any(), any());
+        assertEquals("info", check(r, "FLAG_VARIABLE_AGENT_SKIPPED").severity());
+        assertEquals(V7DraftingPipelineService.FLAG_VARIABLE_AGENT_SKIPPED, check(r, "FLAG_VARIABLE_AGENT_SKIPPED").details().get("flag"));
+        assertEquals("info:variable_agent_skipped", V7DraftingPipelineService.FLAG_VARIABLE_AGENT_SKIPPED);
+        assertTrue(section(r, 4).contains("Template ground for Test Client Pvt Ltd on Rs 1,00,000."));
+    }
+
+    @Test
+    void templateVariableStep_failureOrNotFound_leavesTheMissingMarkers() {
+        TemplateVariableAgent variableAgent = mock(TemplateVariableAgent.class);
+        when(variableAgent.extractVariables(anyString(), anyList(), any(), any())).thenReturn(null);
+        DraftingPipelineResult failed = pipelineWithVariableAgent(variableAgent).runPipeline(input("Section 73"));
+        assertEquals("warn", check(failed, "FLAG_VARIABLE_AGENT_FAILED").severity());
+        assertTrue(section(failed, 4).contains("[[MISSING: issue.order_date]]"), section(failed, 4));
+        assertTrue(section(failed, 13).contains("Template variable step returned no usable output"));
+
+        when(variableAgent.extractVariables(anyString(), anyList(), any(), any()))
+                .thenReturn(new TemplateVariablesResult(Map.of(1, Map.of("issue.order_date", "16.08.2023")),
+                        List.of("issue.return_filing_date"), "test-model-partial", TemplateVariableAgent.PROMPT_VERSION));
+        DraftingPipelineResult partly = pipelineWithVariableAgent(variableAgent).runPipeline(input("Section 73"));
+        String s04 = section(partly, 4);
+        assertTrue(s04.contains("order dated 16.08.2023"), s04);
+        assertTrue(s04.contains("[[MISSING: issue.return_filing_date]]"), "a value the document does not state stays a marker: " + s04);
+        assertTrue(section(partly, 13).contains("Template variables the document does not state (left as [[MISSING]]): issue.return_filing_date."));
+        assertTrue(partly.checkResults().stream().noneMatch(c -> c.checkName().startsWith("FLAG_VARIABLE_AGENT")));
     }
 }

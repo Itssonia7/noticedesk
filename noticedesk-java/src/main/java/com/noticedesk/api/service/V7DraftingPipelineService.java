@@ -19,6 +19,10 @@ import com.noticedesk.api.agent.PartialDraftingAgent;
 import com.noticedesk.api.agent.PartialDraftingAgent.PartialDraftingResult;
 import com.noticedesk.api.agent.PartialDraftingAgent.PartialSectionAddition;
 import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
+import com.noticedesk.api.agent.TemplateVariableAgent;
+import com.noticedesk.api.agent.TemplateVariableAgent.IssueVariableRequest;
+import com.noticedesk.api.agent.TemplateVariableAgent.TemplateVariablesResult;
+import com.noticedesk.api.agent.TemplateVariableAgent.VariableSpec;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.model.matching.ReplyTemplate;
@@ -51,6 +55,8 @@ import java.util.regex.Pattern;
  * Architecture v7 drafting pipeline.
  * <ol>
  *   <li>Stage 1: issue matching against the cached card catalogue (status full | partial | none).</li>
+ *   <li>Stage 1b: one TemplateVariableAgent call per notice for the card-specific template variables the
+ *       matcher does not extract (merged into the issue facts before the fill).</li>
  *   <li>Stage 2: code-only template fill for full matches.</li>
  *   <li>Stage 3: AI writers for partial (PartialDraftingAgent) and unmatched (NewIssueDraftingAgent) issues,
  *       high-stakes mode (HighStakesDraftingAgent writes 01/03 and the AI parts of 04/05/06), then
@@ -72,8 +78,16 @@ public class V7DraftingPipelineService {
     private final NewIssueDraftingAgent newIssueDraftingAgent;
     private final HighStakesDraftingAgent highStakesDraftingAgent;
     private final CitationVerificationAgent citationVerificationAgent;
+    private final TemplateVariableAgent templateVariableAgent;
     private final AppProperties properties;
     private final ApiUsageLogService apiUsageLogService;
+
+    /** Draft flag (info): the template variable step made no call (no issue had a template with an unknown variable). */
+    public static final String FLAG_VARIABLE_AGENT_SKIPPED = "info:variable_agent_skipped";
+    /** Draft flag (warn): the template variable step was refused by the per-notice budget; placeholders stay [[MISSING]]. */
+    public static final String FLAG_VARIABLE_AGENT_NOT_CALLED = "warn:variable_agent_not_called";
+    /** Draft flag (warn): the template variable step failed or returned unusable output twice; placeholders stay [[MISSING]]. */
+    public static final String FLAG_VARIABLE_AGENT_FAILED = "warn:variable_agent_failed";
 
     /** Client-facing placeholder for an AI issue the writer could not (or was not allowed to) write. */
     public static final String AI_FAILED_PLACEHOLDER = "[[PARTNER: AI draft failed — write manually]]";
@@ -102,6 +116,7 @@ public class V7DraftingPipelineService {
             NewIssueDraftingAgent newIssueDraftingAgent,
             HighStakesDraftingAgent highStakesDraftingAgent,
             CitationVerificationAgent citationVerificationAgent,
+            TemplateVariableAgent templateVariableAgent,
             AppProperties properties,
             ApiUsageLogService apiUsageLogService) {
         this.issueMatchingAgent = issueMatchingAgent;
@@ -114,8 +129,28 @@ public class V7DraftingPipelineService {
         this.newIssueDraftingAgent = newIssueDraftingAgent;
         this.highStakesDraftingAgent = highStakesDraftingAgent;
         this.citationVerificationAgent = citationVerificationAgent;
+        this.templateVariableAgent = templateVariableAgent;
         this.properties = properties;
         this.apiUsageLogService = apiUsageLogService;
+    }
+
+    /** Without the template variable step (callers wired before it existed). */
+    public V7DraftingPipelineService(
+            IssueMatchingAgent issueMatchingAgent,
+            NamedParameterJdbcTemplate jdbc,
+            ObjectMapper objectMapper,
+            TemplateFillService templateFillService,
+            ReplyAssemblyService replyAssemblyService,
+            DraftCheckService draftCheckService,
+            PartialDraftingAgent partialDraftingAgent,
+            NewIssueDraftingAgent newIssueDraftingAgent,
+            HighStakesDraftingAgent highStakesDraftingAgent,
+            CitationVerificationAgent citationVerificationAgent,
+            AppProperties properties,
+            ApiUsageLogService apiUsageLogService) {
+        this(issueMatchingAgent, jdbc, objectMapper, templateFillService, replyAssemblyService, draftCheckService,
+                partialDraftingAgent, newIssueDraftingAgent, highStakesDraftingAgent, citationVerificationAgent, null,
+                properties, apiUsageLogService);
     }
 
     /** No per-notice call/cost limits (tests). */
@@ -131,7 +166,25 @@ public class V7DraftingPipelineService {
             HighStakesDraftingAgent highStakesDraftingAgent,
             CitationVerificationAgent citationVerificationAgent) {
         this(issueMatchingAgent, jdbc, objectMapper, templateFillService, replyAssemblyService, draftCheckService,
-                partialDraftingAgent, newIssueDraftingAgent, highStakesDraftingAgent, citationVerificationAgent, null, null);
+                partialDraftingAgent, newIssueDraftingAgent, highStakesDraftingAgent, citationVerificationAgent, null, null, null);
+    }
+
+    /** No per-notice call/cost limits, with the template variable step (tests). */
+    public V7DraftingPipelineService(
+            IssueMatchingAgent issueMatchingAgent,
+            NamedParameterJdbcTemplate jdbc,
+            ObjectMapper objectMapper,
+            TemplateFillService templateFillService,
+            ReplyAssemblyService replyAssemblyService,
+            DraftCheckService draftCheckService,
+            PartialDraftingAgent partialDraftingAgent,
+            NewIssueDraftingAgent newIssueDraftingAgent,
+            HighStakesDraftingAgent highStakesDraftingAgent,
+            CitationVerificationAgent citationVerificationAgent,
+            TemplateVariableAgent templateVariableAgent) {
+        this(issueMatchingAgent, jdbc, objectMapper, templateFillService, replyAssemblyService, draftCheckService,
+                partialDraftingAgent, newIssueDraftingAgent, highStakesDraftingAgent, citationVerificationAgent,
+                templateVariableAgent, null, null);
     }
 
     /** Stage 1 + 2 only (no AI writers): partial / unmatched issues keep their [[PENDING_AI]] markers. */
@@ -248,10 +301,18 @@ public class V7DraftingPipelineService {
                     matchingResult != null && matchingResult.flags() != null && matchingResult.flags().contains(IssueMatchingAgent.FLAG_COST_CAP));
         }
         List<MatchedIssue> issues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
-
-        persistIssueMatches(tenantId, noticeId, issues);
         log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
                 issues.stream().map(i -> i.status() + i.cardIds()).toList(), matchingResult.catalogueHash());
+
+        // ---- Stage 1b: card-specific template variables the matcher does not extract (one call per notice)
+        List<String> notes = new ArrayList<>();
+        List<MatchedIssue> withVariables = extractTemplateVariables(issues, matchingResult, input, fullOcrText, noticeId, budget,
+                notes, stageFlags);
+        if (withVariables != issues) {
+            issues = withVariables;
+            matchingResult = matchingResult.withIssues(issues);
+        }
+        persistIssueMatches(tenantId, noticeId, issues);
 
         // ---- Stage 2: code template fill
         List<FilledTemplateResult> filledTemplates = new ArrayList<>();
@@ -264,7 +325,6 @@ public class V7DraftingPipelineService {
         boolean highStakes = highStakesDraftingAgent != null
                 && highStakesDraftingAgent.isHighStakesActive(noticeSectionRaw, noticeType, totalDemand);
 
-        List<String> notes = new ArrayList<>();
         if (highStakes) {
             notes.add("High-stakes mode active (Section 74/74A, appeal stage or demand threshold): sections 01/03 narrative and AI parts of 04/05/06 written by the high-stakes model.");
         }
@@ -452,6 +512,97 @@ public class V7DraftingPipelineService {
                 checkResults,
                 aiRecords
         );
+    }
+
+    /**
+     * Stage 1b. For every issue whose card has a template, the template's declared variables that the pipeline
+     * cannot fill (not a client.* / notice.* value it already has, not one of the matcher's own facts) are asked of
+     * the {@link TemplateVariableAgent} in ONE call for the notice; the values come back merged into the issue facts
+     * under the key {@link TemplateFillService#factKeyForVariable} so the fill resolves the placeholders. No call is
+     * made (flag {@link #FLAG_VARIABLE_AGENT_SKIPPED}) when no issue has a template or no variable is unknown; a
+     * refused or failed call leaves every placeholder a [[MISSING: ...]] marker. Returns the same list instance when
+     * nothing changed.
+     */
+    List<MatchedIssue> extractTemplateVariables(List<MatchedIssue> issues, MatchingResult mr, DraftingInput input, String fullOcrText,
+                                                UUID noticeId, NoticeCallBudget budget, List<String> notes, Set<String> flags) {
+        if (templateVariableAgent == null || issues == null || issues.isEmpty()) return issues;
+
+        List<IssueVariableRequest> requests = new ArrayList<>();
+        for (MatchedIssue issue : issues) {
+            String cardId = issue.primaryCardId();
+            if (cardId == null) continue;
+            Object period = issue.facts() != null ? issue.facts().get("period") : null;
+            // without a period the fill stops at [[MISSING: period]] before any template (rule 5): nothing to ask for
+            if (period == null || period.toString().isBlank()) continue;
+            ReplyTemplate template = templateFillService.selectTemplateForCardAndPeriod(cardId, period.toString());
+            if (template == null) continue;
+            Map<String, Object> context = templateFillService.buildContextMap(issue, mr != null ? mr.notice() : null, input);
+            List<String> unknown = TemplateFillService.unknownVariables(template, context);
+            if (unknown.isEmpty()) continue;
+            List<VariableSpec> specs = new ArrayList<>();
+            for (String name : unknown) specs.add(new VariableSpec(name, TemplateVariableAgent.hintFor(name)));
+            requests.add(new IssueVariableRequest(issue.issueNo(), cardId, null, specs));
+        }
+        if (requests.isEmpty()) {
+            log.info("Template variable step skipped for notice {}: no template with an unknown variable", noticeId);
+            flags.add(FLAG_VARIABLE_AGENT_SKIPPED);
+            return issues;
+        }
+
+        String refusal = budget != null ? budget.refusalReason(TemplateVariableAgent.AGENT_KEY) : null;
+        if (refusal != null) {
+            notes.add("Template variables not extracted (" + refusal + "); card-specific placeholders stay [[MISSING]].");
+            flags.add(FLAG_VARIABLE_AGENT_NOT_CALLED);
+            return issues;
+        }
+        int refusalsBefore = budget != null ? budget.budgetRefusals() : 0;
+        TemplateVariablesResult result = templateVariableAgent.extractVariables(fullOcrText, requests, noticeId, budget);
+        if (result == null) {
+            if (budget != null && budget.budgetRefusals() > refusalsBefore) {
+                notes.add("Template variables not extracted (" + budget.lastRefusal() + "); card-specific placeholders stay [[MISSING]].");
+                flags.add(FLAG_VARIABLE_AGENT_NOT_CALLED);
+            } else {
+                notes.add("Template variable step returned no usable output; card-specific placeholders stay [[MISSING]].");
+                flags.add(FLAG_VARIABLE_AGENT_FAILED);
+            }
+            return issues;
+        }
+
+        Map<Integer, IssueVariableRequest> requestByIssue = new HashMap<>();
+        for (IssueVariableRequest r : requests) requestByIssue.put(r.issueNo(), r);
+        List<MatchedIssue> merged = new ArrayList<>(issues.size());
+        boolean changed = false;
+        for (MatchedIssue issue : issues) {
+            IssueVariableRequest request = requestByIssue.get(issue.issueNo());
+            Map<String, String> values = result.valuesFor(issue.issueNo());
+            if (request == null || values.isEmpty()) {
+                merged.add(issue);
+                continue;
+            }
+            // only the variables asked for this issue, in the order asked (a name the model added is ignored)
+            Map<String, Object> facts = new LinkedHashMap<>(issue.facts() != null ? issue.facts() : Map.of());
+            List<String> filled = new ArrayList<>();
+            for (String name : request.variableNames()) {
+                String value = values.get(name);
+                if (value == null || value.isBlank()) continue;
+                facts.put(TemplateFillService.factKeyForVariable(name), value);
+                filled.add(name + "=" + HtmlSanitizer.sanitize(value));
+            }
+            if (filled.isEmpty()) {
+                merged.add(issue);
+                continue;
+            }
+            notes.add("Issue #" + issue.issueNo() + ": template variables read from the document: " + String.join(", ", filled) + ".");
+            merged.add(issue.withFacts(Collections.unmodifiableMap(facts)));
+            changed = true;
+        }
+        if (!result.notFound().isEmpty()) {
+            notes.add("Template variables the document does not state (left as [[MISSING]]): "
+                    + HtmlSanitizer.sanitize(String.join(", ", result.notFound())) + ".");
+        }
+        log.info("Template variable step for notice {}: {} issue(s) asked, {} value(s) returned, {} not found",
+                noticeId, requests.size(), result.valueCount(), result.notFound().size());
+        return changed ? merged : issues;
     }
 
     /** Why Stage 1 gave no usable result (matcher fallback flags), or null when it did. */

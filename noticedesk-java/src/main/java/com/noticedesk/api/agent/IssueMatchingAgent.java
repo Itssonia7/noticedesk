@@ -125,6 +125,12 @@ public class IssueMatchingAgent {
         public boolean isConsequential() {
             return KIND_CONSEQUENTIAL.equals(kind);
         }
+
+        /** The same issue with another facts map (the template variable step merges extracted values in). */
+        public MatchedIssue withFacts(Map<String, Object> newFacts) {
+            return new MatchedIssue(issueNo, status, kind, cardIds, alternateCardIds, why, notThisIfChecked,
+                    newFacts != null ? newFacts : Map.of(), noticeParas, flags, clientFactsToConfirm, parentIssueNo);
+        }
     }
 
     /**
@@ -160,9 +166,22 @@ public class IssueMatchingAgent {
             "din_rfn", "signature", "limitation", "premature_74", "drc01a_missing",
             "hearing", "reply_time", "officer", "recovery_without_demand", "non_speaking");
 
+    /** Paragraph stance (v3.5): a factual recital the taxpayer does not dispute (jurisdiction, dates, returns filed, notice received). */
+    public static final String STANCE_ADMITTED = "admitted";
+    /** Paragraph stance (v3.5): an allegation or proposed demand the taxpayer disputes. */
+    public static final String STANCE_DENIED = "denied";
+    /** Paragraph stance (v3.5): a correct factual statement that needs context (e.g. the payment was made under protest). */
+    public static final String STANCE_EXPLAINED = "explained";
+    /** Paragraph stance (v3.5): closing formalities (reply time, hearing offer, ex-parte warning). */
+    public static final String STANCE_NOT_APPLICABLE = "not_applicable";
+    /** The four {@code para_stance} values of prompt v3.5. */
+    public static final Set<String> PARA_STANCES = Set.of(STANCE_ADMITTED, STANCE_DENIED, STANCE_EXPLAINED, STANCE_NOT_APPLICABLE);
+
     /**
      * The matcher's result. {@code defectChecks} (v3.4) is the model's {@code defect_checks} object in its own order,
-     * empty before v3.4 and when the object is absent; it is reported, never stored.
+     * empty before v3.4 and when the object is absent; it is reported, never stored. {@code paraStance} (v3.5) maps
+     * each {@code para_map} key to one of {@link #PARA_STANCES}; empty before v3.5 and when the object is absent, in
+     * which case the para-wise reply keeps its earlier wording.
      */
     public record MatchingResult(
             MatchedNoticeInfo notice,
@@ -175,10 +194,21 @@ public class IssueMatchingAgent {
             int outputTokens,
             int cacheReadTokens,
             int cacheWriteTokens,
-            Map<String, DefectCheck> defectChecks
+            Map<String, DefectCheck> defectChecks,
+            Map<String, String> paraStance
     ) {
         public MatchingResult {
             if (defectChecks == null) defectChecks = Map.of();
+            if (paraStance == null) paraStance = Map.of();
+        }
+
+        /** A result without the v3.5 paragraph stances (the v3.4 shape). */
+        public MatchingResult(MatchedNoticeInfo notice, List<MatchedIssue> issues, Map<String, List<Integer>> paraMap,
+                              List<String> missingOrDoubtful, List<String> flags, String catalogueHash,
+                              int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens,
+                              Map<String, DefectCheck> defectChecks) {
+            this(notice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens, outputTokens,
+                    cacheReadTokens, cacheWriteTokens, defectChecks, Map.of());
         }
 
         /** A result without the v3.4 defect checks (the v1 to v3.3 shape). */
@@ -186,7 +216,13 @@ public class IssueMatchingAgent {
                               List<String> missingOrDoubtful, List<String> flags, String catalogueHash,
                               int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens) {
             this(notice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens, outputTokens,
-                    cacheReadTokens, cacheWriteTokens, Map.of());
+                    cacheReadTokens, cacheWriteTokens, Map.of(), Map.of());
+        }
+
+        /** The same result with other issues (the template variable step merges extracted values into the facts). */
+        public MatchingResult withIssues(List<MatchedIssue> newIssues) {
+            return new MatchingResult(notice, newIssues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance);
         }
     }
 
@@ -226,7 +262,9 @@ public class IssueMatchingAgent {
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
     /**
-     * Version of the live matching prompt (v3.4: a mandatory ten-item {@code defect_checks} object replaces the
+     * Version of the live matching prompt (v3.5: a {@code para_stance} object gives every {@code para_map} paragraph
+     * one of admitted / denied / explained / not_applicable, so the para-wise reply no longer denies factual
+     * recitals; v3.4: a mandatory ten-item {@code defect_checks} object replaces the
      * free-form defect scan, one defect ground per "defect" result; consequential interest / penalty with a dedicated
      * card becomes its own {@code consequential} issue with {@code parent_issue_no}; v3.3: a card's stage is tested
      * against the RESPONSE the input document calls for, per an input-document to response-stage table, never
@@ -238,7 +276,7 @@ public class IssueMatchingAgent {
      * date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one primary card + alternates
      * and grounds-first splitting).
      */
-    public static final String PROMPT_VERSION = "issue_matching_v3_4";
+    public static final String PROMPT_VERSION = "issue_matching_v3_5";
     /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
     public static final String PROMPT_FILE = "issue_matching_v3";
 
@@ -509,6 +547,7 @@ public class IssueMatchingAgent {
 
             Map<String, List<Integer>> paraMap = objectMapper.convertValue(jsonNode.path("para_map"), new TypeReference<Map<String, List<Integer>>>() {});
             if (paraMap == null) paraMap = Map.of();
+            Map<String, String> paraStance = readParaStance(jsonNode);
 
             List<String> missingOrDoubtful = new ArrayList<>();
             JsonNode missingNode = jsonNode.path("missing_or_doubtful");
@@ -519,7 +558,7 @@ public class IssueMatchingAgent {
             }
 
             return new MatchingResult(noticeInfo, issues, paraMap, missingOrDoubtful, List.copyOf(resultFlags), catalogueHash,
-                    totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens, defectChecks);
+                    totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens, defectChecks, paraStance);
 
         } catch (Exception e) {
             log.error("matching_parse_failed error={}", e.getMessage(), e);
@@ -619,6 +658,35 @@ public class IssueMatchingAgent {
             }
         }
         return Collections.unmodifiableMap(out);
+    }
+
+    /**
+     * The v3.5 {@code para_stance} object of the output: paragraph key (trimmed) to one of {@link #PARA_STANCES}, in
+     * the model's order. A value is normalised (case, spaces and hyphens to underscores; "n/a" and "not applicable"
+     * read as {@code not_applicable}); an entry whose value is not one of the four is dropped. Empty when the key is
+     * absent (output before v3.5), null or not an object.
+     */
+    static Map<String, String> readParaStance(JsonNode root) {
+        JsonNode node = root.path("para_stance");
+        if (!node.isObject()) return Map.of();
+        Map<String, String> out = new LinkedHashMap<>();
+        Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> e = fields.next();
+            String para = e.getKey() == null ? "" : e.getKey().trim();
+            String stance = normalizeStance(e.getValue() != null && e.getValue().isTextual() ? e.getValue().asText() : null);
+            if (para.isEmpty() || stance == null) continue;
+            out.put(para, stance);
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    /** One of {@link #PARA_STANCES} for the model's text, or null when it is none of them. */
+    static String normalizeStance(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim().toLowerCase(Locale.ROOT).replaceAll("[\\s\\-]+", "_");
+        if (s.equals("n/a") || s.equals("na") || s.equals("not_applicable") || s.equals("noted")) return STANCE_NOT_APPLICABLE;
+        return PARA_STANCES.contains(s) ? s : null;
     }
 
     /** Entries of a {@code defect_checks} map whose result is "defect". */

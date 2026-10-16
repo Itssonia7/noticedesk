@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -706,5 +708,65 @@ class IssueMatchingAgentTest {
 
         assertTrue(result.flags().contains("matching_failed"));
         Mockito.verify(mockLlm, Mockito.times(2)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+    }
+
+    @Test
+    void v3_5ParaStance_isReadPerParagraph_normalised_andUnknownValuesDropped() {
+        String json = """
+                {"notice": {},
+                 "issues": [{"issue_no": 1, "status": "full", "card_id": "NDK-006", "alternates": [], "why": "a", "notice_paras": ["3"]}],
+                 "para_map": {"1": [1], "2": [1], "3": [1], "3.1": [1], "4": [1], "5": [1], "6": [1]},
+                 "para_stance": {"1": "admitted", " 2 ": "Admitted", "3": "DENIED", "3.1": "denied", "4": "explained",
+                                 "5": "Not Applicable", "6": "n/a", "7": "maybe", "": "denied", "8": null}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(json, "NDK-006"));
+
+        Map<String, String> stance = result.paraStance();
+        assertEquals(List.of("1", "2", "3", "3.1", "4", "5", "6"), List.copyOf(stance.keySet()), "model order, keys trimmed; unusable entries dropped");
+        assertEquals(IssueMatchingAgent.STANCE_ADMITTED, stance.get("1"));
+        assertEquals(IssueMatchingAgent.STANCE_ADMITTED, stance.get("2"));
+        assertEquals(IssueMatchingAgent.STANCE_DENIED, stance.get("3"));
+        assertEquals(IssueMatchingAgent.STANCE_DENIED, stance.get("3.1"));
+        assertEquals(IssueMatchingAgent.STANCE_EXPLAINED, stance.get("4"));
+        assertEquals(IssueMatchingAgent.STANCE_NOT_APPLICABLE, stance.get("5"), "spaces and case are normalised");
+        assertEquals(IssueMatchingAgent.STANCE_NOT_APPLICABLE, stance.get("6"), "n/a reads as not_applicable");
+        assertFalse(stance.containsKey("7"), "a value outside the four is dropped");
+        assertEquals(Set.of("admitted", "denied", "explained", "not_applicable"), IssueMatchingAgent.PARA_STANCES);
+        assertEquals("issue_matching_v3_5", IssueMatchingAgent.PROMPT_VERSION);
+    }
+
+    @Test
+    void v3_5ParaStanceAbsent_v3_4Output_readsAsEmpty_andOldConstructorsDefaultToEmpty() throws Exception {
+        String json = """
+                {"notice": {}, "issues": [{"issue_no": 1, "status": "none", "card_id": null, "alternates": [], "why": "a"}],
+                 "para_map": {"1": [1]}}
+                """;
+        IssueMatchingAgent.MatchingResult result = run(agentReturning(json));
+        assertTrue(result.paraStance().isEmpty());
+
+        assertTrue(IssueMatchingAgent.readParaStance(objectMapper.readTree("{\"para_stance\": null}")).isEmpty());
+        assertTrue(IssueMatchingAgent.readParaStance(objectMapper.readTree("{\"para_stance\": [\"denied\"]}")).isEmpty());
+        assertEquals(Map.of("3", "denied"), IssueMatchingAgent.readParaStance(objectMapper.readTree("{\"para_stance\": {\"3\": \"denied\"}}")));
+        assertEquals("not_applicable", IssueMatchingAgent.normalizeStance("not-applicable"));
+        assertEquals("not_applicable", IssueMatchingAgent.normalizeStance("noted"));
+        assertNull(IssueMatchingAgent.normalizeStance("partly admitted"));
+        assertNull(IssueMatchingAgent.normalizeStance(null));
+
+        IssueMatchingAgent.MatchingResult tenArg = new IssueMatchingAgent.MatchingResult(null, List.of(), Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0);
+        assertTrue(tenArg.paraStance().isEmpty());
+        assertTrue(tenArg.defectChecks().isEmpty());
+        IssueMatchingAgent.MatchingResult elevenArg = new IssueMatchingAgent.MatchingResult(null, List.of(), Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0, Map.of());
+        assertTrue(elevenArg.paraStance().isEmpty());
+        IssueMatchingAgent.MatchingResult nullStance = new IssueMatchingAgent.MatchingResult(null, List.of(), Map.of(), List.of(), List.of(), "h", 0, 0, 0, 0, null, null);
+        assertTrue(nullStance.paraStance().isEmpty());
+
+        // withIssues keeps everything else, including the stance and the defect checks
+        IssueMatchingAgent.MatchedIssue issue = new IssueMatchingAgent.MatchedIssue(1, "full", List.of("NDK-006"), "w", List.of(), Map.of("period", "2022-23"), List.of(), List.of());
+        IssueMatchingAgent.MatchingResult withStance = new IssueMatchingAgent.MatchingResult(null, List.of(issue), Map.of("1", List.of(1)), List.of(), List.of(), "h", 1, 2, 3, 4, Map.of(), Map.of("1", "admitted"));
+        IssueMatchingAgent.MatchingResult swapped = withStance.withIssues(List.of(issue.withFacts(Map.of("period", "2022-23", "order_date", "02.05.2023"))));
+        assertEquals(Map.of("1", "admitted"), swapped.paraStance());
+        assertEquals("02.05.2023", swapped.issues().get(0).facts().get("order_date"));
+        assertEquals(List.of("NDK-006"), swapped.issues().get(0).cardIds());
+        assertEquals(4, swapped.cacheWriteTokens());
     }
 }

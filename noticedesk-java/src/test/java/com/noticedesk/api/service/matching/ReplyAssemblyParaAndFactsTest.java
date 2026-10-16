@@ -132,4 +132,73 @@ class ReplyAssemblyParaAndFactsTest {
                 "no anti_profiteering stage template registered here: block, no scn_73 fallback");
         assertTrue(checks.stream().noneMatch(c -> c.checkName().contains("PENDING_AI_WRITER")), "unprefixed flags stay internal");
     }
+
+    /** Matching prompt v3.5: the matcher's para_stance decides the wording of the para-wise reply. */
+    private static MatchingResult resultWithStance(Map<String, List<Integer>> paraMap, Map<String, String> stance) {
+        MatchedNoticeInfo info = new MatchedNoticeInfo("REF/1", null, "2023-06-05", null, "2022-23", "2022-23", 1500000.0, null);
+        List<MatchedIssue> issues = List.of(
+                new MatchedIssue(1, "none", List.of(), "w", List.of(), Map.of("period", "2022-23", "amount", 1500000.0), List.of("3", "4"), List.of()),
+                new MatchedIssue(2, "none", List.of(), "w", List.of(), Map.of("period", "2022-23", "amount", 100.0), List.of("4"), List.of()));
+        return new MatchingResult(info, issues, paraMap, List.of(), List.of(), "h", 1, 1, 0, 0, Map.of(), stance);
+    }
+
+    @Test
+    void paraStance_admittedDeniedExplainedNotApplicable_wordTheParaWiseReply() {
+        Map<String, List<Integer>> paraMap = Map.of("1", List.of(1), "2", List.of(1), "3", List.of(1), "4", List.of(1, 2), "5", List.of(1));
+        Map<String, String> stance = Map.of("1", "admitted", "2", "explained", "3", "denied", "4", "denied", "5", "not_applicable");
+        AssembledReplyResult r = assembly.assembleReply(resultWithStance(paraMap, stance), List.of(),
+                input(NOTICE_TEXT, Map.of("section", "Section 171")), "anti_profiteering", Map.of(), null, List.of());
+        String s05 = section(r, 5);
+
+        assertTrue(s05.contains("<strong>Para 1:</strong> Admitted.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 2:</strong> Explained. Please refer to the reply to Issue #1 at para 4.1.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 3:</strong> Denied. Please refer to the reply to Issue #1 at para 4.1.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 4:</strong> Denied, for the reasons stated in reply to Issues #1 and #2 at paras 4.1 and 4.2.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 5:</strong> Noted.</li>"), s05);
+        assertFalse(s05.contains("Para 1:</strong> Denied"), "a factual recital is never denied");
+        assertFalse(s05.contains("Para 6:"));
+    }
+
+    @Test
+    void paraStance_absent_keepsTodaysWording_andAiParaRepliesStillWin() {
+        Map<String, List<Integer>> paraMap = Map.of("1", List.of(1), "2", List.of(1), "3", List.of(1), "4", List.of(1, 2), "5", List.of(1));
+        // no stance: the earlier output shape
+        AssembledReplyResult old = assembly.assembleReply(resultWithStance(paraMap, Map.of()), List.of(),
+                input(NOTICE_TEXT, Map.of("section", "Section 171")), "anti_profiteering", Map.of(), null, List.of());
+        String s05 = section(old, 5);
+        assertTrue(s05.contains("<strong>Para 1:</strong> Denied. Please refer to the reply to Issue #1 at para 4.1.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 5:</strong> Denied. Please refer to the reply to Issue #1 at para 4.1.</li>"), s05);
+        assertFalse(s05.contains("Admitted."));
+        assertFalse(s05.contains("Noted."));
+
+        // a writer's own para reply is printed before any stance; a sub-paragraph stance covers its whole paragraph;
+        // a stance for a paragraph the map does not link falls back to the issues' notice_paras
+        Map<String, String> stance = Map.of("1", "admitted", "Para 2", "not_applicable", "3.1", "denied", "4", "denied", "5", "explained");
+        AssembledReplyResult r = assembly.assembleReply(resultWithStance(Map.of("issue", List.of(3)), stance), List.of(),
+                input(NOTICE_TEXT, Map.of("section", "Section 171")), "anti_profiteering",
+                aiParas("<li><strong>Para 1:</strong> Admitted; the complaint was received as stated.</li>"), null, List.of());
+        s05 = section(r, 5);
+        assertTrue(s05.contains("<strong>Para 1:</strong> Admitted; the complaint was received as stated.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 2:</strong> Noted.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 3:</strong> Denied. Please refer to the reply to Issue #1 at para 4.1.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 4:</strong> Denied, for the reasons stated in reply to Issues #1 and #2 at paras 4.1 and 4.2.</li>"), s05);
+        assertTrue(s05.contains("<strong>Para 5:</strong> Explained, for the reasons stated in reply to Issues #1 and #2 at paras 4.1 and 4.2.</li>"), s05);
+    }
+
+    @Test
+    void stanceByPara_wholeParagraphKeyWinsOverSubParagraphKeys() {
+        Map<String, String> in = new LinkedHashMap<>();
+        in.put("3.1", "admitted");
+        in.put("3", "denied");
+        in.put("3.2", "explained");
+        in.put("4(a)", "explained");
+        in.put("Para 5", "not_applicable");
+        in.put("header", "denied");
+        in.put("0", "denied");
+        in.put("6", "unknown");
+        Map<Integer, String> out = ReplyAssemblyService.stanceByPara(in);
+        assertEquals(Map.of(3, "denied", 4, "explained", 5, "not_applicable"), out);
+        assertTrue(ReplyAssemblyService.stanceByPara(null).isEmpty());
+        assertTrue(ReplyAssemblyService.stanceByPara(Map.of()).isEmpty());
+    }
 }

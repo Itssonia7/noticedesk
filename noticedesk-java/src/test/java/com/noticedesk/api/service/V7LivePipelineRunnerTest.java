@@ -10,6 +10,7 @@ import com.noticedesk.api.agent.IndianKanoonClient;
 import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.agent.NewIssueDraftingAgent;
 import com.noticedesk.api.agent.PartialDraftingAgent;
+import com.noticedesk.api.agent.TemplateVariableAgent;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
@@ -169,6 +170,8 @@ public class V7LivePipelineRunnerTest {
         PartialDraftingAgent partialAgent = new PartialDraftingAgent(props, om, usageLogService, llmFactory);
         NewIssueDraftingAgent newIssueAgent = new NewIssueDraftingAgent(props, om, usageLogService, llmFactory);
         HighStakesDraftingAgent highStakesAgent = new HighStakesDraftingAgent(props, om, usageLogService, llmFactory);
+        // one call per notice on the partial-drafting model: card-specific template variables from the notice text
+        TemplateVariableAgent variableAgent = new TemplateVariableAgent(props, om, usageLogService, llmFactory, catalogueService);
 
         IndianKanoonClient ikClient = new IndianKanoonClient(om);
         CitationVerificationAgent citationAgent = new CitationVerificationAgent(om, props, usageLogService, jdbc, ikClient);
@@ -179,7 +182,7 @@ public class V7LivePipelineRunnerTest {
 
         V7DraftingPipelineService pipelineService = new V7DraftingPipelineService(
                 matchingAgent, jdbc, om, fillService, assemblyService, checkService,
-                partialAgent, newIssueAgent, highStakesAgent, citationAgent, props, usageLogService
+                partialAgent, newIssueAgent, highStakesAgent, citationAgent, variableAgent, props, usageLogService
         );
 
         String envNotices = System.getenv("V7_LIVE_NOTICES");
@@ -306,7 +309,8 @@ public class V7LivePipelineRunnerTest {
 
             // Model cost per notice from every billed call (failed attempts and retries included)
             double matchingInr = ledger.totalInrSince(callCheckpoint, "matching").doubleValue();
-            double writerInr = ledger.totalInrSince(callCheckpoint).doubleValue() - matchingInr;
+            double variablesInr = ledger.totalInrSince(callCheckpoint, TemplateVariableAgent.AGENT_KEY).doubleValue();
+            double writerInr = ledger.totalInrSince(callCheckpoint).doubleValue() - matchingInr - variablesInr;
             // IndianKanoon calls are logged to the DB only (no token usage)
             Double ikInrObj = jdbc.getJdbcTemplate().queryForObject(
                     "SELECT COALESCE(SUM(cost_inr), 0) FROM api_usage_logs WHERE notice_id = CAST(? AS UUID) AND provider = 'indiankanoon'",
@@ -315,7 +319,7 @@ public class V7LivePipelineRunnerTest {
             int matchingInTokens = result.totalInputTokens();
             int matchingOutTokens = result.totalOutputTokens();
 
-            double noticeTotalInr = matchingInr + writerInr + ikInr;
+            double noticeTotalInr = matchingInr + variablesInr + writerInr + ikInr;
             totalRun2Inr = totalRun2Inr.add(BigDecimal.valueOf(noticeTotalInr));
 
             String expectedStatus = answerKey.path("issues").path(0).path("status").asText("none");
@@ -348,6 +352,7 @@ public class V7LivePipelineRunnerTest {
             System.out.printf("%n--- Notice: %s (%s) ---%n", noticeId, noticeFile);
             System.out.printf("Expected Status (Answer Key): %s%n", expectedStatus);
             System.out.printf("Matching Step: In=%d, Out=%d | INR=%.4f%n", matchingInTokens, matchingOutTokens, matchingInr);
+            System.out.printf("Variables Step: INR=%.4f%n", variablesInr);
             System.out.printf("Writer Step: INR=%.4f%n", writerInr);
             System.out.printf("IndianKanoon Step: INR=%.4f%n", ikInr);
             System.out.printf("Total Notice Cost: %.4f INR%n", noticeTotalInr);

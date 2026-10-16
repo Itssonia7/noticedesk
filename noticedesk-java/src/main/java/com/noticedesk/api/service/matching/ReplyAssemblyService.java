@@ -3,6 +3,7 @@ package com.noticedesk.api.service.matching;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.agent.DraftingAgent;
+import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchedNoticeInfo;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
@@ -785,6 +786,8 @@ public class ReplyAssemblyService {
         Set<Integer> issueParas = categories.getOrDefault("issue", Set.of());
         Set<Integer> demandParas = categories.getOrDefault("demand", Set.of());
         Set<Integer> directionParas = categories.getOrDefault("directions", Set.of());
+        // matching prompt v3.5: the taxpayer's stance per paragraph; empty for earlier output (today's wording stays)
+        Map<Integer, String> stanceByPara = stanceByPara(matchingResult != null ? matchingResult.paraStance() : null);
 
         StringBuilder sb = new StringBuilder();
         sb.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
@@ -792,6 +795,8 @@ public class ReplyAssemblyService {
             sb.append("<li><strong>Para ").append(p).append(":</strong> ");
             if (aiParaReplies.containsKey(p)) {
                 sb.append(mergeParaReplies(aiParaReplies.get(p)));
+            } else if (stanceByPara.containsKey(p)) {
+                sb.append(stanceReply(stanceByPara.get(p), p, paraToIssues, issues));
             } else if (paraToIssues.containsKey(p)) {
                 sb.append(denialWithRefs(issuesByNumber(paraToIssues.get(p), p, issues)));
             } else if (issueParas.contains(p)) {
@@ -809,6 +814,61 @@ public class ReplyAssemblyService {
         }
         sb.append("</ol>");
         return sb.toString();
+    }
+
+    /**
+     * The matcher's {@code para_stance} by whole paragraph number: a whole-paragraph key ("3", "Para 3") wins over
+     * a sub-paragraph key ("3.1", "3(a)") of the same paragraph; keys that name no paragraph number are dropped.
+     */
+    static Map<Integer, String> stanceByPara(Map<String, String> paraStance) {
+        if (paraStance == null || paraStance.isEmpty()) return Map.of();
+        Map<Integer, String> out = new HashMap<>();
+        Set<Integer> whole = new HashSet<>();
+        for (Map.Entry<String, String> e : paraStance.entrySet()) {
+            String key = e.getKey() != null ? e.getKey().trim() : "";
+            String stance = e.getValue();
+            if (stance == null || !IssueMatchingAgent.PARA_STANCES.contains(stance)) continue;
+            Matcher km = PARA_KEY.matcher(key);
+            if (!km.find()) continue;
+            int p = Integer.parseInt(km.group(1));
+            if (p < 1) continue;
+            boolean isWhole = km.end() == key.length();
+            if (isWhole) {
+                out.put(p, stance);
+                whole.add(p);
+            } else if (!whole.contains(p)) {
+                out.putIfAbsent(p, stance);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Section 05 line for a paragraph with a matcher stance (v3.5): "Admitted." for a factual recital, "Noted." for
+     * closing formalities, and for a disputed or explained paragraph a pointer to the issue reply ("Denied. Please
+     * refer to the reply to Issue #k at para 4.x." / "Explained. Please refer to ...").
+     */
+    private static String stanceReply(String stance, int p, Map<Integer, Set<Integer>> paraToIssues, List<MatchedIssue> issues) {
+        switch (stance) {
+            case IssueMatchingAgent.STANCE_ADMITTED -> {
+                return "Admitted.";
+            }
+            case IssueMatchingAgent.STANCE_NOT_APPLICABLE -> {
+                return "Noted.";
+            }
+            case IssueMatchingAgent.STANCE_EXPLAINED -> {
+                return replyWithRefs("Explained", linkedIssues(p, paraToIssues, issues));
+            }
+            default -> {
+                return replyWithRefs("Denied", linkedIssues(p, paraToIssues, issues));
+            }
+        }
+    }
+
+    /** The issues a notice paragraph is linked to: the matcher's para_map entry, else the issues' own notice_paras. */
+    private static List<MatchedIssue> linkedIssues(int p, Map<Integer, Set<Integer>> paraToIssues, List<MatchedIssue> issues) {
+        if (paraToIssues.containsKey(p)) return issuesByNumber(paraToIssues.get(p), p, issues);
+        return issuesForPara(p, issues);   // also the category form ("issue": [p]) and paragraphs with no map entry
     }
 
     /** One AI reply to a notice paragraph; {@code subPara} is "(c)" / ".1", or "" for the whole paragraph. */
@@ -899,12 +959,17 @@ public class ReplyAssemblyService {
     }
 
     private static String denialWithRefs(List<MatchedIssue> issues) {
+        return replyWithRefs("Denied", issues);
+    }
+
+    /** "{verb}. Please refer to the reply to Issue #k at para 4.x." (one issue) or the several-issues form. */
+    private static String replyWithRefs(String verb, List<MatchedIssue> issues) {
         if (issues.isEmpty()) {
-            return "Denied, for the reasons stated in Section 04.";
+            return verb + ", for the reasons stated in Section 04.";
         }
         if (issues.size() == 1) {
             int n = issues.get(0).issueNo();
-            return "Denied. Please refer to the reply to Issue #" + n + " at para {{ref:ISSUE-" + n + "}}.";
+            return verb + ". Please refer to the reply to Issue #" + n + " at para {{ref:ISSUE-" + n + "}}.";
         }
         List<String> labels = new ArrayList<>();
         List<String> refs = new ArrayList<>();
@@ -912,7 +977,7 @@ public class ReplyAssemblyService {
             labels.add("#" + i.issueNo());
             refs.add("{{ref:ISSUE-" + i.issueNo() + "}}");
         }
-        return "Denied, for the reasons stated in reply to Issues " + joinAnd(labels) + " at paras " + joinAnd(refs) + ".";
+        return verb + ", for the reasons stated in reply to Issues " + joinAnd(labels) + " at paras " + joinAnd(refs) + ".";
     }
 
     // ------------------------------------------------------------------ Documents

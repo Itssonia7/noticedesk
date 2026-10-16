@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 16-10-2026 (template version chosen by period overlap, never NONE when a template exists; new-issue writer skipped for empty grounds; defect issues render in Section 07)
+Last updated: 16-10-2026 (template variable extraction step after matching; per-paragraph stance in the para-wise reply, matching prompt v3.5)
 
 ---
 
@@ -560,10 +560,66 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   (defect issue in Section 07 with 7.1 / 7.2, consequential heading after its parent, Section 05 references,
   AI-written defect, placeholder kept without defects, partner-note lines for the two new flags).
 
+## (b17) Template variable extraction step; per-paragraph stance in the para-wise reply (16-10-2026)
+
+- **Live findings (10 private notices, full pipeline on v3.4 after (b16))**:
+  (A) Template variables the notice states were printed as `[[MISSING: issue.return_filing_date]]`, and a template's
+  "order dated {{notice.issue_date}}" printed the covering letter's date instead of the assessment order's date. The
+  matcher extracts only the generic facts (`period`, `amount`, `legal_section`) while the private templates use
+  card-specific variables. (B) Section 05 printed "Denied. Please refer to ..." for EVERY paragraph, factual
+  recitals and the department's own description of the proceedings included.
+- **Fix A: `TemplateVariableAgent`** (new, `prompts/template_variables_v1.md`, `PROMPT_VERSION template_variables_v1`),
+  called by `V7DraftingPipelineService` ONCE per notice after matching and template selection and before the fill
+  (Stage 1b). Input: the notice OCR text (cut to `drafting.ocr-excerpt-chars`) and, per matched issue whose card has
+  a template, the issue number, the card title and the template's declared variables that are still unknown
+  (`TemplateFillService.unknownVariables`: a `client.*` / `notice.*` value the pipeline already has and the matcher's
+  own `issue.period` / `issue.amount_tax` / `issue.legal_section` are excluded; `ref:` entries are never variables),
+  each with a one-line hint derived from the name (`hintFor`: "date" -> dd.mm.yyyy, amount / tax / interest /
+  penalty / turnover / demand / fee -> digits, "period" -> as written). Output
+  `{"issues":[{"issue_no":1,"variables":{"issue.return_filing_date":"16.08.2023"}}],"not_found":["issue.xyz"]}`;
+  prompt rules: copy values exactly as the document states them, never invent, leave out what the document does not
+  state. Parser: unknown variable names and issues are ignored, blank values dropped, numbers rendered as digits.
+  The values are merged into the issue's facts map under `TemplateFillService.factKeyForVariable` (`issue.X` /
+  `facts.X` -> `X`, read back by `buildContextMap` as `issue.X`; a `notice.*` / `client.*` name is kept whole and is
+  only a fallback for a value the pipeline lacks), so the fill resolves the placeholders; a value the document does
+  not contain stays a `[[MISSING: ...]]` marker. The merged facts are what `issue_matches` persists. Model: the
+  partial-drafting model (`LLM_MODEL_PARTIAL_DRAFTING`; agent key `template_variables`, effort
+  `LLM_EFFORT_TEMPLATE_VARIABLES` default `low`, max_tokens `LLM_MAX_TOKENS_TEMPLATE_VARIABLES` default 2000,
+  retry cap `LLM_MAX_TOKENS_TEMPLATE_VARIABLES_RETRY` default 4000; nothing new to price). The call goes through
+  `WriterCall` like the other writers: budget pre-check against the per-notice cap, `[call] step=template_variables`
+  usage line, one retry on unusable output, `LlmFatalException` passed on. Flags: **`info:variable_agent_skipped`**
+  when no issue has a template with an unknown variable (no call), **`warn:variable_agent_not_called`** when the
+  budget refused the call, **`warn:variable_agent_failed`** when it returned no usable output twice; the Section 13
+  note lists the values read per issue and the variables the document does not state. The live runner prints a
+  new per-notice line `Variables Step: INR=...` (the Writer Step line no longer includes it).
+  Date semantics (`TemplateFillService.buildContextMap`): `{{notice.issue_date}}` is the date of the document being
+  answered (matcher notice block / intake record); a template that needs the ORDER's date uses `{{issue.order_date}}`,
+  which the agent extracts; an `issue.*` value present in the facts always wins over a `notice.*` fallback. No
+  template was rewritten.
+- **Fix B: `para_stance`** (matching prompt **v3.5**, `PROMPT_VERSION issue_matching_v3_5`, rule 7a, example and
+  self-check 2a). For every `para_map` key the matcher returns one of `admitted` (factual recital: jurisdiction,
+  dates, returns filed, notice received, the department's description of the proceedings), `denied` (an allegation
+  or proposed demand), `explained` (a correct fact that needs context, e.g. payment under protest) or
+  `not_applicable` (closing formalities: reply time, hearing offer, ex-parte warning). Parser:
+  `Map<String,String> paraStance` on `MatchingResult` (default empty; the 10- and 11-argument constructors are kept;
+  values normalised, "n/a" / "noted" read as `not_applicable`, anything else dropped). `ReplyAssemblyService`
+  Section 05 prints "Para N: Admitted." / "Para N: Denied. Please refer to the reply to Issue #k at para 4.x." /
+  "Para N: Explained. Please refer to ..." / "Para N: Noted." (not_applicable); a whole-paragraph key wins over a
+  sub-paragraph key of the same paragraph; a writer's own para reply still prints first; when no stance is available
+  (earlier output) today's wording stays.
+- Tests: `TemplateVariableAgentTest` (good JSON, unknown names / issues, not_found only, neither key -> validation
+  error, hints, capped payload, stub mode, live call on the partial model with effort low / max_tokens 2000 and the
+  `template_variables` usage step), `V7Stage3PipelineTest` (agent called once with only the unknown variables and the
+  values fill the template; skipped with the info flag when none; failure and not_found leave the markers),
+  `ReplyAssemblyParaAndFactsTest` (the four stances; no stance keeps today's wording; AI para replies win;
+  `stanceByPara`), `IssueMatchingAgentTest` (para_stance parsed and normalised; absent -> empty; `withIssues` /
+  `withFacts`), `TemplateFillServiceTest` (issue.order_date vs notice.issue_date, `factKeyForVariable`,
+  `unknownVariables`), `MatchingPromptRulesTest` (v3.5 wording, example keys), `ApiUsagePricingTest` (defaults).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`, `RealNoticesBatchRunnerTest` excluded as before): **345 tests, 0 failures, 0 errors**
-  on 16-10-2026 after (b16) (329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
+- Offline unit suite (`mvn test`, `RealNoticesBatchRunnerTest` excluded as before): **364 tests, 0 failures, 0 errors**
+  on 16-10-2026 after (b17) (345 after (b16) the same day, 329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
   calls; all models and IndianKanoon mocked or served from local fixtures). The 329 include the Spring context test
   `NoticedeskApiApplicationTests`, which passed in that container (it retries the local Postgres connection for
   about five minutes before the context comes up). A plain `mvn test` no longer modifies `output/`. V23 to V28
