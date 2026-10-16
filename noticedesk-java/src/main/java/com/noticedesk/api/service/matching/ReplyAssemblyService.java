@@ -181,14 +181,17 @@ public class ReplyAssemblyService {
         }
 
         // ---------------------------------------------------------------- Section 04 (built first: its para numbers are referenced by 01/05)
+        // demand issues, each followed by the consequential issues riding on it; defect issues go to Section 07
+        List<MatchedIssue> substantiveIssues = substantiveIssuesInOrder(matchedIssues);
+        List<MatchedIssue> defectIssues = matchedIssues.stream().filter(MatchedIssue::isDefect).toList();
         StringBuilder sec04 = new StringBuilder();
         Map<String, String> blockIdToRefTag = new HashMap<>();
         Map<Integer, String> issueNoToRefTag = new HashMap<>();
         int[] globalParaNo = {1};
         int[] sec04Sub = {1};
 
-        for (MatchedIssue issue : matchedIssues) {
-            sec04.append("<h3>Issue #").append(issue.issueNo()).append(" Grounds of Defence</h3>");
+        for (MatchedIssue issue : substantiveIssues) {
+            sec04.append("<h3>").append(issueHeading(issue, matchedIssues)).append(" Grounds of Defence</h3>");
             FilledTemplateResult ft = templateMap.get(issue.issueNo());
             issueNoToRefTag.put(issue.issueNo(), "4." + sec04Sub[0]);
             appendIssueBody(sec04, 4, issue, ft, ai.get(issue.issueNo()), anchoredBlocks.get(issue.issueNo()),
@@ -254,7 +257,9 @@ public class ReplyAssemblyService {
         sec02.append(" under ").append(noticeSec).append(" of the ").append(lawName(input))
              .append(", for Financial Year ").append(fy).append(".</p>");
         sec02.append("<p>The notice raises ").append(matchedIssues.size()).append(matchedIssues.size() == 1 ? " issue" : " issues")
-             .append(", each answered in Section 04 and paragraph-wise in Section 05.</p>");
+             .append(", each answered in Section 04")
+             .append(defectIssues.isEmpty() ? "" : " (procedural objections in Section 07)")
+             .append(" and paragraph-wise in Section 05.</p>");
         rawSections.add(new AssembledSection(2, "02 Notice Understanding", sec02.toString()));
 
         // ---------------------------------------------------------------- Section 03
@@ -291,7 +296,7 @@ public class ReplyAssemblyService {
         // ---------------------------------------------------------------- Section 06
         StringBuilder sec06 = new StringBuilder();
         int[] sec06Sub = {1};
-        for (MatchedIssue issue : matchedIssues) {
+        for (MatchedIssue issue : substantiveIssues) {
             sec06.append("<h3>Legal Submissions for Issue #").append(issue.issueNo()).append("</h3>");
             appendIssueBody(sec06, 6, issue, templateMap.get(issue.issueNo()), ai.get(issue.issueNo()), anchoredBlocks.get(issue.issueNo()),
                     sec06Sub, globalParaNo, blockIdToRefTag, finalSourceMap, pendingAiMarkers, missingMarkers, assemblyFlags, notes);
@@ -299,7 +304,21 @@ public class ReplyAssemblyService {
         rawSections.add(new AssembledSection(6, "06 Legal Submissions", sec06.toString()));
 
         // ---------------------------------------------------------------- Section 07
-        rawSections.add(new AssembledSection(7, "07 Procedural Objections", "<p>[[PARTNER: add procedural objections after checklist review]]</p>"));
+        // a defect issue (kind "defect") renders its template blocks and AI text (sections 04 and 06 of the
+        // template / writer output) here as 7.1, 7.2 ...; without one the partner placeholder stays
+        StringBuilder sec07 = new StringBuilder();
+        if (defectIssues.isEmpty()) {
+            sec07.append("<p>[[PARTNER: add procedural objections after checklist review]]</p>");
+        } else {
+            int[] sec07Sub = {1};
+            for (MatchedIssue issue : defectIssues) {
+                sec07.append("<h3>Issue #").append(issue.issueNo()).append(" Procedural Objection</h3>");
+                issueNoToRefTag.put(issue.issueNo(), "7." + sec07Sub[0]);
+                appendIssueBody(sec07, 7, issue, templateMap.get(issue.issueNo()), ai.get(issue.issueNo()), anchoredBlocks.get(issue.issueNo()),
+                        sec07Sub, globalParaNo, blockIdToRefTag, finalSourceMap, pendingAiMarkers, missingMarkers, assemblyFlags, notes);
+            }
+        }
+        rawSections.add(new AssembledSection(7, "07 Procedural Objections", sec07.toString()));
 
         // ---------------------------------------------------------------- Section 08
         boolean reliesOnThirdParty = input != null && input.notice() != null && Boolean.TRUE.equals(input.notice().get("relies_on_third_party_material"));
@@ -377,8 +396,26 @@ public class ReplyAssemblyService {
                 Set<String> used = anchoredBlocks.getOrDefault(issue.issueNo(), Set.of());
                 sec13.append(", Template blocks used=").append(used.isEmpty() ? "none" : new TreeSet<>(used));
             }
+            if (issue.isDefect()) {
+                sec13.append(", Kind=defect (rendered in Section 07)");
+            } else if (issue.isConsequential()) {
+                sec13.append(", Kind=consequential").append(issue.parentIssueNo() != null ? " (parent Issue #" + issue.parentIssueNo() + ")" : "");
+            }
             if (ft != null && ft.cardId() != null && ft.flags() != null && ft.flags().contains("no_template_available")) {
                 sec13.append(", Note=No template available for card ").append(ft.cardId());
+            }
+            if (ft != null && ft.flags() != null && ft.flags().contains(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH)) {
+                Map<String, Object> d = ft.flagDetails().getOrDefault(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH, Map.of());
+                sec13.append(", Note=No template version of card ").append(ft.cardId()).append(" covers the period ")
+                     .append(d.getOrDefault("period_start", "?")).append(" to ").append(d.getOrDefault("period_end", "?"))
+                     .append("; nearest version v").append(ft.templateVersion()).append(" (")
+                     .append(blankAs(d.get("template_effective_from"), "open")).append(" to ")
+                     .append(blankAs(d.get("template_effective_to"), "open")).append(") used: check the template applies");
+            }
+            if (ft != null && ft.flags() != null && ft.flags().contains(TemplateFillService.FLAG_PERIOD_NOT_NORMALISED)) {
+                Object p = issue.facts() != null ? issue.facts().get("period") : null;
+                sec13.append(", Note=Period '").append(p != null ? p : "").append("' could not be read as dates; latest template version v")
+                     .append(ft.templateVersion()).append(" used: check the version applies");
             }
             if (ft != null && ft.flags() != null && ft.flags().contains(TemplateFillService.FLAG_PROVISIONAL_TEMPLATE)) {
                 sec13.append(", Template status=PROVISIONAL (promoted from an approved AI section, not CA-reviewed: partner to confirm or retire)");
@@ -498,16 +535,60 @@ public class ReplyAssemblyService {
 
     // ------------------------------------------------------------------ Section 04 / 06 issue bodies
 
+    /** Demand issues in matcher order, each followed by the consequential issues whose parent it is. */
+    static List<MatchedIssue> substantiveIssuesInOrder(List<MatchedIssue> issues) {
+        List<MatchedIssue> out = new ArrayList<>();
+        Set<Integer> placed = new HashSet<>();
+        for (MatchedIssue issue : issues) {
+            if (issue.isDefect() || placed.contains(issue.issueNo())) continue;
+            if (issue.isConsequential() && issue.parentIssueNo() != null
+                    && issues.stream().anyMatch(p -> !p.isDefect() && p.issueNo() == issue.parentIssueNo())) {
+                continue;   // rendered after its parent
+            }
+            out.add(issue);
+            placed.add(issue.issueNo());
+            for (MatchedIssue child : issues) {
+                if (child.isConsequential() && child.parentIssueNo() != null && child.parentIssueNo() == issue.issueNo()
+                        && placed.add(child.issueNo())) {
+                    out.add(child);
+                }
+            }
+        }
+        for (MatchedIssue issue : issues) {   // never drop an issue (e.g. a consequential issue of a consequential issue)
+            if (!issue.isDefect() && placed.add(issue.issueNo())) out.add(issue);
+        }
+        return out;
+    }
+
+    /** "Issue #2 (consequential to Issue #1)" for a consequential issue with a parent in the notice, else "Issue #n". */
+    static String issueHeading(MatchedIssue issue, List<MatchedIssue> issues) {
+        String h = "Issue #" + issue.issueNo();
+        if (issue.isConsequential() && issue.parentIssueNo() != null
+                && issues.stream().anyMatch(p -> p.issueNo() == issue.parentIssueNo())) {
+            h += " (consequential to Issue #" + issue.parentIssueNo() + ")";
+        }
+        return h;
+    }
+
+    /**
+     * The template / writer sections an output section is built from: 04 and 06 from themselves; 07 (a defect
+     * issue's procedural objection) from both, since cards and writers only produce 04 / 05 / 06 text.
+     */
+    private static Set<Integer> sourceSections(int secNum) {
+        return secNum == 7 ? Set.of(4, 6) : Set.of(secNum);
+    }
+
     private void appendIssueBody(
             StringBuilder sb, int secNum, MatchedIssue issue, FilledTemplateResult ft, AiIssueContent c,
             Set<String> anchors, int[] sub, int[] globalParaNo, Map<String, String> blockIdToRefTag,
             List<SourceMapEntry> sourceMap, List<String> pendingAiMarkers, List<String> missingMarkers,
             List<String> flags, List<String> notes
     ) {
+        Set<Integer> sources = sourceSections(secNum);
         switch (modeFor(issue, ft)) {
             case TEMPLATE -> {
                 for (FilledBlock fb : ft.blocks()) {
-                    if (fb.section() == secNum) {
+                    if (sources.contains(fb.section())) {
                         appendTemplateBlock(sb, secNum, fb, ft, sub, globalParaNo, blockIdToRefTag, sourceMap);
                     }
                 }
@@ -521,12 +602,12 @@ public class ReplyAssemblyService {
                 List<AiFragment> frags = new ArrayList<>();
                 if (c != null && c.fragments() != null) {
                     for (AiFragment f : c.fragments()) {
-                        if (f.section() == secNum && f.html() != null && !f.html().isBlank()) frags.add(f);
+                        if (sources.contains(f.section()) && f.html() != null && !f.html().isBlank()) frags.add(f);
                     }
                 }
                 if (frags.isEmpty()) {
-                    // Section 06 may legitimately have nothing extra when 04 was written; 04 never may.
-                    if (secNum == 4 || c == null || c.fragments() == null || c.fragments().isEmpty()) {
+                    // Section 06 may legitimately have nothing extra when 04 was written; 04 (and 07) never may.
+                    if (secNum != 6 || c == null || c.fragments() == null || c.fragments().isEmpty()) {
                         sb.append("<p>").append(secNum).append('.').append(sub[0]++).append(' ').append(pendingMarker(issue.issueNo())).append("</p>");
                         addOnce(pendingAiMarkers, "PENDING_AI: Issue " + issue.issueNo());
                         addOnce(flags, "pending_ai_writer");
@@ -543,7 +624,7 @@ public class ReplyAssemblyService {
                 List<String> reusedBlockTexts = new ArrayList<>();
                 if (ft != null && ft.blocks() != null) {
                     for (FilledBlock fb : ft.blocks()) {
-                        if (fb.section() == secNum) blocks.add(fb);
+                        if (sources.contains(fb.section())) blocks.add(fb);
                         if (anchors != null && anchors.contains(fb.blockId())) reusedBlockTexts.add(fb.filledHtml());
                     }
                 }
@@ -946,6 +1027,10 @@ public class ReplyAssemblyService {
 
     private static String nonBlank(String s, String fallback) {
         return s != null && !s.isBlank() ? s : fallback;
+    }
+
+    private static String blankAs(Object v, String fallback) {
+        return v == null || v.toString().isBlank() ? fallback : v.toString();
     }
 
     private static void addOnce(List<String> list, String v) {

@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 15-10-2026 (matching prompt v3.4: a forced ten-item defect checklist; consequential interest / penalty with a dedicated card becomes its own issue)
+Last updated: 16-10-2026 (template version chosen by period overlap, never NONE when a template exists; new-issue writer skipped for empty grounds; defect issues render in Section 07)
 
 ---
 
@@ -494,10 +494,76 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   `para_map` lines, self-check lines, the example's checks and consequential issue), `MatchingEvalCardScoreTest`
   (defect_checks line, set counts, got column, consequential scored like demand).
 
+## (b16) Template version by period overlap; writer skipped for empty grounds; defect issues in Section 07 (16-10-2026)
+
+- **Live findings (10 private notices, full pipeline on v3.4; private catalogue of 269 cards, one template each,
+  `effective_from` mostly 2017-07-01, a few with a legal date window such as 2020-03-01 to 2022-02-28 for the
+  COVID-limitation card)**:
+  1. `TemplateFillService.selectTemplate` picked the version "in force on the period START". "FY 2017-18"
+     normalises to 2017-04-01, before 2017-07-01, so no version matched, the fill returned NONE
+     ("No template available for card NDK-037") and five full matches fell through to the AI writers: about
+     INR 65 wasted and the per-notice budget exhausted. The same happened for a card whose window is a legal
+     regime date rather than a tax period.
+  2. An issue with status none and no substantive allegation (a corrigendum changing the figures of an earlier
+     SCN) was sent to the new-issue writer (INR 13.5).
+  3. An issue of kind `defect` matched to a procedural card rendered as an empty "Issue #3 Grounds of Defence"
+     in Section 04 while Section 07 kept the "[[PARTNER: add procedural objections ...]]" placeholder.
+- **Fix 1: template version by period overlap** (`TemplateFillService`). The period is normalised and its start
+  clamped to 2017-07-01 (`GST_START`; a wholly pre-GST period collapses to that day). Among the versions whose
+  `[effective_from, effective_to]` OVERLAPS the period, the one in force on the period END is chosen, else the one
+  in force on the start, else the highest overlapping version; `warn:period_crosses_template_version` is kept and
+  now fires whenever any version boundary falls inside the period (also when the period starts before the chosen
+  window). When no version overlaps but the card has template rows, the version with the nearest window (smallest
+  gap in days, ties to the highest version) is used with the new flag **`warn:template_window_mismatch`**; its
+  details carry `card_id`, `period`, `period_start`, `period_end`, `template_id`, `template_version`,
+  `template_effective_from`, `template_effective_to`, `gap_days`. When the period cannot be normalised, the latest
+  version is used with the new flag **`warn:period_not_normalised`** (details: `card_id`, `period`, `template_id`,
+  `template_version`); the issue still gets the template (before: only an undated template matched). The NONE /
+  `no_template_available` result now exists only when the card truly has no active / provisional (/ draft)
+  template row. `FilledTemplateResult` gained `flagDetails` (old 11-argument constructor kept) and `hasTemplate()`;
+  `TemplateSelection` gained `flags` and `flagDetails`. The pipeline merges those details into the
+  `FLAG_TEMPLATE_WINDOW_MISMATCH` / `FLAG_PERIOD_NOT_NORMALISED` check rows (`draft_flags.details`), and the
+  Section 13 line of the issue explains the window or period used. Behaviour change to note: a period crossing a
+  version boundary now takes the END version (e.g. FY 2020-21 against v1 to 2020-12-31 / v2 from 2021-01-01 gives
+  v2, before v1), still with the crossing warn flag.
+- **Fix 2: writer routing** (`V7DraftingPipelineService.lacksSubstantiveGround`). Before the new-issue writer is
+  called for an issue with status none and no card, the issue must carry a substantive ground: the writer is
+  skipped when `facts.amount` and `facts.legal_section` are both absent, OR the issue's why / label (facts `label`,
+  `ground`, `title`, `allegation`, `issue`) contains any of "corrigendum", "hearing date", "acknowledg",
+  "reminder", "no ground", "no demand". A skipped issue gets one Section 04 line
+  `[[PARTNER: no catalogue card and no substantive demand identified for this ground; review the document]]`
+  (also its Section 01 bullet), the flag **`info:new_issue_writer_skipped`**, a Section 13 note, "Written by=AI
+  none (new-issue writer skipped: no substantive ground)" and no `ai_issue_sections` row. The skip applies only
+  when a new-issue writer is configured (the Stage 1+2-only runner keeps its `[[PENDING_AI]]` markers). Verified
+  and tested: a full match filled from a template (any version chosen by fix 1, including FY 2017-18 and a
+  mismatched window) never reaches the partial or the new-issue writer. Partial matches still go to the partial
+  writer with their template, as designed.
+- **Fix 3: section routing** (`ReplyAssemblyService`). Issues of kind `defect` render their template blocks and AI
+  text (template / writer sections 04 and 06) under **Section 07 Procedural Objections** as "Issue #n Procedural
+  Objection", numbered 7.1, 7.2 ...; they no longer appear in Sections 04 or 06. When at least one defect issue
+  exists the "[[PARTNER: add procedural objections after checklist review]]" placeholder is replaced by the
+  rendered objections (the checklist options list stays in the Section 13 partner note); Section 02 adds
+  "(procedural objections in Section 07)". Section 04 shows demand and consequential issues only; a consequential
+  issue renders right after its parent with the heading "Issue #n (consequential to Issue #m) Grounds of Defence"
+  (an orphan consequential issue stays in matcher order). Cross-references (`{{ref:ISSUE-n}}`) resolve to 7.x for
+  a defect issue, so Section 01 and the Section 05 para-wise reply keep pointing at the right paragraph. Section
+  13 names the kind ("Kind=defect (rendered in Section 07)", "Kind=consequential (parent Issue #m)").
+  `DraftCheckService.CHECK_EVERY_ISSUE_ANSWERED` (one-line change) accepts a defect issue answered in Section 07.
+  No change to prompts, caps, models, the loader or the matching agent.
+- Tests: `TemplateFillServiceTest` (FY 2017-18 against a 2017-07-01 window; legal window 2020-03-01..2022-02-28
+  against July 2019 - March 2020 -> overlap; no overlap -> nearest version + flag with details; unparseable period
+  -> latest + flag; card without templates -> NONE; `clampToGst`), `PeriodNormalizerTest` (selection table and
+  crossing test updated to the END preference; unreadable period -> latest + flag), `V7Stage3PipelineTest`
+  (corrigendum / hearing-date issues skip the writer while a substantive unmatched issue is still written; the
+  rule table; template present for FY 2017-18 and for a mismatched window -> no writer call, warn check with
+  details; defect issues answered in Section 07 pass `CHECK_EVERY_ISSUE_ANSWERED`), `ReplyAssemblyServiceTest`
+  (defect issue in Section 07 with 7.1 / 7.2, consequential heading after its parent, Section 05 references,
+  AI-written defect, placeholder kept without defects, partner-note lines for the two new flags).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`, `RealNoticesBatchRunnerTest` excluded as before): **329 tests, 0 failures, 0 errors**
-  on 15-10-2026 after prompt v3.4 (323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
+- Offline unit suite (`mvn test`, `RealNoticesBatchRunnerTest` excluded as before): **345 tests, 0 failures, 0 errors**
+  on 16-10-2026 after (b16) (329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
   calls; all models and IndianKanoon mocked or served from local fixtures). The 329 include the Spring context test
   `NoticedeskApiApplicationTests`, which passed in that container (it retries the local Postgres connection for
   about five minutes before the context comes up). A plain `mvn test` no longer modifies `output/`. V23 to V28

@@ -87,11 +87,14 @@ public class DraftCheckService {
         List<Integer> unansweredIssues = new ArrayList<>();
         String sec04Html = getSectionHtml(sections, 4);
         String sec06Html = getSectionHtml(sections, 6);
+        String sec07Html = getSectionHtml(sections, 7);   // defect issues are answered as procedural objections
 
         for (MatchedIssue issue : issues) {
             boolean inSec04 = sec04Html.contains("Issue #" + issue.issueNo()) || sec04Html.contains("PENDING_AI: Issue " + issue.issueNo());
             boolean inSec06 = sec06Html.contains("Issue #" + issue.issueNo()) || sec06Html.contains("PENDING_AI: Issue " + issue.issueNo());
-            if (!inSec04 && !inSec06) {
+            boolean inSec07 = issue.isDefect()
+                    && (sec07Html.contains("Issue #" + issue.issueNo()) || sec07Html.contains("PENDING_AI: Issue " + issue.issueNo()));
+            if (!inSec04 && !inSec06 && !inSec07) {
                 allIssuesAnswered = false;
                 unansweredIssues.add(issue.issueNo());
             }

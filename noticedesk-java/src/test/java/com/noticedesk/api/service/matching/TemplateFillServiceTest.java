@@ -137,6 +137,132 @@ class TemplateFillServiceTest {
         assertTrue(result.flags().contains("missing_period"));
     }
 
+    // ------------------------------------------------------------------ template version selection by period overlap
+
+    private static ReplyTemplate windowed(String cardId, int version, LocalDate from, LocalDate to) {
+        return new ReplyTemplate("TPL-" + cardId + "-v" + version, version, cardId, from, to, "active",
+                List.of(new TemplateBlock("BLK-" + cardId + "-" + version, 4, "<p>Version " + version + " ground.</p>", List.of(), null)),
+                List.of(), List.of(), "Version " + version + " summary.", List.of(), null, null, null);
+    }
+
+    private static MatchedIssue fullIssue(String cardId, String period) {
+        return new MatchedIssue(1, "full", List.of(cardId), "w", List.of(), Map.of("period", period), List.of(), List.of());
+    }
+
+    @Test
+    void fy2017_18_isReadFromGstStart_andGetsTheTemplateEffectiveFrom1July2017() {
+        // live finding: "FY 2017-18" starts 2017-04-01, before the 2017-07-01 effective_from of every card; the
+        // old in-force-on-start rule found no version and the issue went to the AI writers
+        fillerService.registerInMemoryTemplate(windowed("NDK-037", 1, LocalDate.of(2017, 7, 1), null));
+
+        TemplateFillService.TemplateSelection sel = fillerService.selectTemplate("NDK-037", "FY 2017-18");
+        assertNotNull(sel.template());
+        assertEquals(LocalDate.of(2017, 7, 1), sel.period().start(), "start clamped to the GST start date");
+        assertEquals(LocalDate.of(2018, 3, 31), sel.period().end());
+        assertFalse(sel.crossesVersionBoundary());
+        assertTrue(sel.flags().isEmpty(), sel.flags().toString());
+
+        FilledTemplateResult r = fillerService.fillTemplateForIssue(fullIssue("NDK-037", "FY 2017-18"), null, null);
+        assertEquals("TPL-NDK-037-v1", r.templateId());
+        assertTrue(r.hasTemplate());
+        assertFalse(r.flags().contains("no_template_available"));
+        assertFalse(r.flags().contains(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH));
+        assertFalse(r.flags().contains(TemplateFillService.PERIOD_CROSSES_TEMPLATE_VERSION_FLAG));
+    }
+
+    @Test
+    void legalDateWindowOverlappingThePeriod_isChosen() {
+        // a COVID-limitation card whose window is a legal regime (2020-03-01 to 2022-02-28), not a tax period
+        fillerService.registerInMemoryTemplate(windowed("NDK-COVID", 1, LocalDate.of(2020, 3, 1), LocalDate.of(2022, 2, 28)));
+
+        TemplateFillService.TemplateSelection sel = fillerService.selectTemplate("NDK-COVID", "July 2019 to March 2020");
+        assertNotNull(sel.template());
+        assertEquals(1, sel.template().version());
+        assertTrue(sel.flags().isEmpty(), "an overlapping window is a normal match: " + sel.flags());
+        // the period starts before the window: the existing boundary warning still applies
+        assertTrue(sel.crossesVersionBoundary());
+
+        FilledTemplateResult r = fillerService.fillTemplateForIssue(fullIssue("NDK-COVID", "July 2019 to March 2020"), null, null);
+        assertTrue(r.hasTemplate());
+        assertTrue(r.flags().contains(TemplateFillService.PERIOD_CROSSES_TEMPLATE_VERSION_FLAG));
+        assertFalse(r.flags().contains(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH));
+    }
+
+    @Test
+    void noOverlappingVersion_usesTheNearestWindowWithAWarnFlagAndDetails() {
+        fillerService.registerInMemoryTemplate(windowed("NDK-NEAR", 1, LocalDate.of(2017, 7, 1), LocalDate.of(2018, 3, 31)));
+        fillerService.registerInMemoryTemplate(windowed("NDK-NEAR", 2, LocalDate.of(2021, 1, 1), LocalDate.of(2022, 2, 28)));
+
+        // FY 2019-20 (2019-04-01..2020-03-31): 366 days after v1 ends, 276 days before v2 starts -> v2
+        TemplateFillService.TemplateSelection sel = fillerService.selectTemplate("NDK-NEAR", "FY 2019-20");
+        assertNotNull(sel.template(), "never 'no template version in force' when the card has versions");
+        assertEquals(2, sel.template().version());
+        assertFalse(sel.crossesVersionBoundary());
+        assertEquals(List.of(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH), sel.flags());
+        Map<String, Object> d = sel.flagDetails().get(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH);
+        assertEquals("NDK-NEAR", d.get("card_id"));
+        assertEquals("2019-04-01", d.get("period_start"));
+        assertEquals("2020-03-31", d.get("period_end"));
+        assertEquals("2021-01-01", d.get("template_effective_from"));
+        assertEquals("2022-02-28", d.get("template_effective_to"));
+        assertEquals(2, d.get("template_version"));
+        assertEquals(276L, d.get("gap_days"));
+
+        FilledTemplateResult r = fillerService.fillTemplateForIssue(fullIssue("NDK-NEAR", "FY 2019-20"), null, null);
+        assertEquals("TPL-NDK-NEAR-v2", r.templateId());
+        assertTrue(r.hasTemplate());
+        assertTrue(r.flags().contains(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH));
+        assertFalse(r.flags().contains("no_template_available"));
+        assertEquals("NDK-NEAR", r.flagDetails().get(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH).get("card_id"));
+
+        // the earlier window is nearer for FY 2018-19 (1 day after v1 ends)
+        assertEquals(1, fillerService.selectTemplate("NDK-NEAR", "FY 2018-19").template().version());
+    }
+
+    @Test
+    void unparseablePeriod_usesTheLatestVersionWithAWarnFlag() {
+        fillerService.registerInMemoryTemplate(windowed("NDK-LATE", 1, LocalDate.of(2017, 7, 1), LocalDate.of(2020, 12, 31)));
+        fillerService.registerInMemoryTemplate(windowed("NDK-LATE", 3, LocalDate.of(2021, 1, 1), null));
+        fillerService.registerInMemoryTemplate(windowed("NDK-LATE", 2, LocalDate.of(2021, 1, 1), null));
+
+        TemplateFillService.TemplateSelection sel = fillerService.selectTemplate("NDK-LATE", "the audit period");
+        assertEquals(3, sel.template().version());
+        assertNull(sel.period());
+        assertEquals(List.of(TemplateFillService.FLAG_PERIOD_NOT_NORMALISED), sel.flags());
+        assertEquals("the audit period", sel.flagDetails().get(TemplateFillService.FLAG_PERIOD_NOT_NORMALISED).get("period"));
+
+        FilledTemplateResult r = fillerService.fillTemplateForIssue(fullIssue("NDK-LATE", "the audit period"), null, null);
+        assertEquals(3, r.templateVersion());
+        assertTrue(r.hasTemplate(), "the issue still gets the template");
+        assertTrue(r.flags().contains(TemplateFillService.FLAG_PERIOD_NOT_NORMALISED));
+        assertFalse(r.flags().contains("no_template_available"));
+    }
+
+    @Test
+    void cardWithoutTemplates_isTheOnlyNoTemplateCase() {
+        TemplateFillService.TemplateSelection sel = fillerService.selectTemplate("NDK-EMPTY", "FY 2019-20");
+        assertNull(sel.template());
+        assertTrue(sel.reason().contains("template exists for the card"), sel.reason());
+        assertTrue(sel.flags().isEmpty());
+
+        FilledTemplateResult r = fillerService.fillTemplateForIssue(fullIssue("NDK-EMPTY", "FY 2019-20"), null, null);
+        assertEquals("NONE", r.templateId());
+        assertFalse(r.hasTemplate());
+        assertEquals(List.of("no_template_available"), r.flags());
+    }
+
+    @Test
+    void clampToGst_movesOnlyPreGstStarts() {
+        PeriodNormalizer.Period fy1718 = TemplateFillService.clampToGst(PeriodNormalizer.parse("FY 2017-18").orElseThrow());
+        assertEquals(LocalDate.of(2017, 7, 1), fy1718.start());
+        assertEquals(LocalDate.of(2018, 3, 31), fy1718.end());
+        PeriodNormalizer.Period preGst = TemplateFillService.clampToGst(PeriodNormalizer.parse("FY 2016-17").orElseThrow());
+        assertEquals(LocalDate.of(2017, 7, 1), preGst.start());
+        assertEquals(LocalDate.of(2017, 7, 1), preGst.end());
+        PeriodNormalizer.Period later = PeriodNormalizer.parse("FY 2019-20").orElseThrow();
+        assertSame(later, TemplateFillService.clampToGst(later));
+    }
+
     @Test
     void testConditionalWhenEvaluation() {
         ReplyTemplate template = new ReplyTemplate(

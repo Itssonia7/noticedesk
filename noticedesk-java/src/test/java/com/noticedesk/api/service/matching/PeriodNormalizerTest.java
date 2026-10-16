@@ -77,42 +77,50 @@ class PeriodNormalizerTest {
         return s;
     }
 
+    // v1 2017-07-01..2020-12-31, v2 2021-01-01..open: the version in force on the period's END is preferred
     @ParameterizedTest(name = "{0} -> v{1}")
     @CsvSource(delimiter = '|', value = {
-            "April 2020 to March 2021 | 1",
-            "Apr-2020 to Mar-2021     | 1",
-            "FY 2020-21               | 1",
-            "F.Y. 2020-2021           | 1",
-            "01.04.2020 to 31.03.2021 | 1",
+            "April 2020 to March 2021 | 2",
+            "Apr-2020 to Mar-2021     | 2",
+            "FY 2020-21               | 2",
+            "F.Y. 2020-2021           | 2",
+            "01.04.2020 to 31.03.2021 | 2",
+            "April 2020 to December 2020 | 1",
             "July 2019                | 1",
             "07/2019                  | 1",
+            "FY 2019-20               | 1",
             "FY 2021-22               | 2",
             "January 2021             | 2",
     })
-    void selectsTheVersionInForceOnThePeriodStart(String period, int version) {
+    void selectsTheOverlappingVersionInForceOnThePeriodEnd(String period, int version) {
         assertEquals(version, serviceWithTwoVersions().selectTemplateForCardAndPeriod("CARD-X", period).version());
     }
 
     @Test
-    void periodCrossingAVersionBoundaryUsesStartAndFlagsWarn() {
+    void periodCrossingAVersionBoundaryUsesTheEndVersionAndFlagsWarn() {
         TemplateFillService s = serviceWithTwoVersions();
         TemplateFillService.TemplateSelection sel = s.selectTemplate("CARD-X", "April 2020 to March 2021");
-        assertEquals(1, sel.template().version());
+        assertEquals(2, sel.template().version());
         assertTrue(sel.crossesVersionBoundary());
+        assertTrue(sel.flags().isEmpty(), "an overlapping version needs no mismatch flag");
         assertFalse(s.selectTemplate("CARD-X", "July 2019").crossesVersionBoundary());
 
         MatchedIssue issue = new MatchedIssue(1, "full", List.of("CARD-X"), "w", List.of(),
                 Map.of("period", "April 2020 to March 2021"), List.of(), List.of());
         TemplateFillService.FilledTemplateResult r = s.fillTemplateForIssue(issue, null, null);
         assertTrue(r.flags().contains(TemplateFillService.PERIOD_CROSSES_TEMPLATE_VERSION_FLAG));
+        assertFalse(r.flags().contains(TemplateFillService.FLAG_TEMPLATE_WINDOW_MISMATCH));
         assertEquals("TPL-X", r.templateId());
+        assertEquals(2, r.templateVersion());
     }
 
     @Test
-    void unreadablePeriodGetsNoDatedTemplate() {
+    void unreadablePeriodGetsTheLatestVersionWithAWarnFlag() {
         TemplateFillService.TemplateSelection sel = serviceWithTwoVersions().selectTemplate("CARD-X", "the audit period");
-        assertNull(sel.template());
-        assertEquals("period could not be normalised", sel.reason());
+        assertNotNull(sel.template());
+        assertEquals(2, sel.template().version());
+        assertNull(sel.reason());
+        assertEquals(List.of(TemplateFillService.FLAG_PERIOD_NOT_NORMALISED), sel.flags());
         assertEquals("no active, provisional or draft template exists for the card",
                 serviceWithTwoVersions().selectTemplate("CARD-NONE", "FY 2020-21").reason());
     }

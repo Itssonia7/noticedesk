@@ -78,6 +78,17 @@ public class V7DraftingPipelineService {
     /** Client-facing placeholder for an AI issue the writer could not (or was not allowed to) write. */
     public static final String AI_FAILED_PLACEHOLDER = "[[PARTNER: AI draft failed — write manually]]";
     public static final String AI_SKIPPED_COST_CAP_PLACEHOLDER = "[[PARTNER: AI draft skipped — cost cap]]";
+    /** Section 04 line for an unmatched issue with no substantive ground (new-issue writer not called). */
+    public static final String NO_SUBSTANTIVE_GROUND_PLACEHOLDER =
+            "[[PARTNER: no catalogue card and no substantive demand identified for this ground; review the document]]";
+    /** Draft flag (info) raised when the new-issue writer was skipped for an issue without a substantive ground. */
+    public static final String FLAG_NEW_ISSUE_WRITER_SKIPPED = "info:new_issue_writer_skipped";
+    /**
+     * Words in an unmatched issue's label / why that mark an administrative document rather than a ground
+     * (a corrigendum, an intimation of hearing date, an acknowledgement, a reminder, no ground / demand).
+     */
+    static final List<String> ADMINISTRATIVE_ISSUE_WORDS =
+            List.of("corrigendum", "hearing date", "acknowledg", "reminder", "no ground", "no demand");
 
     @Autowired
     public V7DraftingPipelineService(
@@ -158,6 +169,42 @@ public class V7DraftingPipelineService {
             return new IssueAiOutput(issue, writer, List.of(new AiFragment(4, null, p), new AiFragment(6, null, p)),
                     List.of(), List.of(), marker, null, null, null, true);
         }
+
+        /** An unmatched issue without a substantive ground: one [[PARTNER]] line in Section 04, no writer call. */
+        static IssueAiOutput noSubstantiveGround(MatchedIssue issue) {
+            String p = "<p>" + NO_SUBSTANTIVE_GROUND_PLACEHOLDER + "</p>";
+            return new IssueAiOutput(issue, "none (new-issue writer skipped: no substantive ground)",
+                    List.of(new AiFragment(4, null, p)), List.of(), List.of(), NO_SUBSTANTIVE_GROUND_PLACEHOLDER,
+                    null, null, null, true);
+        }
+    }
+
+    /**
+     * True when an unmatched issue (status none, no card) carries no substantive ground for the new-issue writer:
+     * its facts have neither an amount nor a legal section, or its label / why names an administrative document
+     * ({@link #ADMINISTRATIVE_ISSUE_WORDS}: a corrigendum, an intimation of hearing date, an acknowledgement,
+     * a reminder, "no ground" / "no demand").
+     */
+    static boolean lacksSubstantiveGround(MatchedIssue issue) {
+        if (!"none".equalsIgnoreCase(issue.status()) || issue.primaryCardId() != null) return false;
+        Map<String, Object> facts = issue.facts() != null ? issue.facts() : Map.of();
+        boolean noAmount = isBlankFact(facts.get("amount"));
+        boolean noSection = isBlankFact(facts.get("legal_section"));
+        if (noAmount && noSection) return true;
+        StringBuilder text = new StringBuilder();
+        if (issue.why() != null) text.append(issue.why()).append(' ');
+        for (String key : List.of("label", "ground", "title", "allegation", "issue")) {
+            Object v = facts.get(key);
+            if (v != null) text.append(v).append(' ');
+        }
+        String lower = text.toString().toLowerCase(Locale.ROOT);
+        return ADMINISTRATIVE_ISSUE_WORDS.stream().anyMatch(lower::contains);
+    }
+
+    private static boolean isBlankFact(Object v) {
+        if (v == null) return true;
+        String s = v.toString().trim();
+        return s.isEmpty() || "null".equalsIgnoreCase(s);
     }
 
     public DraftingPipelineResult runPipeline(DraftingInput input) {
@@ -226,7 +273,18 @@ public class V7DraftingPipelineService {
         for (int i = 0; i < issues.size(); i++) {
             MatchedIssue issue = issues.get(i);
             FilledTemplateResult ft = filledTemplates.get(i);
+            // a full match filled from a template (any version chosen by period overlap) never reaches a writer
             if (!ReplyAssemblyService.needsAiWriter(issue, ft)) continue;
+            if (newIssueDraftingAgent != null && lacksSubstantiveGround(issue)) {
+                // a corrigendum / hearing intimation / acknowledgement / reminder, or no amount and no provision:
+                // nothing for the new-issue writer to argue; the partner reviews the document
+                log.info("Issue #{}: new-issue writer skipped (no catalogue card and no substantive ground)", issue.issueNo());
+                notes.add("Issue #" + issue.issueNo() + ": new-issue writer not called (no catalogue card and no substantive demand"
+                        + " or provision in the ground); the partner reviews the document.");
+                stageFlags.add(FLAG_NEW_ISSUE_WRITER_SKIPPED);
+                aiOutputs.add(IssueAiOutput.noSubstantiveGround(issue));
+                continue;
+            }
             IssueAiOutput out = runIssueWriter(issue, ft, matchingResult, fullOcrText, noticeType, noticeId, highStakes, notes,
                     budget, stageFlags);
             if (out != null) aiOutputs.add(out);
@@ -333,11 +391,25 @@ public class V7DraftingPipelineService {
             checkResults.addAll(draftCheckService.citationChecks(verified));
         }
         Set<String> flags = new LinkedHashSet<>(stageFlags);
+        Map<String, Map<String, Object>> flagDetails = new LinkedHashMap<>();
         for (FilledTemplateResult ft : filledTemplates) {
-            if (ft != null && ft.flags() != null) flags.addAll(ft.flags());
+            if (ft == null) continue;
+            if (ft.flags() != null) flags.addAll(ft.flags());
+            // the card id and the two date windows behind a template selection flag (first issue wins)
+            ft.flagDetails().forEach((f, d) -> flagDetails.putIfAbsent(f, d));
         }
         if (assemblyResult.flags() != null) flags.addAll(assemblyResult.flags());
-        checkResults.addAll(draftCheckService.flagChecks(flags));
+        for (DraftCheckResult cr : draftCheckService.flagChecks(flags)) {
+            Object flag = cr.details() != null ? cr.details().get("flag") : null;
+            Map<String, Object> extra = flag != null ? flagDetails.get(flag.toString()) : null;
+            if (extra == null || extra.isEmpty()) {
+                checkResults.add(cr);
+            } else {
+                Map<String, Object> merged = new LinkedHashMap<>(cr.details());
+                merged.putAll(extra);
+                checkResults.add(new DraftCheckResult(cr.checkName(), cr.severity(), cr.passed(), merged));
+            }
+        }
 
         List<DraftSection> draftSections = new ArrayList<>();
         String checkHtml = renderCheckResults(checkResults, assemblyResult,

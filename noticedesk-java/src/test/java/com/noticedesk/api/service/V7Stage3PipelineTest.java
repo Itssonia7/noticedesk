@@ -455,6 +455,135 @@ class V7Stage3PipelineTest {
         verify(newIssueAgent).generateNewIssueDraft(any(), any(), anyString(), eq("anti_profiteering"), any(), eq(false), any());
     }
 
+    private static MatchingResult issues(MatchedIssue... issues) {
+        MatchedNoticeInfo info = new MatchedNoticeInfo("REF/1", "DIN-1", "01-04-2024", "within 30 days", "2022-23", "2022-23", 160000.0, "Officer");
+        return new MatchingResult(info, List.of(issues), Map.of("record", List.of(1), "issue", List.of(2, 3, 4), "demand", List.of(5)),
+                List.of(), List.of(), "h", 1, 1, 0, 0);
+    }
+
+    @Test
+    void unmatchedIssueWithoutASubstantiveGround_skipsTheNewIssueWriter() {
+        // live finding: a corrigendum changing the figures of an earlier SCN (status none, no card, no amount) was sent
+        // to the new-issue writer; an administrative label is skipped even when an amount is present
+        Map<String, Object> noAmount = new HashMap<>();
+        noAmount.put("period", "2022-23");
+        noAmount.put("amount", null);
+        noAmount.put("legal_section", null);
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(issues(
+                new MatchedIssue(1, "full", List.of("CARD-A"), "w", List.of(), Map.of("period", "2022-23", "amount", 100000.0), List.of("2"), List.of()),
+                new MatchedIssue(2, "none", List.of(), "Corrigendum dated 02-04-2024 changing the figures of the earlier SCN", List.of(),
+                        noAmount, List.of("3"), List.of()),
+                new MatchedIssue(3, "none", List.of(), "Intimation of hearing date; no ground raised", List.of(),
+                        Map.of("period", "2022-23", "amount", 10000.0), List.of("4"), List.of()),
+                new MatchedIssue(4, "none", List.of(), "Supply treated as taxable at 18%", List.of(),
+                        Map.of("period", "2022-23", "amount", 10000.0, "legal_section", "Section 9"), List.of("4"), List.of())));
+
+        DraftingPipelineResult r = pipeline.runPipeline(input("Section 73"));
+
+        verify(newIssueAgent, never()).generateNewIssueDraft(argThat(i -> i.issueNo() == 2), any(), anyString(), anyString(), any(), anyBoolean(), any());
+        verify(newIssueAgent, never()).generateNewIssueDraft(argThat(i -> i.issueNo() == 3), any(), anyString(), anyString(), any(), anyBoolean(), any());
+        verify(newIssueAgent, times(1)).generateNewIssueDraft(argThat(i -> i.issueNo() == 4), any(), anyString(), anyString(), any(), anyBoolean(), any());
+        verify(partialAgent, never()).generatePartialDrafting(any(), any(), any(), anyString(), any(), anyBoolean(), any());
+
+        String s04 = section(r, 4);
+        assertTrue(s04.contains("<h3>Issue #2 Grounds of Defence</h3>"), s04);
+        assertTrue(s04.contains("4.2 " + V7DraftingPipelineService.NO_SUBSTANTIVE_GROUND_PLACEHOLDER), s04);
+        assertTrue(s04.contains("4.3 " + V7DraftingPipelineService.NO_SUBSTANTIVE_GROUND_PLACEHOLDER), s04);
+        assertTrue(s04.contains("New issue ground."), "the substantive unmatched issue is still written");
+        assertFalse(allHtml(r).contains("PENDING_AI"));
+        DraftCheckResult skipped = check(r, "FLAG_NEW_ISSUE_WRITER_SKIPPED");
+        assertEquals("info", skipped.severity());
+        assertEquals(V7DraftingPipelineService.FLAG_NEW_ISSUE_WRITER_SKIPPED, skipped.details().get("flag"));
+        assertTrue(section(r, 13).contains("Issue #2: new-issue writer not called (no catalogue card and no substantive demand"), section(r, 13));
+        assertTrue(section(r, 13).contains("Written by=AI none (new-issue writer skipped: no substantive ground)"), section(r, 13));
+        assertEquals(1, r.aiIssueSections().size(), "no ai_issue_sections row for a skipped issue");
+        assertEquals(4, r.aiIssueSections().get(0).issueNo());
+    }
+
+    @Test
+    void lacksSubstantiveGround_rules() {
+        Map<String, Object> empty = new HashMap<>();
+        empty.put("period", "2022-23");
+        assertTrue(V7DraftingPipelineService.lacksSubstantiveGround(
+                new MatchedIssue(1, "none", List.of(), "Some ground", List.of(), empty, List.of(), List.of())));
+        assertTrue(V7DraftingPipelineService.lacksSubstantiveGround(
+                new MatchedIssue(1, "none", List.of(), "Reminder to file the reply", List.of(), Map.of("amount", 5.0), List.of(), List.of())));
+        assertTrue(V7DraftingPipelineService.lacksSubstantiveGround(
+                new MatchedIssue(1, "none", List.of(), "Acknowledgement of the reply filed", List.of(), Map.of("legal_section", "Section 73"), List.of(), List.of())));
+        assertFalse(V7DraftingPipelineService.lacksSubstantiveGround(
+                new MatchedIssue(1, "none", List.of(), "ITC on blocked credit", List.of(), Map.of("legal_section", "Section 17(5)"), List.of(), List.of())));
+        assertFalse(V7DraftingPipelineService.lacksSubstantiveGround(
+                new MatchedIssue(1, "none", List.of(), "Excess ITC", List.of(), Map.of("amount", 5.0), List.of(), List.of())));
+        // only an unmatched issue without a card is tested
+        assertFalse(V7DraftingPipelineService.lacksSubstantiveGround(
+                new MatchedIssue(1, "none", List.of("CARD-A"), "Corrigendum", List.of(), empty, List.of(), List.of())));
+        assertFalse(V7DraftingPipelineService.lacksSubstantiveGround(
+                new MatchedIssue(1, "partial", List.of(), "Corrigendum", List.of(), empty, List.of(), List.of())));
+    }
+
+    @Test
+    void fullMatchFilledFromATemplate_neverReachesAWriter_evenForFy2017_18OrAMismatchedWindow() {
+        fill.registerInMemoryTemplate(new ReplyTemplate("TPL-C", 1, "CARD-C",
+                LocalDate.of(2021, 1, 1), LocalDate.of(2022, 2, 28), "active",
+                List.of(new TemplateBlock("BLK-C-04", 4, "<p>Template ground C.</p>", List.of(), null)),
+                List.of(), List.of(), "Template C summary.", List.of(), null, null, null));
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(issues(
+                // FY 2017-18 starts before every card's 2017-07-01 effective_from: the version is still chosen
+                new MatchedIssue(1, "full", List.of("CARD-A"), "w", List.of(), Map.of("period", "FY 2017-18", "amount", 100000.0), List.of("2"), List.of()),
+                // no version of CARD-C overlaps FY 2019-20: the nearest version is used with a warn flag
+                new MatchedIssue(2, "full", List.of("CARD-C"), "w", List.of(), Map.of("period", "FY 2019-20", "amount", 50000.0), List.of("3"), List.of())));
+
+        DraftingPipelineResult r = pipeline.runPipeline(input("Section 73"));
+
+        verifyNoInteractions(partialAgent, newIssueAgent);
+        String s04 = section(r, 4);
+        assertTrue(s04.contains("Template ground for Test Client Pvt Ltd on Rs 1,00,000."), s04);
+        assertTrue(s04.contains("Template ground C."), s04);
+        assertFalse(allHtml(r).contains("PENDING_AI"));
+        String s13 = section(r, 13);
+        assertTrue(s13.contains("Issue #1: Match Status=full, Cards=[CARD-A], Template=TPL-A (v1), Written by=template (code)"), s13);
+        assertTrue(s13.contains("Issue #2: Match Status=full, Cards=[CARD-C], Template=TPL-C (v1), Written by=template (code)"), s13);
+        assertFalse(s13.contains("No template available"), s13);
+        assertTrue(s13.contains("Note=No template version of card CARD-C covers the period 2019-04-01 to 2020-03-31; nearest version v1 (2021-01-01 to 2022-02-28) used"), s13);
+        DraftCheckResult mismatch = check(r, "FLAG_TEMPLATE_WINDOW_MISMATCH");
+        assertEquals("warn", mismatch.severity());
+        assertEquals("CARD-C", mismatch.details().get("card_id"));
+        assertEquals("2019-04-01", mismatch.details().get("period_start"));
+        assertEquals("2020-03-31", mismatch.details().get("period_end"));
+        assertEquals("2021-01-01", mismatch.details().get("template_effective_from"));
+        assertEquals("2022-02-28", mismatch.details().get("template_effective_to"));
+        assertTrue(r.checkResults().stream().noneMatch(c -> c.checkName().equals("FLAG_PERIOD_CROSSES_TEMPLATE_VERSION")));
+        assertTrue(check(r, "CHECK_EVERY_ISSUE_ANSWERED").passed());
+    }
+
+    @Test
+    void defectIssue_isAnsweredInSection07AndPassesTheIssueCheck() {
+        when(matchingAgent.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(issues(
+                new MatchedIssue(1, "full", "demand", List.of("CARD-A"), List.of(), "w", List.of(),
+                        Map.of("period", "2022-23", "amount", 100000.0), List.of("2"), List.of(), List.of(), null),
+                new MatchedIssue(2, "full", "defect", List.of("CARD-B"), List.of(), "no DIN", List.of(),
+                        Map.of("period", "2022-23", "legal_section", "Circular 128/47/2019-GST"), List.of("header"), List.of(), List.of(), null),
+                new MatchedIssue(3, "none", "defect", List.of(), List.of(), "time-barred under Section 73(10)", List.of(),
+                        Map.of("period", "2022-23", "legal_section", "Section 73(10)"), List.of("header"), List.of(), List.of(), null)));
+
+        DraftingPipelineResult r = pipeline.runPipeline(input("Section 73"));
+
+        verify(newIssueAgent, times(1)).generateNewIssueDraft(argThat(i -> i.issueNo() == 3), any(), anyString(), anyString(), any(), anyBoolean(), any());
+        String s04 = section(r, 4);
+        assertTrue(s04.contains("Issue #1 Grounds of Defence"), s04);
+        assertFalse(s04.contains("Issue #2"), s04);
+        assertFalse(s04.contains("Issue #3"), s04);
+        String s07 = section(r, 7);
+        assertTrue(s07.contains("<h3>Issue #2 Procedural Objection</h3>"), s07);
+        assertTrue(s07.contains("7.1 Template ground B that does not fit this notice."), s07);
+        assertTrue(s07.contains("<h3>Issue #3 Procedural Objection</h3>"), s07);
+        assertTrue(s07.contains("7.2 New issue ground."), s07);
+        assertTrue(s07.contains("7.3 New issue legal submission."), s07);
+        assertFalse(s07.contains("[[PARTNER: add procedural objections"), s07);
+        assertFalse(section(r, 6).contains("Issue #3"), section(r, 6));
+        assertTrue(check(r, "CHECK_EVERY_ISSUE_ANSWERED").passed(), String.valueOf(check(r, "CHECK_EVERY_ISSUE_ANSWERED").details()));
+    }
+
     @Test
     void missingStageTemplateIsBlockedNotReplacedByScn73() {
         DraftingPipelineResult r = pipeline.runPipeline(input("Section 74"));   // no scn_74 template registered

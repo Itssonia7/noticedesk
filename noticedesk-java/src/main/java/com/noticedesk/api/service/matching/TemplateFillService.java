@@ -49,6 +49,10 @@ public class TemplateFillService {
             List<String> flags
     ) {}
 
+    /**
+     * @param flagDetails details per flag in {@code flags} (e.g. the card id and the two date windows behind
+     *                    {@link #FLAG_TEMPLATE_WINDOW_MISMATCH}); empty for flags without details
+     */
     public record FilledTemplateResult(
             String templateId,
             int templateVersion,
@@ -60,8 +64,27 @@ public class TemplateFillService {
             List<String> flags,
             List<String> documents,
             List<String> proceduralObjectionOptions,
-            boolean periodMissing
-    ) {}
+            boolean periodMissing,
+            Map<String, Map<String, Object>> flagDetails
+    ) {
+        public FilledTemplateResult {
+            if (flagDetails == null) flagDetails = Map.of();
+        }
+
+        /** A result without flag details. */
+        public FilledTemplateResult(String templateId, int templateVersion, String cardId, String summaryLine,
+                                    List<FilledBlock> blocks, List<SourceMapEntry> sourceMapEntries, List<String> missingVars,
+                                    List<String> flags, List<String> documents, List<String> proceduralObjectionOptions,
+                                    boolean periodMissing) {
+            this(templateId, templateVersion, cardId, summaryLine, blocks, sourceMapEntries, missingVars, flags, documents,
+                    proceduralObjectionOptions, periodMissing, Map.of());
+        }
+
+        /** True when the issue was filled from a template (a block list, not the NONE / MISSING_PERIOD result). */
+        public boolean hasTemplate() {
+            return blocks != null && !blocks.isEmpty();
+        }
+    }
 
     /**
      * Fills an issue template for a matched issue.
@@ -96,6 +119,7 @@ public class TemplateFillService {
         TemplateSelection selection = selectTemplate(cardId, period);
         ReplyTemplate template = selection.template();
         if (template == null) {
+            // only when the card has no template row at all: a template that exists is always used (see selectTemplate)
             log.warn("No active template for card_id={} period={}: {}", cardId, period, selection.reason());
             return createNoTemplateResult(cardId, "no_template_available");
         }
@@ -107,10 +131,24 @@ public class TemplateFillService {
         List<SourceMapEntry> sourceMapEntries = new ArrayList<>();
         List<String> allMissingVars = new ArrayList<>();
         List<String> allFlags = new ArrayList<>();
+        Map<String, Map<String, Object>> flagDetails = new LinkedHashMap<>();
         if (selection.crossesVersionBoundary()) {
-            log.warn("Issue #{} period {} crosses a template version boundary for card {}; using the version in force on {}",
-                    issue.issueNo(), period, cardId, selection.period().start());
+            log.warn("Issue #{} period {} crosses a template version boundary for card {}; using version {} (in force on {})",
+                    issue.issueNo(), period, cardId, template.version(), selection.period().end());
             allFlags.add(PERIOD_CROSSES_TEMPLATE_VERSION_FLAG);
+        }
+        for (String f : selection.flags()) {
+            if (FLAG_TEMPLATE_WINDOW_MISMATCH.equals(f)) {
+                log.warn("Issue #{}: no template version of card {} covers the period {} ({} to {}); nearest version {} ({} to {}) used",
+                        issue.issueNo(), cardId, period, selection.period().start(), selection.period().end(),
+                        template.version(), template.effectiveFrom(), template.effectiveTo());
+            } else if (FLAG_PERIOD_NOT_NORMALISED.equals(f)) {
+                log.warn("Issue #{}: period '{}' could not be read; latest template version {} of card {} used",
+                        issue.issueNo(), period, template.version(), cardId);
+            }
+            allFlags.add(f);
+            Map<String, Object> d = selection.flagDetails().get(f);
+            if (d != null) flagDetails.put(f, d);
         }
 
         if (isProvisional(template)) {
@@ -159,7 +197,7 @@ public class TemplateFillService {
                 allMissingVars, allFlags,
                 template.documents() != null ? template.documents() : List.of(),
                 template.proceduralObjectionOptions() != null ? template.proceduralObjectionOptions() : List.of(),
-                false
+                false, flagDetails
         );
     }
 
@@ -198,16 +236,44 @@ public class TemplateFillService {
     }
 
     /**
+     * Draft flag (warn) raised when no template version of the card overlaps the issue period and the version
+     * with the nearest effective window was used. Details: card id, period and template window dates.
+     */
+    public static final String FLAG_TEMPLATE_WINDOW_MISMATCH = "warn:template_window_mismatch";
+
+    /**
+     * Draft flag (warn) raised when the issue period text could not be read as a date range and the latest
+     * template version of the card was used.
+     */
+    public static final String FLAG_PERIOD_NOT_NORMALISED = "warn:period_not_normalised";
+
+    /** GST came into force on 1 July 2017: a period starting earlier (e.g. "FY 2017-18") is read from this date. */
+    public static final LocalDate GST_START = LocalDate.of(2017, 7, 1);
+
+    /**
      * Result of template version selection.
      *
-     * @param template               the version in force on the period's start date, or null
-     * @param period                 the normalised period, or null when the text could not be read
+     * @param template               the chosen version, or null only when the card has no template at all
+     * @param period                 the normalised period (start clamped to {@link #GST_START}), or null when the
+     *                               text could not be read
      * @param crossesVersionBoundary true when the period runs past the chosen version (another version
      *                               applies to part of it)
      * @param reason                 why no template was chosen (log text only)
+     * @param flags                  selection flags ({@link #FLAG_TEMPLATE_WINDOW_MISMATCH}, {@link #FLAG_PERIOD_NOT_NORMALISED})
+     * @param flagDetails            details per flag
      */
     public record TemplateSelection(ReplyTemplate template, PeriodNormalizer.Period period,
-                                    boolean crossesVersionBoundary, String reason) {}
+                                    boolean crossesVersionBoundary, String reason,
+                                    List<String> flags, Map<String, Map<String, Object>> flagDetails) {
+        public TemplateSelection {
+            if (flags == null) flags = List.of();
+            if (flagDetails == null) flagDetails = Map.of();
+        }
+
+        TemplateSelection(ReplyTemplate template, PeriodNormalizer.Period period, boolean crossesVersionBoundary, String reason) {
+            this(template, period, crossesVersionBoundary, reason, List.of(), Map.of());
+        }
+    }
 
     /** Selects the active / provisional (or, when allowed, draft) template version for the card that is in force for the period. */
     public ReplyTemplate selectTemplateForCardAndPeriod(String cardId, String period) {
@@ -215,14 +281,21 @@ public class TemplateFillService {
     }
 
     /**
-     * Picks the highest template version whose effective dates contain the START of the issue period
-     * (normalised by {@link PeriodNormalizer}). A period that cannot be read only matches templates with
-     * no effective dates.
+     * Picks the template version of the card for the issue period (normalised by {@link PeriodNormalizer},
+     * start clamped to {@link #GST_START}):
+     * <ol>
+     *   <li>among the versions whose effective window OVERLAPS the period, the one in force on the period's
+     *       end, else the one in force on its start, else the highest overlapping version;</li>
+     *   <li>when no version overlaps, the version whose window is nearest to the period (smallest gap),
+     *       with {@link #FLAG_TEMPLATE_WINDOW_MISMATCH};</li>
+     *   <li>when the period cannot be read, the latest version, with {@link #FLAG_PERIOD_NOT_NORMALISED}.</li>
+     * </ol>
+     * The template is null only when the card has no active / provisional (/ draft) template row at all.
      */
     public TemplateSelection selectTemplate(String cardId, String period) {
         boolean allowDraft = properties == null || properties.getMatching() == null || properties.getMatching().isAllowDraftCards();
 
-        List<ReplyTemplate> candidates = loadTemplatesForCard(cardId, allowDraft);
+        List<ReplyTemplate> candidates = loadTemplatesForCard(cardId, allowDraft);   // highest version first
         if (candidates.isEmpty()) {
             return new TemplateSelection(null, null, false,
                     "no " + (allowDraft ? "active, provisional or draft" : "active or provisional") + " template exists for the card");
@@ -230,29 +303,83 @@ public class TemplateFillService {
 
         Optional<PeriodNormalizer.Period> parsed = PeriodNormalizer.parse(period);
         if (parsed.isEmpty()) {
-            for (ReplyTemplate t : candidates) {
-                if (t.effectiveFrom() == null && t.effectiveTo() == null) {
-                    return new TemplateSelection(t, null, false, null);
-                }
-            }
-            return new TemplateSelection(null, null, false, "period could not be normalised");
+            ReplyTemplate latest = candidates.get(0);
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("card_id", cardId);
+            details.put("period", period != null ? period : "");
+            details.put("template_id", latest.templateId());
+            details.put("template_version", latest.version());
+            return new TemplateSelection(latest, null, false, null,
+                    List.of(FLAG_PERIOD_NOT_NORMALISED), Map.of(FLAG_PERIOD_NOT_NORMALISED, details));
         }
 
-        PeriodNormalizer.Period p = parsed.get();
+        PeriodNormalizer.Period p = clampToGst(parsed.get());
+        List<ReplyTemplate> overlapping = candidates.stream().filter(t -> overlaps(t, p)).toList();
+        if (!overlapping.isEmpty()) {
+            ReplyTemplate chosen = overlapping.stream().filter(t -> inForceOn(t, p.end())).findFirst()
+                    .or(() -> overlapping.stream().filter(t -> inForceOn(t, p.start())).findFirst())
+                    .orElse(overlapping.get(0));
+            // another version applies to part of the period when any version boundary falls inside it
+            boolean crosses = candidates.stream().anyMatch(t -> boundaryInside(t, p));
+            return new TemplateSelection(chosen, p, crosses, null);
+        }
+
+        // no version covers any part of the period: the nearest window (ties -> highest version)
+        ReplyTemplate nearest = candidates.get(0);
+        long best = gapDays(nearest, p);
         for (ReplyTemplate t : candidates) {
-            if (inForceOn(t, p.start())) {
-                boolean crosses = (t.effectiveTo() != null && p.end().isAfter(t.effectiveTo()))
-                        || candidates.stream().anyMatch(o -> o != t && o.effectiveFrom() != null
-                                && o.effectiveFrom().isAfter(p.start()) && !o.effectiveFrom().isAfter(p.end()));
-                return new TemplateSelection(t, p, crosses, null);
+            long gap = gapDays(t, p);
+            if (gap < best) {
+                best = gap;
+                nearest = t;
             }
         }
-        return new TemplateSelection(null, p, false, "no template version in force on " + p.start());
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("card_id", cardId);
+        details.put("period", period);
+        details.put("period_start", p.start().toString());
+        details.put("period_end", p.end().toString());
+        details.put("template_id", nearest.templateId());
+        details.put("template_version", nearest.version());
+        details.put("template_effective_from", nearest.effectiveFrom() != null ? nearest.effectiveFrom().toString() : "");
+        details.put("template_effective_to", nearest.effectiveTo() != null ? nearest.effectiveTo().toString() : "");
+        details.put("gap_days", best);
+        return new TemplateSelection(nearest, p, false, null,
+                List.of(FLAG_TEMPLATE_WINDOW_MISMATCH), Map.of(FLAG_TEMPLATE_WINDOW_MISMATCH, details));
+    }
+
+    /** The period with its start (and, for a wholly pre-GST period, its end) moved up to {@link #GST_START}. */
+    static PeriodNormalizer.Period clampToGst(PeriodNormalizer.Period p) {
+        if (!p.start().isBefore(GST_START)) return p;
+        LocalDate end = p.end().isBefore(GST_START) ? GST_START : p.end();
+        return new PeriodNormalizer.Period(GST_START, end);
     }
 
     private static boolean inForceOn(ReplyTemplate t, LocalDate date) {
         return (t.effectiveFrom() == null || !date.isBefore(t.effectiveFrom()))
                 && (t.effectiveTo() == null || !date.isAfter(t.effectiveTo()));
+    }
+
+    /** True when the template's effective window and the period share at least one day. */
+    private static boolean overlaps(ReplyTemplate t, PeriodNormalizer.Period p) {
+        return (t.effectiveFrom() == null || !t.effectiveFrom().isAfter(p.end()))
+                && (t.effectiveTo() == null || !t.effectiveTo().isBefore(p.start()));
+    }
+
+    /** True when the template starts after the period's first day or ends before its last day (a version boundary inside the period). */
+    private static boolean boundaryInside(ReplyTemplate t, PeriodNormalizer.Period p) {
+        boolean startsInside = t.effectiveFrom() != null && t.effectiveFrom().isAfter(p.start()) && !t.effectiveFrom().isAfter(p.end());
+        boolean endsInside = t.effectiveTo() != null && !t.effectiveTo().isBefore(p.start()) && t.effectiveTo().isBefore(p.end());
+        return startsInside || endsInside;
+    }
+
+    /** Days between the period and the template window (0 when they overlap). */
+    private static long gapDays(ReplyTemplate t, PeriodNormalizer.Period p) {
+        if (overlaps(t, p)) return 0;
+        if (t.effectiveFrom() != null && t.effectiveFrom().isAfter(p.end())) {
+            return java.time.temporal.ChronoUnit.DAYS.between(p.end(), t.effectiveFrom());
+        }
+        return java.time.temporal.ChronoUnit.DAYS.between(t.effectiveTo(), p.start());
     }
 
     private List<ReplyTemplate> loadTemplatesForCard(String cardId, boolean allowDraft) {
