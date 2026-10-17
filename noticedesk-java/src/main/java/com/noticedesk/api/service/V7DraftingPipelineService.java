@@ -29,9 +29,14 @@ import com.noticedesk.api.model.matching.IssueCard;
 import com.noticedesk.api.model.matching.ReplyTemplate;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
+import com.noticedesk.api.agent.IssueMatchingAgent.MatchedNoticeInfo;
 import com.noticedesk.api.service.matching.CatalogueService;
+import com.noticedesk.api.service.matching.CodeDefectMerger;
+import com.noticedesk.api.service.matching.DefectChecker;
+import com.noticedesk.api.service.matching.DefectChecker.CodeDefect;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.DraftTextCleanup;
+import com.noticedesk.api.service.matching.IssueFlags;
 import com.noticedesk.api.service.matching.PrayerStripper;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AiFragment;
@@ -52,6 +57,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -240,6 +246,12 @@ public class V7DraftingPipelineService {
                     List.of(), List.of(), marker, null, null, null, true);
         }
 
+        /** A code-found defect with no catalogue card: its [[PARTNER]] note in Section 04 (rendered in 07), no writer call. */
+        static IssueAiOutput codeDefectPlaceholder(MatchedIssue issue, String marker) {
+            return new IssueAiOutput(issue, "none (defect found by code check, no catalogue card)",
+                    List.of(new AiFragment(4, null, "<p>" + marker + "</p>")), List.of(), List.of(), marker, null, null, null, true);
+        }
+
         /** An unmatched issue without a substantive ground: one [[PARTNER]] line in Section 04, no writer call. */
         static IssueAiOutput noSubstantiveGround(MatchedIssue issue) {
             String p = "<p>" + NO_SUBSTANTIVE_GROUND_PLACEHOLDER + "</p>";
@@ -321,8 +333,18 @@ public class V7DraftingPipelineService {
         log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
                 issues.stream().map(i -> i.status() + i.cardIds()).toList(), matchingResult.catalogueHash());
 
-        // ---- Stage 1a: response-stage correction of the primary cards by code, before any template is selected
         List<String> notes = new ArrayList<>();
+
+        // ---- Stage 1a0: procedural defects tested by code (limitation, premature s.74, DIN, signature, DRC-01A reply
+        // time), merged into the matched issues; the matcher's defect_checks stay as a second opinion
+        MatchingResult withCodeDefects = applyCodeDefects(matchingResult, triageType != null ? triageType.toString() : null,
+                noticeType, fullOcrText, noticeId, notes);
+        if (withCodeDefects != matchingResult) {
+            matchingResult = withCodeDefects;
+            issues = matchingResult.issues();
+        }
+
+        // ---- Stage 1a: response-stage correction of the primary cards by code, before any template is selected
         Map<String, Map<String, Object>> stageFlagDetails = new LinkedHashMap<>();
         List<MatchedIssue> stageCorrected = applyStageCorrection(issues, triageType != null ? triageType.toString() : null,
                 fullOcrText, noticeId, notes, stageFlags, stageFlagDetails);
@@ -361,6 +383,14 @@ public class V7DraftingPipelineService {
             FilledTemplateResult ft = filledTemplates.get(i);
             // a full match filled from a template (any version chosen by period overlap) never reaches a writer
             if (!ReplyAssemblyService.needsAiWriter(issue, ft)) continue;
+            Object codeDefectNote = issue.facts() != null ? issue.facts().get(CodeDefectMerger.FACT_PARTNER_NOTE) : null;
+            if (codeDefectNote != null && issue.primaryCardId() == null) {
+                // a defect found by code with no catalogue card for its regime: the partner drafts it, no writer call
+                notes.add("Issue #" + issue.issueNo() + ": defect found by code check has no catalogue card for this regime;"
+                        + " AI writer not called, partner to draft.");
+                aiOutputs.add(IssueAiOutput.codeDefectPlaceholder(issue, codeDefectNote.toString()));
+                continue;
+            }
             if (newIssueDraftingAgent != null && lacksSubstantiveGround(issue)) {
                 // a corrigendum / hearing intimation / acknowledgement / reminder, or no amount and no provision:
                 // nothing for the new-issue writer to argue; the partner reviews the document
@@ -506,6 +536,9 @@ public class V7DraftingPipelineService {
             }
         }
 
+        // issue-level flags (stage correction, code defect checks) as "<FLAG>#<issue no>" on the draft's flag list
+        checkResults.addAll(IssueFlags.checkResults(issues));
+
         List<DraftSection> draftSections = new ArrayList<>();
         String checkHtml = renderCheckResults(checkResults, assemblyResult,
                 assemblyResult.sections().stream().map(AssembledSection::bodyHtml).toList());
@@ -640,6 +673,57 @@ public class V7DraftingPipelineService {
         return changed ? merged : issues;
     }
 
+    /** Minimum days between a DRC-01A and its reply date (drafting.defects.drc01a-min-days, DEFECT_DRC01A_MIN_DAYS). */
+    private int drc01aMinDays() {
+        return properties != null && properties.getDrafting() != null && properties.getDrafting().getDefects() != null
+                ? properties.getDrafting().getDefects().getDrc01aMinDays() : DefectChecker.DEFAULT_DRC01A_MIN_DAYS;
+    }
+
+    /**
+     * Stage 1a0. Runs the {@link DefectChecker} on the input document (the matcher's notice block first, the text by
+     * regex where a field is null) and merges each result into the matched issues ({@link CodeDefectMerger}): a defect
+     * the matcher also raised is confirmed, one it missed is added (on the response stage's card, or status none with a
+     * [[PARTNER]] note when no card covers the regime), and a matcher defect the code finds ok is kept with a warning.
+     * One partner note lists every check; one per added / confirmed / disputed issue. Returns the same instance when
+     * nothing changed.
+     */
+    MatchingResult applyCodeDefects(MatchingResult mr, String documentType, String stage, String documentText, UUID noticeId,
+                                    List<String> notes) {
+        if (mr == null) return mr;
+        MatchedNoticeInfo n = mr.notice();
+        String text = documentText != null ? documentText : "";
+        ResponseStage responseStage = StageResolver.resolve(documentType, text);
+        List<CodeDefect> defects = new DefectChecker(drc01aMinDays()).check(new DefectChecker.Input(text,
+                n != null ? n.issueDate() : null, n != null ? n.financialYear() : null, n != null ? n.noticeNumber() : null,
+                n != null ? n.din() : null, documentType, stage, responseStage));
+        notes.add("Code defect checks: " + String.join("; ", defects.stream()
+                .map(d -> d.check() + "=" + d.result() + " (" + HtmlSanitizer.sanitize(d.basis()) + ")").toList()) + ".");
+        log.info("Notice {} code defect checks: {}", noticeId, defects.stream().map(d -> d.check() + "=" + d.result()).toList());
+
+        Map<String, IssueCard> cards = catalogueService != null ? catalogueService.cardsById() : Map.of();
+        Predicate<String> cardExists = cards.isEmpty() ? id -> true : cards::containsKey;
+        String period = n != null && n.financialYear() != null && !n.financialYear().isBlank() ? n.financialYear()
+                : n != null && n.taxPeriod() != null && !n.taxPeriod().isBlank() ? n.taxPeriod() : null;
+        if (period == null) {
+            Integer fy = DefectChecker.financialYearStart(null, text);
+            if (fy != null) period = "FY " + DefectChecker.fyLabel(fy);
+        }
+        CodeDefectMerger.Merged merged = CodeDefectMerger.merge(mr.issues(), mr.paraMap(), defects,
+                responseStage == ResponseStage.APPEAL, cardExists, period);
+        for (CodeDefectMerger.Outcome o : merged.outcomes()) {
+            String basis = HtmlSanitizer.sanitize(o.basis());
+            switch (o.action()) {
+                case "added" -> notes.add("Issue #" + o.issueNo() + ": defect added by code check " + o.check() + " (" + basis + "); "
+                        + (o.cardId() != null ? "card " + o.cardId() + "." : "no catalogue card for this regime, partner to draft."));
+                case "confirmed" -> notes.add("Issue #" + o.issueNo() + ": defect confirmed by code check " + o.check() + " (" + basis + ").");
+                default -> notes.add("Issue #" + o.issueNo() + ": code check " + o.check() + " finds no defect (" + basis
+                        + "); the matcher's defect issue is kept for the partner to decide.");
+            }
+            log.info("Notice {} issue #{}: code check {} {}", noticeId, o.issueNo(), o.check(), o.action());
+        }
+        return merged.changed(mr.issues()) ? mr.withIssues(merged.issues(), merged.paraMap()) : mr;
+    }
+
     /**
      * Stage 1a. The response stage the input document calls for ({@link StageResolver}) is tested against every
      * primary card; a card of the wrong stage class is swapped for its single sibling of the right class
@@ -710,8 +794,9 @@ public class V7DraftingPipelineService {
      * (appeal for {@link ResponseStage#APPEAL}; reply for reply, objection and representation), the candidate
      * siblings are the catalogue cards named in the primary card's NOT THIS IF rules and the matcher's alternates
      * that are of the right class. Exactly one candidate: it becomes the primary, the old primary the first
-     * alternate, the status is kept and the issue gets the flag {@code "stage_corrected: <old> -> <new>"}. None or
-     * several: the card is kept and the issue gets {@code "stage_mismatch: <input stage> vs <card stage>"}.
+     * alternate, the status is kept and the issue gets the flag {@code "stage_corrected: <old> -> <new>"}. Several:
+     * the candidates already the primary card of another issue of the notice are dropped, and exactly one left is
+     * swapped in the same way. None, or still several: the card is kept and the issue gets {@code "stage_mismatch: <input stage> vs <card stage>"}.
      */
     static StageCorrection correctResponseStage(List<MatchedIssue> issues, ResponseStage stage, Map<String, IssueCard> cards) {
         List<StageCorrection.Swap> swaps = new ArrayList<>();
@@ -723,7 +808,8 @@ public class V7DraftingPipelineService {
         String wantedClass = wantAppeal ? "appeal" : "reply";
         List<MatchedIssue> out = new ArrayList<>(issues.size());
         boolean changed = false;
-        for (MatchedIssue issue : issues) {
+        for (int idx = 0; idx < issues.size(); idx++) {
+            MatchedIssue issue = issues.get(idx);
             String primary = issue.primaryCardId();
             IssueCard card = primary != null ? cards.get(primary) : null;
             if (card == null || isAppealStageCard(card) == wantAppeal) {
@@ -741,6 +827,17 @@ public class V7DraftingPipelineService {
                 if (alt != null && !alt.equals(primary) && cards.containsKey(alt)) candidates.add(alt);
             }
             candidates.removeIf(id -> isAppealStageCard(cards.get(id)) != wantAppeal);
+            if (candidates.size() > 1) {
+                // tie-break: a sibling that is already the primary card of another issue of this notice answers that issue
+                Set<String> primariesElsewhere = new HashSet<>();
+                for (int j = 0; j < issues.size(); j++) {
+                    if (j == idx) continue;
+                    String p = (j < out.size() ? out.get(j) : issues.get(j)).primaryCardId();
+                    if (p != null) primariesElsewhere.add(p);
+                }
+                List<String> free = candidates.stream().filter(id -> !primariesElsewhere.contains(id)).toList();
+                if (free.size() == 1) candidates = new LinkedHashSet<>(free);
+            }
 
             List<String> issueFlags = new ArrayList<>(issue.flags() != null ? issue.flags() : List.of());
             if (candidates.size() == 1) {

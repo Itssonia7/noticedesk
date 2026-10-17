@@ -98,6 +98,30 @@ class V7StageCorrectionTest {
     }
 
     @Test
+    void twoAppealSiblings_oneAlreadyPrimaryElsewhere_swapsToTheOther() {
+        // issue 2 already answers on NDK-231: issue 1's only free appeal sibling is NDK-224
+        List<MatchedIssue> issues = List.of(issue(1, "NDK-225", List.of("NDK-231")), issue(2, "NDK-231", List.of()));
+        StageCorrection sc = V7DraftingPipelineService.correctResponseStage(issues, ResponseStage.APPEAL,
+                catalogue(NDK_224, NDK_225, NDK_231));
+        assertEquals("NDK-224", sc.issues().get(0).primaryCardId());
+        assertEquals(List.of("NDK-225", "NDK-231"), sc.issues().get(0).alternateCardIds());
+        assertTrue(sc.issues().get(0).flags().contains("stage_corrected: NDK-225 -> NDK-224"));
+        assertEquals("NDK-231", sc.issues().get(1).primaryCardId());
+        assertEquals(List.of(new StageCorrection.Swap(1, "NDK-225", "NDK-224")), sc.swaps());
+        assertTrue(sc.mismatches().isEmpty());
+    }
+
+    @Test
+    void twoAppealSiblings_bothFree_stillOnlyWarn() {
+        // another issue's primary is a reply card: both appeal siblings stay candidates
+        List<MatchedIssue> issues = List.of(issue(1, "NDK-225", List.of("NDK-231")), issue(2, "NDK-221", List.of()));
+        StageCorrection sc = V7DraftingPipelineService.correctResponseStage(issues, ResponseStage.APPEAL,
+                catalogue(NDK_221, NDK_224, NDK_225, NDK_231));
+        assertEquals("NDK-225", sc.issues().get(0).primaryCardId());
+        assertEquals(List.of("NDK-224", "NDK-231"), sc.mismatches().get(0).candidates());
+    }
+
+    @Test
     void mirrorSwapOnAReplyStageInput() {
         // an RFD-08 notice that still awaits a reply, matched to the appeal card
         List<MatchedIssue> issues = List.of(issue(1, "NDK-224", List.of()));

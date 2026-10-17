@@ -277,6 +277,7 @@ public class AppProperties {
         private String expiredChunkPolicy = "FLAG_AND_USE"; // FLAG_AND_USE | EXCLUDE
         private String citationFailPolicy = "FLAG_AND_CONTINUE"; // FLAG_AND_CONTINUE | FALL_THROUGH_TO_OPUS
         private HighStakes highStakes = new HighStakes();
+        private Defects defects = new Defects();
 
         /** All three triggers off by default; set HIGH_STAKES_SECTION_74 / HIGH_STAKES_APPEAL_STAGE / HIGH_STAKES_DEMAND_THRESHOLD to enable. */
         @Data
@@ -284,6 +285,13 @@ public class AppProperties {
             private Boolean section74 = false;
             private Boolean appealStage = false;
             private String demandThreshold;  // empty/null = demand threshold check disabled
+        }
+
+        /** Code defect checks run after matching (DefectChecker). */
+        @Data
+        public static class Defects {
+            /** Fewer days than this between a DRC-01A and its Part B / reply date is a defect (firm to confirm). */
+            private int drc01aMinDays = 15;
         }
     }
 

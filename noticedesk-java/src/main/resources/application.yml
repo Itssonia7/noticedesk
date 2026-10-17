@@ -237,6 +237,9 @@ noticedesk:
       section-74: ${HIGH_STAKES_SECTION_74:false}
       appeal-stage: ${HIGH_STAKES_APPEAL_STAGE:false}
       demand-threshold: ${HIGH_STAKES_DEMAND_THRESHOLD:}
+    # Code defect checks after matching: a DRC-01A giving fewer days than this to reply is a defect (firm to confirm)
+    defects:
+      drc01a-min-days: ${DEFECT_DRC01A_MIN_DAYS:15}
   citation:
     provider: ${CITATION_PROVIDER:stub}
     indiankanoon-api-token: ${INDIANKANOON_API_TOKEN:}

@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 17-10-2026 (deterministic stage correction for order-type inputs; summary wording uses the detected section)
+Last updated: 17-10-2026 (procedural defect checks in code merged into matching; stage-sibling tie-break; issue flags visible)
 
 ---
 
@@ -654,10 +654,60 @@ Findings from the 10-notice full-pipeline run on `99bb118`. No prompt, cap, mode
   `ReplyAssemblySectionWordingTest` (Section 50 letter and Section 75 order: wording, no "Section 73" or
   "Show Cause Notice" in 01/02/14, CHECK_PROCEEDING_CONSISTENT passes; charging-provision fallback; notice type line).
 
+## (b19) Procedural defect checks in code; stage-sibling tie-break; issue flags visible (17-10-2026)
+
+Why: across four live 10-notice runs on the same input the matcher found the procedural defects 2, 3, 4 and 2 times
+out of the 5 expected; the same time-barred Section 73 SCN and the same short-reply DRC-01A were caught in one run and
+missed in the next. These are date arithmetic and form checks, so code now does them. No prompt, cap, model, loader
+or writer change; no LLM call added (the matcher's `defect_checks` stay as a second opinion).
+
+- **`DefectChecker`** (matching package, pure, no network). Reads the matcher's notice block (issue date, FY, DIN) and
+  the StageDetector / StageResolver results, falling back to regex on the text when a field is null (dates dd.mm.yyyy,
+  dd-mm-yyyy, dd/mm/yyyy; "FY 2019-20" / "Financial Year 2019-20"; "Section 73(1)" / "Section 74(1)" / "Section 74A").
+  Each check returns defect / ok / cannot_test with a basis of at most 20 words naming the dates used:
+  - `limitation_73`: Section 73 SCN dated after the SCN deadline of its FY (2017-18 30.09.2023; 2018-19 31.01.2024;
+    2019-20 31.05.2024; 2020-21 30.11.2024; 2021-22 30.09.2025; 2022-23 30.09.2026; 2023-24 30.09.2027; the deadline
+    day itself is in time). Reply card NDK-105 only for FY 2017-18 / 2018-19; other FYs have no card (see below).
+  - `premature_74`: Section 74 SCN dated before the GSTR-9 due date of its FY (07.02.2020 ... 31.12.2024) -> NDK-104.
+  - `din`: central-tax document (header or officer designation says Central Tax / CGST / Central Goods and Services
+    Tax, Act names ignored) dated on or after 08.11.2019 with no DIN line, or a blank / bracket / underscore / X /
+    "not generated" value -> NDK-141 (reply), NDK-142 (appeal). "Central / State Tax" with no central designation ->
+    cannot_test; a State Tax document -> not applicable.
+  - `signature`: no evidence in the last 25 lines (Digitally signed, Sd/-, Signature valid, e-signed, Signed by
+    <name>) AND a blank signature line / empty "Signature:" or "Name:" field, or "does not require signature" ->
+    NDK-143 (reply), NDK-144 (appeal).
+  - `drc01a_reply_time`: DRC-01A whose Part B / reply date (or "within N days") is fewer than
+    `drafting.defects.drc01a-min-days` days away (**`DEFECT_DRC01A_MIN_DAYS`**, default 15, firm to confirm) -> NDK-148.
+  Both date tables sit in `DefectDeadlines` with "[VERIFY: partner to confirm the extended dates]".
+- **Merge** (`CodeDefectMerger`, `V7DraftingPipelineService.applyCodeDefects`, Stage 1a0: after matching, before the
+  stage correction and template selection). A code defect the matcher also raised (a defect issue on one of the
+  check's cards, or whose why names the check's `defect_checks` entry) is kept with issue flag
+  **`info:defect_confirmed_by_code`**; one it missed is ADDED as a kind=defect issue (card of the response stage,
+  status full; no card or a card not in the catalogue -> status none with
+  "[[PARTNER: <basis>; no catalogue card for this regime]]", no writer call), why "Code check <check>: <basis>",
+  notice_paras ["header"], flag **`info:defect_added_by_code`**; a check the code tested ok while the matcher raised
+  it keeps the issue with **`warn:defect_disputed_by_code: <basis>`** ("not applicable" and cannot_test never dispute).
+  Issues are renumbered so defects follow the demand / consequential issues (parent numbers and para_map follow).
+  Section 13 notes list every check's result and each added / confirmed / disputed issue.
+- **Stage-correction tie-break**: with more than one sibling of the right stage, candidates already the primary card
+  of another issue of the notice are dropped; exactly one left is swapped as before; otherwise the warn stays.
+- **Visibility**: issue-level flags (stage_corrected, stage_mismatch, defect_added_by_code, defect_confirmed_by_code,
+  defect_disputed_by_code) are listed on the issue's Section 13 line ("Issue flags=[DEFECT_ADDED_BY_CODE:info]") and
+  added to the draft's check results as `<FLAG>#<issue no>`, so the live runner's "Flags:" line reads e.g.
+  `DEFECT_ADDED_BY_CODE#3:info`.
+- Golden drafts: notice 07 (Central Tax SCN dated 22-10-2023 with no DIN line) now gets defect issue #2 on NDK-141;
+  notices 06 / 07 / 10 list the code checks in Section 13.
+- Tests: `DefectCheckerTest` (positive, negative and cannot_test case per check with the synthetic header styles;
+  limitation and GSTR-9 table boundary days; configurable DRC-01A minimum; regex fallbacks; 20-word basis),
+  `CodeDefectMergerTest` (add, confirm by card and by why, dispute, appeal-stage card, null / unknown card -> status
+  none + partner placeholder, renumbering with parents and para_map), `V7StageCorrectionTest` (two appeal siblings,
+  one already primary elsewhere -> swap to the other; both free -> warn), `V7CodeDefectPipelineTest` (full pipeline:
+  variable step on the renumbered issue, template fill, Section 07 rendering, Section 13 flags, runner flag line).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`): **409 tests, 0 failures, 0 errors** on 17-10-2026 after (b18), `RealNoticesBatchRunnerTest`
-  included this time (it passed). Before that: 364 tests (`RealNoticesBatchRunnerTest` excluded)
+- Offline unit suite (`mvn test`): **439 tests, 0 failures, 0 errors** on 17-10-2026 after (b19), `RealNoticesBatchRunnerTest`
+  included (it passed); 409 after (b18) the same day. Before that: 364 tests (`RealNoticesBatchRunnerTest` excluded)
   on 16-10-2026 after (b17) (345 after (b16) the same day, 329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
   calls; all models and IndianKanoon mocked or served from local fixtures). The 329 include the Spring context test
   `NoticedeskApiApplicationTests`, which passed in that container (it retries the local Postgres connection for

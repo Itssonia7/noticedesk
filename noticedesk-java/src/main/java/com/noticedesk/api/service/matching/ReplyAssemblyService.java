@@ -416,6 +416,18 @@ public class ReplyAssemblyService {
                          .append("): no single sibling card of the right stage; check the card");
                 }
             }
+            // stage-correction and code defect-check flags of the issue, as on the draft's flag list
+            List<IssueFlags.IssueFlag> visibleFlags = IssueFlags.of(issue);
+            if (!visibleFlags.isEmpty()) {
+                sec13.append(", Issue flags=").append(visibleFlags.stream().map(IssueFlags.IssueFlag::label).toList());
+            }
+            for (IssueFlags.IssueFlag f : visibleFlags) {
+                if ("defect_disputed_by_code".equals(f.name())) {
+                    sec13.append(", Note=code check finds no defect (").append(f.detail()).append("): partner to decide whether to keep it");
+                } else if ("defect_added_by_code".equals(f.name())) {
+                    sec13.append(", Note=defect found by code check, not by the matcher");
+                }
+            }
             if (ft != null && ft.cardId() != null && ft.flags() != null && ft.flags().contains("no_template_available")) {
                 sec13.append(", Note=No template available for card ").append(ft.cardId());
             }

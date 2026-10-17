@@ -324,15 +324,8 @@ public class V7LivePipelineRunnerTest {
 
             String expectedStatus = answerKey.path("issues").path(0).path("status").asText("none");
 
-            // Extract flags
-            List<String> allFlags = new ArrayList<>();
-            if (result.checkResults() != null) {
-                for (DraftCheckResult c : result.checkResults()) {
-                    if (!c.passed()) {
-                        allFlags.add(c.checkName() + ":" + c.severity());
-                    }
-                }
-            }
+            // Extract flags (issue-level flags come as "<FLAG>#<issue no>:<severity>", e.g. DEFECT_ADDED_BY_CODE#3:info)
+            List<String> allFlags = flagList(result.checkResults());
 
             // Extract citation statuses
             List<String> citStatuses = new ArrayList<>();
@@ -406,5 +399,15 @@ public class V7LivePipelineRunnerTest {
                 .replace("<td>", "").replace("</td>", " | ")
                 .replace(" | \n", "\n")
                 .replaceAll("<[^>]+>", "");
+    }
+
+    /** The "Flags:" line of a notice: every failed check as "<check name>:<severity>". */
+    static List<String> flagList(List<DraftCheckResult> checkResults) {
+        List<String> flags = new ArrayList<>();
+        if (checkResults == null) return flags;
+        for (DraftCheckResult c : checkResults) {
+            if (!c.passed()) flags.add(c.checkName() + ":" + c.severity());
+        }
+        return flags;
     }
 }

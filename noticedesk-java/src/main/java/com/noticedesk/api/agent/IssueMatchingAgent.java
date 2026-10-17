@@ -224,6 +224,12 @@ public class IssueMatchingAgent {
             return new MatchingResult(notice, newIssues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
                     outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance);
         }
+
+        /** The same result with other issues and paragraph map (the code defect merge renumbers the issues). */
+        public MatchingResult withIssues(List<MatchedIssue> newIssues, Map<String, List<Integer>> newParaMap) {
+            return new MatchingResult(notice, newIssues, newParaMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance);
+        }
     }
 
     /**

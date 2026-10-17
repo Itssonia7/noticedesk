@@ -164,7 +164,11 @@ class V7Stage3GoldenDraftTest {
         assertTrue(section(result, 10).contains("Purchase tax invoices for the generator units"));
         assertTrue(section(result, 14).contains("Within 30 days from service"), "the notice says 'from service'");
         verify(partialAgent).generatePartialDrafting(argThat(i -> i.issueNo() == 1), any(), argThat(t -> t != null && "TPL-006".equals(t.templateId())), eq("scn_73"), any(), eq(false), any());
-        verifyNoInteractions(newIssueAgent);
+        // a Central Tax SCN dated 22-10-2023 with no DIN line: the code DIN check adds defect issue #2 (NDK-141, no template
+        // in this fixture, so it goes to the new-issue writer); issue #1 never reaches it
+        verify(newIssueAgent).generateNewIssueDraft(argThat(i -> i.issueNo() == 2 && i.isDefect() && "NDK-141".equals(i.primaryCardId())),
+                any(), anyString(), anyString(), any(), anyBoolean(), any());
+        verify(newIssueAgent, never()).generateNewIssueDraft(argThat(i -> i.issueNo() == 1), any(), anyString(), anyString(), any(), anyBoolean(), any());
 
         compareOrUpdate("notice_07_v7_assembled_golden.txt", text);
     }

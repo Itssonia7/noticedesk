@@ -112,6 +112,7 @@ Procedural Objection Options (Partner to Select):
   * Check whether an opportunity of hearing was given before the order, if requested in writing (Rule 133(2)).
   * Verify the time limits for the DGAP investigation (Rule 129(6)) and for the order (Rule 133(1)).
 Stage 3 Notes:
+  * Code defect checks: limitation_73=ok (not applicable: not a Section 73 SCN); premature_74=ok (not applicable: not a Section 74 SCN); din=cannot_test (issuing authority not stated in the header); signature=ok (no blank signature block in the last 25 lines); drc01a_reply_time=ok (not applicable: not a DRC-01A).
   * Citation Reckitt Benckiser India Pvt Ltd v. Union of India (Delhi High Court, 2024): VERIFIED - Matched IndianKanoon judgment: Reckitt Benckiser India Private Limited vs Union Of India on 29 January, 2024
   * Issue #1 strength note: Defence rests on (i) the absence of a stated computation period and method, (ii) the gap between the 2017 rate change and FY 2022-23, and (iii) the prospective operation of Section 171(3A). Cost data justifying the base price revision is the critical evidence; without it the defence is weak on merits. Partner to verify jurisdiction: anti-profiteering functions were transferred to the Competition Commission of India from 01-12-2022, while this notice is issued in the name of the National Anti-Profiteering Authority on 05-06-2023.
 Code Quality Check Results & Flags:

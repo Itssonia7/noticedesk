@@ -105,6 +105,8 @@ Matched Issues & Templates:
 Procedural Objection Options (Partner to Select):
   * Check whether an opportunity of personal hearing has been offered (Section 75(4)).
   * Verify the limitation period under Section 73(10).
+Stage 3 Notes:
+  * Code defect checks: limitation_73=ok (SCN 18.09.2023 vs Section 73 SCN deadline 30.09.2026 for FY 2022-23); premature_74=ok (not applicable: not a Section 74 SCN); din=cannot_test (issuing authority not stated in the header); signature=ok (no blank signature block in the last 25 lines); drc01a_reply_time=ok (not applicable: not a DRC-01A).
 Code Quality Check Results & Flags:
 Check Name | Status | Severity | Details
 CHECK_ALL_SECTIONS_PRESENT | PASS | block | {missing_sections=[], total_sections=15}
