@@ -155,7 +155,10 @@ public class ReplyAssemblyService {
             }
         }
 
-        String noticeSec = noticeSection(input);
+        // the matcher's provision before the notice record's; an order / letter / intimation is never called an SCN
+        String noticeSec = noticeSection(matchingResult, input);
+        StageResolver.DocumentKind docKind = documentKind(input);
+        String docLabel = isNonScn(docKind) ? docKind.label() : "Notice";
         if (noticeSec.startsWith("[[MISSING")) {
             addOnce(missingMarkers, "notice_section");
         }
@@ -201,7 +204,7 @@ public class ReplyAssemblyService {
 
         // ---------------------------------------------------------------- Section 01
         StringBuilder sec01 = new StringBuilder();
-        sec01.append("<p><strong>Executive Summary:</strong> Reply to Notice Ref ").append(noticeRef)
+        sec01.append("<p><strong>Executive Summary:</strong> Reply to ").append(docLabel).append(" Ref ").append(noticeRef)
              .append(" dated ").append(noticeDate)
              .append(" issued under ").append(noticeSec)
              .append(" for GSTIN ").append(gstin)
@@ -250,12 +253,12 @@ public class ReplyAssemblyService {
         // ---------------------------------------------------------------- Section 02
         StringBuilder sec02 = new StringBuilder();
         sec02.append("<p>The taxpayer ").append(clientName)
-             .append(" has received notice reference ").append(noticeRef)
+             .append(" has received ").append(docLabel.toLowerCase(Locale.ROOT)).append(" reference ").append(noticeRef)
              .append(" dated ").append(noticeDate);
         if (noticeInfo != null && noticeInfo.authority() != null && !noticeInfo.authority().isBlank()) {
             sec02.append(", issued by the ").append(noticeInfo.authority()).append(",");
         }
-        sec02.append(" under ").append(noticeSec).append(" of the ").append(lawName(input))
+        sec02.append(isNonScn(docKind) ? " issued under " : " under ").append(noticeSec).append(" of the ").append(lawName(input))
              .append(", for Financial Year ").append(fy).append(".</p>");
         sec02.append("<p>The notice raises ").append(matchedIssues.size()).append(matchedIssues.size() == 1 ? " issue" : " issues")
              .append(", each answered in Section 04")
@@ -364,7 +367,7 @@ public class ReplyAssemblyService {
         // ---------------------------------------------------------------- Section 12
         Map<String, String> stageVars = new HashMap<>();
         stageVars.put("notice.section", noticeSec);
-        stageVars.put("notice.type", formatFullNoticeType(noticeSec));
+        stageVars.put("notice.type", formatFullNoticeType(noticeSec, docKind));
         stageVars.put("notice.reference", noticeRef);
         stageVars.put("notice.notice_number", noticeRef);
         stageVars.put("notice.issue_date", noticeDate);
@@ -401,6 +404,17 @@ public class ReplyAssemblyService {
                 sec13.append(", Kind=defect (rendered in Section 07)");
             } else if (issue.isConsequential()) {
                 sec13.append(", Kind=consequential").append(issue.parentIssueNo() != null ? " (parent Issue #" + issue.parentIssueNo() + ")" : "");
+            }
+            // the post-matching response-stage correction ("stage_corrected: NDK-225 -> NDK-224") or its warning
+            for (String f : issue.flags() != null ? issue.flags() : List.<String>of()) {
+                if (f == null) continue;
+                if (f.startsWith(StageResolver.ISSUE_FLAG_STAGE_CORRECTED + ": ")) {
+                    String[] ids = f.substring(StageResolver.ISSUE_FLAG_STAGE_CORRECTED.length() + 2).split(" -> ");
+                    if (ids.length == 2) sec13.append(", Note=stage corrected from ").append(ids[0]).append(" to ").append(ids[1]);
+                } else if (f.startsWith(StageResolver.ISSUE_FLAG_STAGE_MISMATCH + ": ")) {
+                    sec13.append(", Note=stage mismatch (").append(f.substring(StageResolver.ISSUE_FLAG_STAGE_MISMATCH.length() + 2))
+                         .append("): no single sibling card of the right stage; check the card");
+                }
             }
             if (ft != null && ft.cardId() != null && ft.flags() != null && ft.flags().contains("no_template_available")) {
                 sec13.append(", Note=No template available for card ").append(ft.cardId());
@@ -455,7 +469,7 @@ public class ReplyAssemblyService {
         String formattedDueDate = formatDueDateStr(noticeInfo != null ? noticeInfo.replyDueDate() : null, receiptDate, missingMarkers);
         StringBuilder sec14 = new StringBuilder();
         sec14.append("<h3>Client Summary</h3>");
-        sec14.append("<p><strong>Notice Type:</strong> ").append(formatFullNoticeType(noticeSec)).append("</p>");
+        sec14.append("<p><strong>Notice Type:</strong> ").append(formatFullNoticeType(noticeSec, docKind)).append("</p>");
         sec14.append("<p><strong>Notice Reference:</strong> ").append(noticeRef).append(" dated ").append(noticeDate).append("</p>");
         sec14.append("<p><strong>Total Amount Demanded:</strong> ").append(totalDemand).append("</p>");
         sec14.append("<p><strong>Reply Due Date:</strong> ").append(formattedDueDate).append("</p>");
@@ -1006,12 +1020,84 @@ public class ReplyAssemblyService {
 
     /** The provision the notice is issued under, from the notice record; never a stage default. */
     public static String noticeSection(DraftingAgent.DraftingInput input) {
-        Object sec = input != null && input.notice() != null ? input.notice().get("section") : null;
-        if (sec == null || sec.toString().isBlank()) {
+        return formatNoticeSection(noticeRecordSection(input));
+    }
+
+    /**
+     * The provision the draft names (sections 01 / 02 / 12 / 13 / 14): {@link #resolveNoticeSection} over the
+     * matcher's result and the notice record, "[[MISSING: notice_section]]" when neither has one. Never a default.
+     */
+    public static String noticeSection(MatchingResult mr, DraftingAgent.DraftingInput input) {
+        return formatNoticeSection(resolveNoticeSection(mr, noticeRecordSection(input)));
+    }
+
+    private static String formatNoticeSection(String sec) {
+        if (sec == null || sec.isBlank()) {
             return "[[MISSING: notice_section]]";
         }
-        String s = sec.toString().trim();
+        String s = sec.trim();
         return s.matches("\\d+[A-Z]?(\\(.*)?") ? "Section " + s : s;
+    }
+
+    /** The notice record's {@code section} (from the header / triage), or null. */
+    static String noticeRecordSection(DraftingAgent.DraftingInput input) {
+        Object sec = input != null && input.notice() != null ? input.notice().get("section") : null;
+        return sec == null || sec.toString().isBlank() ? null : sec.toString().trim();
+    }
+
+    /**
+     * A provision a department document is issued under (interest letter, refund, assessment, SCN, order, penalty,
+     * detention, anti-profiteering), as "Section N" with its sub-section: a charging provision such as Section 16(4)
+     * is what an issue is about, never what the document is issued under.
+     */
+    private static final Pattern PROCEEDING_PROVISION = Pattern.compile(
+            "(?i)\\b(?:section|sec\\.?|u/s\\.?)\\s*(50|54|61|62|63|64|73|74A|74|75|76|122|125|129|130|171)\\b(\\(\\d+[A-Za-z]?\\))?");
+
+    /**
+     * The provision the input document is issued under, in order: the matcher's reading of the document (its notice
+     * block carries no section, so the {@code legal_section} of the main issue: the first demand issue that has one,
+     * when it names a proceeding provision), then the notice record's section (the one the StageDetector used).
+     * Null when neither gives one; never a hard-coded Section 73.
+     */
+    public static String resolveNoticeSection(MatchingResult mr, String noticeRecordSection) {
+        String fromMatcher = mainIssueProvision(mr);
+        if (fromMatcher != null) return fromMatcher;
+        return noticeRecordSection != null && !noticeRecordSection.isBlank() ? noticeRecordSection.trim() : null;
+    }
+
+    static String mainIssueProvision(MatchingResult mr) {
+        if (mr == null || mr.issues() == null) return null;
+        for (MatchedIssue issue : mr.issues()) {
+            if (issue.isDefect() || issue.isConsequential() || issue.facts() == null) continue;
+            Object legal = issue.facts().get("legal_section");
+            if (legal == null || legal.toString().isBlank() || "null".equalsIgnoreCase(legal.toString().trim())) continue;
+            Matcher m = PROCEEDING_PROVISION.matcher(legal.toString());
+            // the main issue is the first demand issue with a provision; a charging provision only falls back
+            return m.find() ? "Section " + m.group(1).toUpperCase(Locale.ROOT) + (m.group(2) != null ? m.group(2) : "") : null;
+        }
+        return null;
+    }
+
+    /** True when the two sections name the same provision number (sub-sections and wording ignored). */
+    public static boolean sameProvision(String a, String b) {
+        return Objects.equals(provisionNumber(a), provisionNumber(b));
+    }
+
+    private static String provisionNumber(String s) {
+        if (s == null) return null;
+        Matcher m = Pattern.compile("(?i)(\\d+[A-Z]?)").matcher(s);
+        return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;
+    }
+
+    /** What the input document is (SCN, order, letter, intimation, notice) from its document type and heading, or null. */
+    static StageResolver.DocumentKind documentKind(DraftingAgent.DraftingInput input) {
+        Object type = input != null && input.notice() != null ? input.notice().get("document_type") : null;
+        return StageResolver.documentKind(type != null ? type.toString() : null, input != null ? input.noticeOcrExcerpt() : null);
+    }
+
+    /** True for a document that is not a show cause notice (an order, letter, intimation or other notice). */
+    private static boolean isNonScn(StageResolver.DocumentKind kind) {
+        return kind != null && kind != StageResolver.DocumentKind.SCN;
     }
 
     private static String lawName(DraftingAgent.DraftingInput input) {
@@ -1217,9 +1303,21 @@ public class ReplyAssemblyService {
     }
 
     static String formatFullNoticeType(String noticeSec) {
+        return formatFullNoticeType(noticeSec, null);
+    }
+
+    /**
+     * The notice type line. A document that is not a show cause notice (order, letter, intimation, other notice) is
+     * "&lt;kind&gt; issued under &lt;section&gt;", never "Show Cause Notice"; an SCN or an unknown kind keeps the
+     * earlier wording.
+     */
+    static String formatFullNoticeType(String noticeSec, StageResolver.DocumentKind kind) {
         if (noticeSec == null || noticeSec.isBlank()) return "[[MISSING: notice_section]]";
         if (noticeSec.startsWith("[[") || noticeSec.startsWith("Show Cause Notice") || noticeSec.startsWith("Intimation of Discrepancy")) {
             return noticeSec;
+        }
+        if (isNonScn(kind)) {
+            return kind.label() + " issued under " + (noticeSec.startsWith("Section") ? noticeSec : "Section " + noticeSec);
         }
         if (noticeSec.matches(".*\\b7[34]A?\\b.*")) {
             return "Show Cause Notice under " + (noticeSec.startsWith("Section") ? noticeSec : "Section " + noticeSec);

@@ -71,6 +71,24 @@ public class CatalogueService {
         return visibleCards(rows, allowDraftCards(), includeProvisional());
     }
 
+    /**
+     * The visible cards keyed by card id, latest version of each (read access to a card's stages and NOT THIS IF
+     * rules for the post-matching stage correction). Empty without a database.
+     */
+    public Map<String, IssueCard> cardsById() {
+        return byId(getActiveCards());
+    }
+
+    /** {@code cards} keyed by card id; the first (latest, per the load order) version of each id wins. */
+    public static Map<String, IssueCard> byId(List<IssueCard> cards) {
+        Map<String, IssueCard> out = new LinkedHashMap<>();
+        if (cards == null) return out;
+        for (IssueCard c : cards) {
+            if (c != null && c.cardId() != null) out.putIfAbsent(c.cardId(), c);
+        }
+        return out;
+    }
+
     /** {@code matching.allow-draft-cards}: every draft card is visible (development seeds). */
     public boolean allowDraftCards() {
         return properties != null && properties.getMatching() != null && properties.getMatching().isAllowDraftCards();

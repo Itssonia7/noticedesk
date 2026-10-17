@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 16-10-2026 (template variable extraction step after matching; per-paragraph stance in the para-wise reply, matching prompt v3.5)
+Last updated: 17-10-2026 (deterministic stage correction for order-type inputs; summary wording uses the detected section)
 
 ---
 
@@ -616,9 +616,48 @@ was allowed because only money already spent was checked, and it cost Rs 10.58. 
   `withFacts`), `TemplateFillServiceTest` (issue.order_date vs notice.issue_date, `factKeyForVariable`,
   `unknownVariables`), `MatchingPromptRulesTest` (v3.5 wording, example keys), `ApiUsagePricingTest` (defaults).
 
+## (b18) Deterministic stage correction for order-type inputs; summary wording uses the detected section (17-10-2026)
+
+Findings from the 10-notice full-pipeline run on `99bb118`. No prompt, cap, model or loader change; no LLM call added.
+
+- **Fix A: stage correction after matching** (`V7DraftingPipelineService.applyStageCorrection`, Stage 1a, before the
+  template variable step and the template fill). On an RFD-06 refund rejection ORDER the matcher chose the reply-stage
+  refund cards (NDK-225, NDK-221) although the appeal-stage siblings (NDK-224, NDK-222) exist; another run chose
+  correctly. New `StageResolver` (matching package) maps the input document to the response it calls for, from the
+  document type, then the first form name in the heading (first 1,500 characters; the triage label `scn_73` yields to a
+  form name in the heading): DRC-01, DRC-01A, ASMT-10, ADT-01, REG-17, RFD-08, MOV-07, summons, Section 46 -> reply;
+  Section 62 / ASMT-13, DRC-13, recovery letter -> representation; DRC-22 -> objection; DRC-07, RFD-06, REG-05,
+  MOV-09, order-in-original, order-in-appeal -> appeal; REG-19 -> revocation (no correction); anything else -> no
+  correction. A card is appeal-stage when its STAGES contain `order_appeal` or its title starts with "Appeal" /
+  "APL-01", reply-stage otherwise. When the class is wrong, the candidates are the catalogue cards named in the
+  primary card's NOT THIS IF rules plus the matcher's alternates, of the right class: exactly one -> it becomes the
+  primary, the old primary the first alternate, the status is kept, issue flag `stage_corrected: <old> -> <new>` and
+  draft flag **`info:stage_corrected`** (detail: the corrections); none or several -> card kept, issue flag
+  `stage_mismatch: <input stage> vs <card stage>` and draft flag **`warn:stage_mismatch`**. Mirror swap for a reply /
+  objection / representation input matched to an appeal card. One log line and one Section 13 note per issue; the
+  Section 13 issue line reads "Note=stage corrected from NDK-225 to NDK-224". `CatalogueService.cardsById()` gives the
+  pipeline read access to the cards' stages and NOT THIS IF rules (setter-injected; absent in tests -> no correction).
+- **Fix B: the provision the draft names** (`ReplyAssemblyService.resolveNoticeSection`). The executive summary and
+  notice understanding said "under Section 73" for a Section 50 interest letter and a Section 75 order (the notice
+  record's header section). Order now: the matcher's reading (its notice block carries no section, so the
+  `legal_section` of the main issue, the first demand issue that has one, when it names a proceeding provision:
+  50, 54, 61-64, 73, 74, 74A, 75, 76, 122, 125, 129, 130, 171; a charging provision such as 16(4) falls back), then
+  the notice record's section (the one the StageDetector used); never a default. When it differs from the record,
+  the pipeline re-detects the stage template from it (`StageDetector.detect`), and the checks receive the same
+  section and stage. A document that is not an SCN (order, letter, intimation, other notice, by `StageResolver`) is
+  worded "Reply to Order Ref ... issued under Section 75", "has received order reference ... issued under", and
+  "Order issued under Section 75" on the notice type line; never "Show Cause Notice".
+- Tests: `StageResolverTest` (mapping table, heading over the scn label, specific type over the heading, first form
+  wins, document kinds, unknown -> null), `V7StageCorrectionTest` (RFD-06 + NDK-225 with NDK-224 in NOT THIS IF ->
+  swapped with flag; sibling from the alternates; no sibling -> warn only; two candidates -> warn; mirror swap;
+  right stage / revocation / unknown unchanged; pipeline step flags, details and notes),
+  `ReplyAssemblySectionWordingTest` (Section 50 letter and Section 75 order: wording, no "Section 73" or
+  "Show Cause Notice" in 01/02/14, CHECK_PROCEEDING_CONSISTENT passes; charging-provision fallback; notice type line).
+
 ## (c) Verification
 
-- Offline unit suite (`mvn test`, `RealNoticesBatchRunnerTest` excluded as before): **364 tests, 0 failures, 0 errors**
+- Offline unit suite (`mvn test`): **409 tests, 0 failures, 0 errors** on 17-10-2026 after (b18), `RealNoticesBatchRunnerTest`
+  included this time (it passed). Before that: 364 tests (`RealNoticesBatchRunnerTest` excluded)
   on 16-10-2026 after (b17) (345 after (b16) the same day, 329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
   calls; all models and IndianKanoon mocked or served from local fixtures). The 329 include the Spring context test
   `NoticedeskApiApplicationTests`, which passed in that container (it retries the local Postgres connection for

@@ -25,9 +25,11 @@ import com.noticedesk.api.agent.TemplateVariableAgent.TemplateVariablesResult;
 import com.noticedesk.api.agent.TemplateVariableAgent.VariableSpec;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.DraftCheckResult;
+import com.noticedesk.api.model.matching.IssueCard;
 import com.noticedesk.api.model.matching.ReplyTemplate;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
+import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.DraftTextCleanup;
 import com.noticedesk.api.service.matching.PrayerStripper;
@@ -38,6 +40,8 @@ import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledReplyRe
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledSection;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.HighStakesContent;
 import com.noticedesk.api.service.matching.StageDetector;
+import com.noticedesk.api.service.matching.StageResolver;
+import com.noticedesk.api.service.matching.StageResolver.ResponseStage;
 import com.noticedesk.api.service.matching.TemplateFillService;
 import com.noticedesk.api.service.matching.TemplateFillService.FilledTemplateResult;
 import com.noticedesk.api.util.HtmlSanitizer;
@@ -103,6 +107,19 @@ public class V7DraftingPipelineService {
      */
     static final List<String> ADMINISTRATIVE_ISSUE_WORDS =
             List.of("corrigendum", "hearing date", "acknowledg", "reminder", "no ground", "no demand");
+
+    /** Draft flag (info): a primary card of the wrong response stage was swapped for its single sibling of the right stage. */
+    public static final String FLAG_STAGE_CORRECTED = "info:stage_corrected";
+    /** Draft flag (warn): a primary card's response stage differs from the input document's and no single sibling exists. */
+    public static final String FLAG_STAGE_MISMATCH = "warn:stage_mismatch";
+
+    /** Card read access for the post-matching stage correction; null (tests) skips the correction. */
+    private CatalogueService catalogueService;
+
+    @Autowired(required = false)
+    public void setCatalogueService(CatalogueService catalogueService) {
+        this.catalogueService = catalogueService;
+    }
 
     @Autowired
     public V7DraftingPipelineService(
@@ -304,8 +321,17 @@ public class V7DraftingPipelineService {
         log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
                 issues.stream().map(i -> i.status() + i.cardIds()).toList(), matchingResult.catalogueHash());
 
-        // ---- Stage 1b: card-specific template variables the matcher does not extract (one call per notice)
+        // ---- Stage 1a: response-stage correction of the primary cards by code, before any template is selected
         List<String> notes = new ArrayList<>();
+        Map<String, Map<String, Object>> stageFlagDetails = new LinkedHashMap<>();
+        List<MatchedIssue> stageCorrected = applyStageCorrection(issues, triageType != null ? triageType.toString() : null,
+                fullOcrText, noticeId, notes, stageFlags, stageFlagDetails);
+        if (stageCorrected != issues) {
+            issues = stageCorrected;
+            matchingResult = matchingResult.withIssues(issues);
+        }
+
+        // ---- Stage 1b: card-specific template variables the matcher does not extract (one call per notice)
         List<MatchedIssue> withVariables = extractTemplateVariables(issues, matchingResult, input, fullOcrText, noticeId, budget,
                 notes, stageFlags);
         if (withVariables != issues) {
@@ -442,16 +468,25 @@ public class V7DraftingPipelineService {
         }
 
         // ---- Assembly + code checks
+        // the provision the draft names: the matcher's reading before the notice record's; when it differs, the stage
+        // template follows it (a Section 50 letter or Section 75 order triaged scn_73 takes no Section 73 template)
+        String draftSection = ReplyAssemblyService.resolveNoticeSection(matchingResult, noticeSectionRaw);
+        String draftStage = noticeType;
+        if (draftSection != null && !ReplyAssemblyService.sameProvision(draftSection, noticeSectionRaw)) {
+            draftStage = StageDetector.detect(draftSection, triageType != null ? triageType.toString() : null);
+            log.info("Draft section {} read by the matcher (notice record '{}'): stage template {} -> {}",
+                    draftSection, noticeSectionRaw, noticeType, draftStage);
+        }
         AssembledReplyResult assemblyResult = replyAssemblyService.assembleReply(
-                matchingResult, filledTemplates, input, noticeType, aiContent, hsContent, notes);
+                matchingResult, filledTemplates, input, draftStage, aiContent, hsContent, notes);
 
         List<DraftCheckResult> checkResults = new ArrayList<>(
-                draftCheckService.runAllChecks(matchingResult, assemblyResult, noticeSectionRaw, noticeType));
+                draftCheckService.runAllChecks(matchingResult, assemblyResult, draftSection, draftStage));
         if (!allCitations.isEmpty()) {
             checkResults.addAll(draftCheckService.citationChecks(verified));
         }
         Set<String> flags = new LinkedHashSet<>(stageFlags);
-        Map<String, Map<String, Object>> flagDetails = new LinkedHashMap<>();
+        Map<String, Map<String, Object>> flagDetails = new LinkedHashMap<>(stageFlagDetails);
         for (FilledTemplateResult ft : filledTemplates) {
             if (ft == null) continue;
             if (ft.flags() != null) flags.addAll(ft.flags());
@@ -603,6 +638,140 @@ public class V7DraftingPipelineService {
         log.info("Template variable step for notice {}: {} issue(s) asked, {} value(s) returned, {} not found",
                 noticeId, requests.size(), result.valueCount(), result.notFound().size());
         return changed ? merged : issues;
+    }
+
+    /**
+     * Stage 1a. The response stage the input document calls for ({@link StageResolver}) is tested against every
+     * primary card; a card of the wrong stage class is swapped for its single sibling of the right class
+     * ({@link #correctResponseStage}). Flags {@link #FLAG_STAGE_CORRECTED} / {@link #FLAG_STAGE_MISMATCH} with the
+     * corrections as detail, one partner note and one log line per issue. Returns the same list instance when nothing
+     * changed (no catalogue access, a stage the resolver cannot place, a revocation stage, or every card right).
+     */
+    List<MatchedIssue> applyStageCorrection(List<MatchedIssue> issues, String documentType, String documentText, UUID noticeId,
+                                            List<String> notes, Set<String> flags, Map<String, Map<String, Object>> flagDetails) {
+        if (catalogueService == null || issues == null || issues.isEmpty()) return issues;
+        ResponseStage stage = StageResolver.resolve(documentType, documentText);
+        if (stage == null || stage == ResponseStage.REVOCATION) return issues;
+        Map<String, IssueCard> cards = catalogueService.cardsById();
+        if (cards.isEmpty()) return issues;
+
+        StageCorrection sc = correctResponseStage(issues, stage, cards);
+        for (StageCorrection.Swap s : sc.swaps()) {
+            log.info("Notice {} issue #{}: stage corrected {} -> {} (input calls for {})", noticeId, s.issueNo(), s.from(), s.to(), stage.label());
+            notes.add("Issue #" + s.issueNo() + ": stage corrected from " + s.from() + " to " + s.to()
+                    + " (the input document calls for " + stage.label() + "; " + s.from() + " kept as an alternate).");
+        }
+        for (StageCorrection.Mismatch m : sc.mismatches()) {
+            log.info("Notice {} issue #{}: stage mismatch on {} ({} vs {}), {} candidate sibling(s), card kept",
+                    noticeId, m.issueNo(), m.cardId(), m.inputStage(), m.cardStage(), m.candidates().size());
+            notes.add("Issue #" + m.issueNo() + ": card " + m.cardId() + " is " + m.cardStage() + "-stage but the input document calls for "
+                    + m.inputStage() + (m.candidates().isEmpty() ? "; no sibling card of that stage"
+                    : "; more than one candidate sibling " + m.candidates()) + ", card kept: partner to check.");
+        }
+        if (!sc.swaps().isEmpty()) {
+            flags.add(FLAG_STAGE_CORRECTED);
+            flagDetails.put(FLAG_STAGE_CORRECTED, Map.of("corrections",
+                    sc.swaps().stream().map(s -> s.from() + " -> " + s.to()).toList()));
+        }
+        if (!sc.mismatches().isEmpty()) {
+            flags.add(FLAG_STAGE_MISMATCH);
+            flagDetails.put(FLAG_STAGE_MISMATCH, Map.of("mismatches",
+                    sc.mismatches().stream().map(m -> m.cardId() + ": " + m.inputStage() + " vs " + m.cardStage()).toList()));
+        }
+        return sc.issues();
+    }
+
+    /** Result of {@link #correctResponseStage}: the issues (same instance when unchanged), the swaps and the mismatches left. */
+    record StageCorrection(List<MatchedIssue> issues, List<Swap> swaps, List<Mismatch> mismatches) {
+        record Swap(int issueNo, String from, String to) {}
+
+        record Mismatch(int issueNo, String cardId, String inputStage, String cardStage, List<String> candidates) {}
+    }
+
+    /** Stage class of a card for the correction: "appeal" or "reply" (everything that is not appeal-stage). */
+    static String stageClass(IssueCard card) {
+        return isAppealStageCard(card) ? "appeal" : "reply";
+    }
+
+    /** True for an appeal-stage card: its STAGES contain order_appeal, or its title starts with "Appeal" / "APL-01". */
+    static boolean isAppealStageCard(IssueCard card) {
+        if (card == null) return false;
+        if (card.stages() != null) {
+            for (String s : card.stages()) {
+                if (s != null && "order_appeal".equalsIgnoreCase(s.trim())) return true;
+            }
+        }
+        String title = card.title() != null ? card.title().trim().toLowerCase(Locale.ROOT) : "";
+        return title.startsWith("appeal") || title.matches("^apl[\\s_-]*0?1\\b.*");
+    }
+
+    /**
+     * For each issue whose primary card's stage class (appeal / reply) differs from the one {@code stage} calls for
+     * (appeal for {@link ResponseStage#APPEAL}; reply for reply, objection and representation), the candidate
+     * siblings are the catalogue cards named in the primary card's NOT THIS IF rules and the matcher's alternates
+     * that are of the right class. Exactly one candidate: it becomes the primary, the old primary the first
+     * alternate, the status is kept and the issue gets the flag {@code "stage_corrected: <old> -> <new>"}. None or
+     * several: the card is kept and the issue gets {@code "stage_mismatch: <input stage> vs <card stage>"}.
+     */
+    static StageCorrection correctResponseStage(List<MatchedIssue> issues, ResponseStage stage, Map<String, IssueCard> cards) {
+        List<StageCorrection.Swap> swaps = new ArrayList<>();
+        List<StageCorrection.Mismatch> mismatches = new ArrayList<>();
+        if (issues == null || stage == null || stage == ResponseStage.REVOCATION || cards == null || cards.isEmpty()) {
+            return new StageCorrection(issues, swaps, mismatches);
+        }
+        boolean wantAppeal = stage == ResponseStage.APPEAL;
+        String wantedClass = wantAppeal ? "appeal" : "reply";
+        List<MatchedIssue> out = new ArrayList<>(issues.size());
+        boolean changed = false;
+        for (MatchedIssue issue : issues) {
+            String primary = issue.primaryCardId();
+            IssueCard card = primary != null ? cards.get(primary) : null;
+            if (card == null || isAppealStageCard(card) == wantAppeal) {
+                out.add(issue);
+                continue;
+            }
+            Set<String> candidates = new LinkedHashSet<>();
+            for (String rule : card.notThisIf() != null ? card.notThisIf() : List.<String>of()) {
+                if (rule == null) continue;
+                for (String id : cards.keySet()) {
+                    if (!id.equals(primary) && namesCard(rule, id)) candidates.add(id);
+                }
+            }
+            for (String alt : issue.alternateCardIds()) {
+                if (alt != null && !alt.equals(primary) && cards.containsKey(alt)) candidates.add(alt);
+            }
+            candidates.removeIf(id -> isAppealStageCard(cards.get(id)) != wantAppeal);
+
+            List<String> issueFlags = new ArrayList<>(issue.flags() != null ? issue.flags() : List.of());
+            if (candidates.size() == 1) {
+                String sibling = candidates.iterator().next();
+                List<String> alternates = new ArrayList<>();
+                alternates.add(primary);
+                for (String alt : issue.alternateCardIds()) {
+                    if (alternates.size() >= 2) break;   // the matcher keeps at most two alternates
+                    if (alt != null && !alt.equals(sibling) && !alternates.contains(alt)) alternates.add(alt);
+                }
+                issueFlags.add(StageResolver.ISSUE_FLAG_STAGE_CORRECTED + ": " + primary + " -> " + sibling);
+                out.add(new MatchedIssue(issue.issueNo(), issue.status(), issue.kind(), List.of(sibling), List.copyOf(alternates),
+                        issue.why(), issue.notThisIfChecked(), issue.facts(), issue.noticeParas(), List.copyOf(issueFlags),
+                        issue.clientFactsToConfirm(), issue.parentIssueNo()));
+                swaps.add(new StageCorrection.Swap(issue.issueNo(), primary, sibling));
+            } else {
+                String cardClass = stageClass(card);
+                issueFlags.add(StageResolver.ISSUE_FLAG_STAGE_MISMATCH + ": " + stage.label() + " vs " + cardClass);
+                out.add(new MatchedIssue(issue.issueNo(), issue.status(), issue.kind(), issue.cardIds(), issue.alternateCardIds(),
+                        issue.why(), issue.notThisIfChecked(), issue.facts(), issue.noticeParas(), List.copyOf(issueFlags),
+                        issue.clientFactsToConfirm(), issue.parentIssueNo()));
+                mismatches.add(new StageCorrection.Mismatch(issue.issueNo(), primary, stage.label(), cardClass, List.copyOf(candidates)));
+            }
+            changed = true;
+        }
+        return new StageCorrection(changed ? out : issues, swaps, mismatches);
+    }
+
+    /** True when {@code text} names the card id as a whole token (NDK-22 is not named by "NDK-224"). */
+    private static boolean namesCard(String text, String cardId) {
+        return Pattern.compile("(?<![A-Za-z0-9])" + Pattern.quote(cardId) + "(?![A-Za-z0-9])").matcher(text).find();
     }
 
     /** Why Stage 1 gave no usable result (matcher fallback flags), or null when it did. */
