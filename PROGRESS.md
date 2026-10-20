@@ -758,7 +758,7 @@ cached catalogue. Measured causes and the fix for each are in open item 9. Match
 - **`ShortlistTitleAgent`** (new, `prompts/shortlist_titles_v1.md`): one call per notice before matching; system
   prompt = instructions + `NDK-001 | <title>` for the whole catalogue (cached prefix), user message = notice type +
   text; `LLM_MODEL_SHORTLIST` (blank: matching model), effort `LLM_EFFORT_SHORTLIST` low, max_tokens
-  `LLM_MAX_TOKENS_SHORTLIST` 1500; budgeted through `WriterCall`. `MATCHING_SHORTLIST_AI` (default true). A failed
+  `LLM_MAX_TOKENS_SHORTLIST` 1500 (6000 / 9000 from (b22)); budgeted through `WriterCall`. `MATCHING_SHORTLIST_AI` (default true). A failed
   or refused call -> labels only + **`warn:shortlist_ai_skipped`**.
 - **Matcher**: shortlist render drops the KEYWORDS line (the full-catalogue render keeps it, so the hash is
   unchanged). A full match whose primary is a titles-only card is lowered to partial (issue flag
@@ -776,8 +776,33 @@ cached catalogue. Measured causes and the fix for each are in open item 9. Match
   in the matcher, titles-only primary), `V7ShortlistWideningTest` (stage-pool widening, skip flag, ai-skipped flag),
   `MatchingPromptRulesTest` (v3.7), `ShortlistDryRunTest` offline run on a synthetic set.
 
+## (b22) Shortlist title pass fixes after the first live dry run (20-10-2026)
+
+- **Measured** (live dry run, 40 private notices, cheap title model, effort low): the title call hit max_tokens=1500
+  on 11 of 14 notices (1,500 output tokens, then 1,200 to 2,800 on the 3,000-token retry; one notice overran even
+  3,000 and the consecutive-failure guard stopped the run). Thinking counts toward max_tokens on this model, and the
+  answer likely echoed titles or reasons. Recall of the union 100% (37 of 37 expected cards), but union size median
+  41, p90 65 (labels 15 to 39 + AI 9 to 34 + siblings).
+- **Output limit**: `matching.shortlist.title-max-tokens` 6000 and `title-retry-max-tokens` 9000
+  (`MATCHING_SHORTLIST_TITLE_MAX_TOKENS` / `_RETRY_MAX_TOKENS`; replace `LLM_MAX_TOKENS_SHORTLIST(_RETRY)`), read
+  through `AppProperties.maxTokensForAgent`. Effort stays low.
+- **Prompt v1.1** (`shortlist_titles_v1.md`, header line): the answer is ONLY `{"card_ids": [...]}`, ids only, no
+  titles / reasons / prose / fences; every plausible card, none left out for brevity. No JSON output mode in the LLM
+  abstraction, so the parser is tolerant: fences stripped; unreadable JSON -> catalogue ids found by
+  `NDK-(AI-)?nnn` regex, flag **`warn:shortlist_ai_parse_fallback`** (shortlist detail `ai_parse_fallback`).
+- **Failure guard**: `WriterCall` can report only the outcome of the attempt pair (`finalOutcomeOnly`, used by the
+  title agent): truncated-then-ok is one usable outcome; a pair that fails is one failure. Writers unchanged.
+- **Stricter label cut-off with AI picks**: `relative-cutoff-with-ai` 0.5 and `min-cards-with-ai` 8 apply when the
+  title pass named at least one catalogue card; 0.35 / 15 otherwise (pass off, failed, or empty). Siblings
+  unchanged.
+- **Dry run**: AI-mode lines add `ai N | labels with-AI cut-off N | union ...`; a title call that fails after its
+  retry -> `AI FAILED after retry: labels only` and the run goes on; two failed notices in a row still stop it.
+  Summary adds the median of AI picks. Offline AI-mode test with a mocked provider.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn -o test`): **500 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 20-10-2026 after (b22).
 - Offline unit suite (`mvn -o test`): **492 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
   on 20-10-2026 after (b21); 460 after (b20).
 - Offline unit suite (`mvn test`): **439 tests, 0 failures, 0 errors** on 17-10-2026 after (b19), `RealNoticesBatchRunnerTest`

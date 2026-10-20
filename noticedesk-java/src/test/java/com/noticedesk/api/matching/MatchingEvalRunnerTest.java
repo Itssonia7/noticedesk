@@ -93,7 +93,7 @@ class MatchingEvalRunnerTest {
         System.out.println("Shortlist title pass: ai=" + props.getMatching().getShortlist().isAiTitles()
                 + " model=" + props.getLlm().shortlistModel()
                 + " effort=" + props.getLlm().effortForAgent(AppProperties.Llm.SHORTLIST)
-                + " max_tokens=" + props.getLlm().maxTokensForAgent(AppProperties.Llm.SHORTLIST, false));
+                + " max_tokens=" + props.maxTokensForAgent(AppProperties.Llm.SHORTLIST, false));
 
         org.springframework.jdbc.datasource.DriverManagerDataSource ds = new org.springframework.jdbc.datasource.DriverManagerDataSource();
         ds.setDriverClassName("org.postgresql.Driver");

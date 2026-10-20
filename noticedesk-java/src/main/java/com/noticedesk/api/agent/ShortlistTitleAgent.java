@@ -17,6 +17,8 @@ import org.springframework.stereotype.Service;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * v7 Stage 1 shortlist, AI title pass: one small call per notice, before matching, that reads the notice by meaning
@@ -28,15 +30,25 @@ import java.util.*;
  * <p>The system prompt is the instructions plus the catalogue as {@code NDK-001 | <title>} lines: the same for every
  * notice, so it is the cached prefix; the user message is the notice type and the notice text. Model
  * {@code LLM_MODEL_SHORTLIST} (blank: the matching model), agent key {@code shortlist} (effort
- * {@code LLM_EFFORT_SHORTLIST}, default low; max_tokens {@code LLM_MAX_TOKENS_SHORTLIST}, default 1500). The call goes
+ * {@code LLM_EFFORT_SHORTLIST}, default low; max_tokens {@code matching.shortlist.title-max-tokens}, default 6000, and
+ * {@code title-retry-max-tokens}, default 9000, after a max_tokens stop: thinking counts against it). The call goes
  * through {@link WriterCall} (budget pre-check, usage logging, one retry on unusable output, text blocks only,
- * {@link LlmFatalException} passed on). A failed or refused call returns null: the shortlist then uses labels only.
+ * {@link LlmFatalException} passed on); only the outcome of the attempt pair is reported to the fail-fast guard, so a
+ * truncated first attempt that the retry repairs is not a failure. A failed or refused call returns null: the
+ * shortlist then uses labels only.
+ *
+ * <p>The answer is ids only ({@code {"card_ids": [...]}}). The provider abstraction has no JSON output mode, so the
+ * parser is tolerant: fences are stripped, and when the JSON cannot be read the catalogue ids found in the text
+ * ({@link #CARD_ID}) are used, with {@link Picks#parseFallback()} set (flag {@code warn:shortlist_ai_parse_fallback}).
  */
 @Service
 @Slf4j
 public class ShortlistTitleAgent {
 
+    /** File {@code prompts/shortlist_titles_v1.md}; its header carries the revision (v1.1: ids-only answer). */
     public static final String PROMPT_VERSION = "shortlist_titles_v1";
+    /** Card ids looked for in an answer whose JSON cannot be read. */
+    static final Pattern CARD_ID = Pattern.compile("\\bNDK-(?:AI-)?\\d{3}\\b");
     /** Agent key for effort / max_tokens / budget lines ({@code step=shortlist} in the call log). */
     public static final String AGENT_KEY = AppProperties.Llm.SHORTLIST;
 
@@ -54,12 +66,22 @@ public class ShortlistTitleAgent {
         this.llmFactory = llmFactory;
     }
 
-    /** The cards the model named (catalogue ids only, in the model's order) and the model that answered. */
-    public record Picks(Set<String> cardIds, String model) {
+    /**
+     * The cards the model named (catalogue ids only, in the model's order), the model that answered, and whether the
+     * ids were found by {@link #CARD_ID} in an answer whose JSON could not be read.
+     */
+    public record Picks(Set<String> cardIds, String model, boolean parseFallback) {
         public Picks {
             cardIds = cardIds != null ? Collections.unmodifiableSet(new LinkedHashSet<>(cardIds)) : Set.of();
         }
+
+        public Picks(Set<String> cardIds, String model) {
+            this(cardIds, model, false);
+        }
     }
+
+    /** Parsed answer: the ids and whether the regex fallback found them. */
+    record Parsed(Set<String> ids, boolean fallback) {}
 
     /** The model of this pass: {@code model-shortlist}, else the matching model; null when neither is set. */
     public String model() {
@@ -95,12 +117,15 @@ public class ShortlistTitleAgent {
             LlmProvider llm = llmFactory.getLlmForAgent(AGENT_KEY);
             Picks picks = WriterCall.run(llm, apiUsageLogService, properties, AGENT_KEY, label, model, systemPrompt, null,
                     userPrompt, noticeId, budget,
-                    response -> new Picks(parseOrThrow(response.content(), byId.keySet()),
-                            response.model() != null ? response.model() : model));
+                    response -> {
+                        Parsed parsed = parseTolerant(response.content(), byId.keySet());
+                        return new Picks(parsed.ids(), response.model() != null ? response.model() : model, parsed.fallback());
+                    }, true);
             if (picks == null) {
                 log.warn("{} produced no usable output; shortlist by labels only", label);
             } else {
-                log.info("{} named {} card(s)", label, picks.cardIds().size());
+                log.info("{} named {} card(s){}", label, picks.cardIds().size(),
+                        picks.parseFallback() ? " (ids taken from unparseable JSON)" : "");
             }
             return picks;
         } catch (LlmFatalException e) {
@@ -157,6 +182,25 @@ public class ShortlistTitleAgent {
         }
         if (dropped > 0) log.info("ShortlistTitleAgent: {} id(s) not in the catalogue dropped", dropped);
         return out;
+    }
+
+    /**
+     * {@link #parseOrThrow}; when the JSON cannot be read (or has no {@code card_ids} array), the catalogue ids that
+     * {@link #CARD_ID} finds in the text (first-seen order, no repeats), marked as a fallback.
+     *
+     * @throws IllegalArgumentException when neither yields a catalogue id (the caller retries once)
+     */
+    Parsed parseTolerant(String raw, Set<String> catalogueIds) {
+        try {
+            return new Parsed(parseOrThrow(raw, catalogueIds), false);
+        } catch (IllegalArgumentException e) {
+            Set<String> found = new LinkedHashSet<>();
+            Matcher m = CARD_ID.matcher(raw != null ? raw : "");
+            while (m.find()) if (catalogueIds.contains(m.group())) found.add(m.group());
+            if (found.isEmpty()) throw e;
+            log.warn("ShortlistTitleAgent: JSON not readable ({}); {} catalogue id(s) taken from the text", e.getMessage(), found.size());
+            return new Parsed(found, true);
+        }
     }
 
     private String loadPrompt() {

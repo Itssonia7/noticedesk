@@ -17,7 +17,9 @@ import java.util.function.Function;
  *   <li>every call's usage is logged, including failed ones (they are billed);</li>
  *   <li>refusal or an exception (timeout, HTTP error): stop at once, no retry;</li>
  *   <li>{@link LlmFatalException} (billing / auth error, live run aborted): thrown on to the caller;</li>
- *   <li>the outcome of every attempt is reported to {@link ApiUsageLogService#reportOutcome};</li>
+ *   <li>the outcome of every attempt is reported to {@link ApiUsageLogService#reportOutcome}; with
+ *       {@code finalOutcomeOnly} only the outcome of the attempt pair is (a truncated or unusable first attempt
+ *       followed by a usable retry reports one usable outcome), so a fail-fast listener counts calls, not attempts;</li>
  *   <li>max_tokens: retry once with the agent's higher retry cap;</li>
  *   <li>no text block or output that fails parsing/validation: retry once, telling the model the
  *       validation error; a second failure stops (the caller leaves the issue to the partner);</li>
@@ -36,12 +38,21 @@ final class WriterCall {
     static <T> T run(LlmProvider llm, ApiUsageLogService usage, AppProperties properties,
                      String agentKey, String label, String model, String systemPrompt, String cachedUserPrefix,
                      String userPrompt, UUID noticeId, NoticeCallBudget budget, Function<LlmResponse, T> parser) {
+        return run(llm, usage, properties, agentKey, label, model, systemPrompt, cachedUserPrefix, userPrompt, noticeId,
+                budget, parser, false);
+    }
+
+    static <T> T run(LlmProvider llm, ApiUsageLogService usage, AppProperties properties,
+                     String agentKey, String label, String model, String systemPrompt, String cachedUserPrefix,
+                     String userPrompt, UUID noticeId, NoticeCallBudget budget, Function<LlmResponse, T> parser,
+                     boolean finalOutcomeOnly) {
         String effort = properties.getLlm().effortForAgent(agentKey);
         boolean raiseCap = false;
         String validationError = null;
+        String pending = null;   // finalOutcomeOnly: failure of an earlier attempt, reported only if no attempt succeeds
 
         for (int attempt = 1; attempt <= 2; attempt++) {
-            int maxTokens = properties.getLlm().maxTokensForAgent(agentKey, raiseCap);
+            int maxTokens = properties.maxTokensForAgent(agentKey, raiseCap);
             String prompt = validationError != null ? userPrompt + retryInstruction(validationError) : userPrompt;
             // hard cap: worst case of exactly this call (prompt as sent, max_tokens as sent) must fit the budget;
             // system prompt + cached notice prefix form the cacheable prefix, the issue prompt the per-call part
@@ -49,6 +60,7 @@ final class WriterCall {
             String refusal = budget != null ? budget.refusalReason(agentKey, shape, maxTokens) : null;
             if (refusal != null) {
                 log.warn("{} not called (attempt={}): {}", label, attempt, refusal);
+                if (pending != null) outcome(usage, agentKey, attempt - 1, false, pending);
                 return null;
             }
 
@@ -85,7 +97,7 @@ final class WriterCall {
                 return null;
             }
             if (response.truncated()) {
-                outcome(usage, agentKey, attempt, false, LlmResponse.FAILURE_MAX_TOKENS);
+                pending = attemptFailed(usage, agentKey, attempt, LlmResponse.FAILURE_MAX_TOKENS, finalOutcomeOnly);
                 log.warn("{} truncated stop_reason=max_tokens attempt={} max_tokens={} output_tokens={}",
                         label, attempt, maxTokens, response.outputTokensOrZero());
                 raiseCap = true;
@@ -93,7 +105,7 @@ final class WriterCall {
                 continue;
             }
             if (response.failed()) {
-                outcome(usage, agentKey, attempt, false, response.failureReason());
+                pending = attemptFailed(usage, agentKey, attempt, response.failureReason(), finalOutcomeOnly);
                 validationError = "the response contained no text output (" + response.failureReason() + ")";
                 log.warn("{} unusable output attempt={} failure={} stop_reason={}",
                         label, attempt, response.failureReason(), response.stopReason());
@@ -110,8 +122,17 @@ final class WriterCall {
                 validationError = e.getMessage();
             }
             logUnusable(label, attempt, response, validationError, properties);
-            outcome(usage, agentKey, attempt, false, "invalid_output");
+            pending = attemptFailed(usage, agentKey, attempt, "invalid_output", finalOutcomeOnly);
         }
+        if (pending != null) outcome(usage, agentKey, 2, false, pending);
+        return null;
+    }
+
+    /** Reports a failed attempt now, or (finalOutcomeOnly) returns its reason to report if the pair fails. */
+    private static String attemptFailed(ApiUsageLogService usage, String agentKey, int attempt, String reason,
+                                        boolean finalOutcomeOnly) {
+        if (finalOutcomeOnly) return reason;
+        outcome(usage, agentKey, attempt, false, reason);
         return null;
     }
 

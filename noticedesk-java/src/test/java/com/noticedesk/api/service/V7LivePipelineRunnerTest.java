@@ -133,7 +133,7 @@ public class V7LivePipelineRunnerTest {
         for (String agent : List.of("matching", "partial_drafting", "new_issue", "high_stakes", AppProperties.Llm.SHORTLIST)) {
             System.out.printf("%s: effort=%s max_tokens=%d retry_max_tokens=%d%n", agent,
                     props.getLlm().effortForAgent(agent),
-                    props.getLlm().maxTokensForAgent(agent, false), props.getLlm().maxTokensForAgent(agent, true));
+                    props.maxTokensForAgent(agent, false), props.maxTokensForAgent(agent, true));
         }
 
         ObjectMapper om = new ObjectMapper();

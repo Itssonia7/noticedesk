@@ -255,7 +255,40 @@ class CardShortlisterTest {
         assertEquals(CardShortlister.DEFAULT_RELATIVE_CUTOFF, p.getRelativeCutoff());
         assertEquals(CardShortlister.DEFAULT_MIN_CARDS, p.getMinCards());
         assertTrue(p.isAiTitles());
-        assertEquals(CardShortlister.Options.DEFAULT, new CardShortlister.Options(Double.NaN, -1), "bad values fall back to the defaults");
+        assertEquals(CardShortlister.DEFAULT_RELATIVE_CUTOFF_WITH_AI, p.getRelativeCutoffWithAi());
+        assertEquals(CardShortlister.DEFAULT_MIN_CARDS_WITH_AI, p.getMinCardsWithAi());
+        assertEquals(0.5, CardShortlister.DEFAULT_RELATIVE_CUTOFF_WITH_AI);
+        assertEquals(8, CardShortlister.DEFAULT_MIN_CARDS_WITH_AI);
+        assertEquals(CardShortlister.Options.DEFAULT, new CardShortlister.Options(Double.NaN, -1, 2.0, -3), "bad values fall back to the defaults");
+        assertEquals(new CardShortlister.Options(0.2, 4, 0.2, 4), new CardShortlister.Options(0.2, 4), "two values: the same with or without AI");
+    }
+
+    @Test
+    void stricterCutoffWhenTheAiPassNamedACard() {
+        // labels only, 0.1 x 3.91 = 0.39: T-01..T-06; with AI picks, 0.6 x 3.91 = 2.35 keeps T-01, min 2 adds T-02
+        CardShortlister.Options opt = new CardShortlister.Options(0.1, 0, 0.6, 2);
+        assertEquals(Set.of("T-01", "T-02", "T-03", "T-04", "T-05", "T-06"),
+                shortlist(scored(), opt, null, CardShortlister.AI_OFF).labelPicks());
+        Shortlist withAi = shortlist(scored(), opt, Set.of("T-09"), CardShortlister.AI_USED);
+        assertEquals(Set.of("T-01", "T-02"), withAi.labelPicks());
+        assertEquals(List.of("T-01", "T-02", "T-09"), withAi.cardIds());
+        assertEquals(Set.of("T-01", "T-02", "T-03", "T-04", "T-05", "T-06"),
+                shortlist(scored(), opt, null, CardShortlister.AI_SKIPPED).labelPicks(), "a failed pass: the labels-only thresholds");
+        assertEquals(Set.of("T-01", "T-02", "T-03", "T-04", "T-05", "T-06"),
+                shortlist(scored(), opt, Set.of(), CardShortlister.AI_USED).labelPicks(), "an empty answer: the labels-only thresholds");
+        assertEquals(Set.of("T-01", "T-02", "T-03", "T-04", "T-05", "T-06"),
+                shortlist(scored(), opt, Set.of("NOPE"), CardShortlister.AI_USED).labelPicks(), "only ids outside the catalogue: no AI picks");
+    }
+
+    @Test
+    void parseFallbackMarkIsKeptAndShownInTheDetails() {
+        Shortlist s = shortlist(scored(), new CardShortlister.Options(0.35, 0), Set.of("T-09"), CardShortlister.AI_USED);
+        assertFalse(s.aiParseFallback());
+        assertFalse(s.details().containsKey("ai_parse_fallback"));
+        Shortlist marked = s.withAiParseFallback(true);
+        assertTrue(marked.aiParseFallback());
+        assertEquals(true, marked.details().get("ai_parse_fallback"));
+        assertEquals(s.cardIds(), marked.cardIds());
     }
 
     private static Shortlist shortlist(List<IssueCard> cards, CardShortlister.Options opt, Set<String> ai, String aiStatus) {

@@ -128,6 +128,8 @@ public class V7DraftingPipelineService {
     public static final String FLAG_SHORTLIST_WIDENING_SKIPPED = "info:shortlist_widening_skipped";
     /** Draft flag (warn): the shortlist's AI title pass failed or was refused; the shortlist used labels only. */
     public static final String FLAG_SHORTLIST_AI_SKIPPED = "warn:shortlist_ai_skipped";
+    /** Draft flag (warn): the title pass answer was not readable JSON; its card ids were found in the text. */
+    public static final String FLAG_SHORTLIST_AI_PARSE_FALLBACK = "warn:shortlist_ai_parse_fallback";
 
     /** Card read access for the post-matching stage correction; null (tests) skips the correction. */
     private CatalogueService catalogueService;
@@ -695,7 +697,8 @@ public class V7DraftingPipelineService {
      * {@link #FLAG_SHORTLIST_WIDENED}). When the budget refuses that call it is not made (flag
      * {@link #FLAG_SHORTLIST_WIDENING_SKIPPED}); a second result that failed otherwise is not used either. In both cases
      * the first result stays, with a partner note. Every shortlist gets {@link #FLAG_SHORTLIST} and one partner note
-     * line; a title pass that could not be used adds {@link #FLAG_SHORTLIST_AI_SKIPPED}. Returns {@code mr} itself when
+     * line; a title pass that could not be used adds {@link #FLAG_SHORTLIST_AI_SKIPPED}, one whose ids were found in
+     * unreadable JSON {@link #FLAG_SHORTLIST_AI_PARSE_FALLBACK}. Returns {@code mr} itself when
      * no second call was made or it was not used.
      */
     MatchingResult widenOnShortlistMiss(MatchingResult mr, String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
@@ -710,6 +713,10 @@ public class V7DraftingPipelineService {
         if (first.aiSkipped()) {
             flags.add(FLAG_SHORTLIST_AI_SKIPPED);
             notes.add("The shortlist's AI title pass gave no usable answer; the shortlist was chosen by labels only.");
+        }
+        if (first.aiParseFallback()) {
+            flags.add(FLAG_SHORTLIST_AI_PARSE_FALLBACK);
+            notes.add("The shortlist's AI title pass answer was not clean JSON; the card ids found in it were used.");
         }
         if (first.isFull() || first.size() >= first.poolSize()) return mr;
         List<Integer> misses = new ArrayList<>();

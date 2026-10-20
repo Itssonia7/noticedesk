@@ -24,6 +24,7 @@ import org.junit.jupiter.api.Test;
 import java.io.File;
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -42,8 +43,12 @@ import static org.junit.jupiter.api.Assertions.*;
  *   <li>{@code SHORTLIST_DRY_RUN_AI=true}: also calls the {@link ShortlistTitleAgent} per notice (PAID, small) and
  *       reports the union's sizes and recall plus the AI cost. Needs {@code ANTHROPIC_API_KEY} and
  *       {@code LLM_MODEL_SHORTLIST} or {@code LLM_MODEL_MATCHING}; runs under {@link LiveRunGuard} (commit check,
- *       {@code LIVE_MAX_RUN_COST_INR} / {@code LIVE_MAX_NOTICE_COST_INR} caps, fail fast, {@code LIVE_SMOKE});</li>
- *   <li>{@code MATCHING_SHORTLIST_RELATIVE_CUTOFF} / {@code MATCHING_SHORTLIST_MIN_CARDS}: thresholds (as in the app).</li>
+ *       {@code LIVE_MAX_RUN_COST_INR} / {@code LIVE_MAX_NOTICE_COST_INR} caps, fail fast, {@code LIVE_SMOKE}). Each
+ *       notice line then also gives the AI picks, the label picks under the with-AI cut-off and the union; a title
+ *       call that fails after its retry leaves that notice on labels only ({@code AI FAILED}) and the run goes on,
+ *       until two notices in a row fail (the guard counts the outcome of each attempt pair once);</li>
+ *   <li>{@code MATCHING_SHORTLIST_RELATIVE_CUTOFF} / {@code MATCHING_SHORTLIST_MIN_CARDS} and their {@code _WITH_AI}
+ *       variants: thresholds (as in the app).</li>
  * </ul>
  * Prints notice ids, card ids and counts only, never notice text or card content.
  */
@@ -124,11 +129,21 @@ class ShortlistDryRunTest {
         return out;
     }
 
+    /** The AI title pass of a run: the agent and the usage service / guard it reports to. */
+    record AiHarness(ShortlistTitleAgent agent, ApiUsageLogService usage, LiveRunGuard guard) {}
+
     @Test
     void shortlistDryRun() throws Exception {
         String dirSetting = env("SHORTLIST_DRY_RUN_DIR");
         Assumptions.assumeTrue(dirSetting != null, "SHORTLIST_DRY_RUN_DIR not set");
-        File root = new File(dirSetting);
+        run(new File(dirSetting), null);
+    }
+
+    /**
+     * The dry run over {@code root}. {@code testHarness} (tests only) supplies the AI pass over a mocked provider,
+     * built on the run's properties; null: the AI pass runs only with {@code SHORTLIST_DRY_RUN_AI=true}, live.
+     */
+    static void run(File root, Function<AppProperties, AiHarness> testHarness) throws Exception {
         ObjectMapper om = new ObjectMapper();
         AppProperties props = TestAppProperties.fromApplicationYml();
         props.getMatching().setAllowDraftCards(true);   // as the live runners
@@ -144,9 +159,11 @@ class ShortlistDryRunTest {
         List<Notice> notices = readNotices(new File(root, "notices"), om, only);
         if (cards.isEmpty() || notices.isEmpty()) fail("dry run: " + cards.size() + " visible card(s), " + notices.size() + " notice(s) found");
         AppProperties.Matching.Shortlist sp = props.getMatching().getShortlist();
-        CardShortlister.Options options = new CardShortlister.Options(sp.getRelativeCutoff(), sp.getMinCards());
-        System.out.printf(Locale.ROOT, "Shortlist dry run: %d card(s) read, %d visible; %d notice(s); relative cutoff %.2f, min cards %d%n",
-                read.size(), cards.size(), notices.size(), options.relativeCutoff(), options.minCards());
+        CardShortlister.Options options = new CardShortlister.Options(sp.getRelativeCutoff(), sp.getMinCards(),
+                sp.getRelativeCutoffWithAi(), sp.getMinCardsWithAi());
+        System.out.printf(Locale.ROOT, "Shortlist dry run: %d card(s) read, %d visible; %d notice(s); relative cutoff %.2f, min cards %d"
+                        + " (with AI picks: %.2f, %d)%n", read.size(), cards.size(), notices.size(), options.relativeCutoff(),
+                options.minCards(), options.relativeCutoffWithAi(), options.minCardsWithAi());
 
         // ---- optional paid AI title pass, under the live-run safeguards
         boolean ai = "true".equalsIgnoreCase(env("SHORTLIST_DRY_RUN_AI"));
@@ -154,7 +171,14 @@ class ShortlistDryRunTest {
         LiveRunGuard guard = null;
         RunCostLedger ledger = null;
         ApiUsageLogService usage = null;
-        if (ai) {
+        if (testHarness != null) {
+            AiHarness h = testHarness.apply(props);
+            agent = h.agent();
+            usage = h.usage();
+            guard = h.guard();
+            ledger = RunCostLedger.attach(usage, System.out);
+            guard.attach(usage);
+        } else if (ai) {
             guard = LiveRunGuard.fromEnvironment();
             LiveRunGuard.CommitCheck commit = guard.checkCommit(LiveRunGuard.gitHead());
             System.out.println(commit.message());
@@ -175,14 +199,16 @@ class ShortlistDryRunTest {
             guard.attach(usage);
             guard.printSettings(System.out);
             agent = new ShortlistTitleAgent(props, om, usage, new LlmFactory(props));
-            System.out.printf("AI title pass: model=%s effort=%s max_tokens=%d%n", model,
-                    props.getLlm().effortForAgent(AppProperties.Llm.SHORTLIST), props.getLlm().maxTokensForAgent(AppProperties.Llm.SHORTLIST, false));
+            System.out.printf("AI title pass: model=%s effort=%s max_tokens=%d retry_max_tokens=%d%n", model,
+                    props.getLlm().effortForAgent(AppProperties.Llm.SHORTLIST), props.maxTokensForAgent(AppProperties.Llm.SHORTLIST, false),
+                    props.maxTokensForAgent(AppProperties.Llm.SHORTLIST, true));
             if (guard.smoke()) notices = notices.subList(0, 1);
         }
 
         Tally labels = new Tally();
         Tally union = new Tally();
         int aiFailed = 0;
+        List<Integer> aiPickSizes = new ArrayList<>();
         BigDecimal spent = BigDecimal.ZERO;
         String stopped = null;
         for (Notice n : notices) {
@@ -209,10 +235,17 @@ class ShortlistDryRunTest {
                 } finally {
                     spent = spent.add(ledger.totalInrSince(checkpoint));
                 }
-                if (picks == null) aiFailed++;
                 withAi = CardShortlister.shortlist(cards, n.noticeType(), stage, n.text(), options,
                         picks != null ? picks.cardIds() : null, picks != null ? CardShortlister.AI_USED : CardShortlister.AI_SKIPPED);
                 union.add(withAi, n.expected());
+                if (picks == null) {
+                    aiFailed++;
+                    line.append(" | AI FAILED after retry: labels only");
+                } else {
+                    aiPickSizes.add(picks.cardIds().size());
+                    line.append(String.format(Locale.ROOT, " | ai %d%s | labels with-AI cut-off %d", picks.cardIds().size(),
+                            picks.parseFallback() ? " (parse fallback)" : "", withAi.labelPicks().size()));
+                }
                 line.append(String.format(Locale.ROOT, " | union %s", withAi.describe()));
             }
             List<String> placed = new ArrayList<>();
@@ -227,8 +260,8 @@ class ShortlistDryRunTest {
         System.out.println(labels.line("Labels only"));
         if (agent != null) {
             System.out.println(union.line("Labels + AI"));
-            System.out.printf(Locale.ROOT, "AI title pass: %d call(s) unusable; cost %.4f INR (run cap INR %s)%n", aiFailed,
-                    spent.doubleValue(), guard.maxRunCostInr().toPlainString());
+            System.out.printf(Locale.ROOT, "AI title pass: %d call(s) unusable; AI picks median %d; cost %.4f INR (run cap INR %s)%n",
+                    aiFailed, percentile(aiPickSizes, 0.5), spent.doubleValue(), guard.maxRunCostInr().toPlainString());
         }
         if (stopped != null) System.out.println("RUN STOPPED: " + stopped);
     }
@@ -283,5 +316,74 @@ class ShortlistDryRunTest {
         assertFalse(out.contains("N-2"), "SHORTLIST_DRY_RUN_NOTICES limits the notices");
         assertFalse(out.contains("Show cause notice"), "no notice text is printed");
         assertFalse(out.contains("Labels + AI"), "no AI pass without SHORTLIST_DRY_RUN_AI");
+    }
+
+    @Test
+    void aiModePrintsBothLabelSizesGoesOnAfterAFailedNoticeAndStopsOnTwoInARow(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp) throws Exception {
+        java.nio.file.Path cards = java.nio.file.Files.createDirectories(tmp.resolve("cards"));
+        java.nio.file.Path notices = java.nio.file.Files.createDirectories(tmp.resolve("notices"));
+        java.nio.file.Files.writeString(cards.resolve("cards.json"), """
+                [{"card_id": "T-001", "title": "ITC not in GSTR-2B", "summary": "s", "keywords": ["Section 16(2)(aa)"], "stages": ["scn_73"], "status": "active"},
+                 {"card_id": "T-002", "title": "Interest", "summary": "s", "keywords": ["Section 50"], "stages": ["scn_73"], "status": "active"},
+                 {"card_id": "T-003", "title": "Defence 16(5)", "summary": "s", "keywords": ["Section 16(5)"], "stages": ["scn_73"], "status": "active"},
+                 {"card_id": "T-004", "title": "Appeal", "summary": "s", "keywords": ["Section 107"], "stages": ["order_appeal"], "status": "active"},
+                 {"card_id": "T-005", "title": "Late fee", "summary": "s", "keywords": ["Section 47"], "stages": ["scn_73"], "status": "active"}]
+                """);
+        // ALPHA: truncated, then usable; BRAVO: fails after its retry; CHARLIE: usable; DELTA and ECHO: fail (two in a row)
+        String[] words = {"ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO"};
+        for (int i = 0; i < words.length; i++) {
+            java.nio.file.Files.writeString(notices.resolve("n" + (i + 1) + ".json"), """
+                    {"notice_id": "N-%d", "document_type": "scn_73",
+                     "full_ocr_text": "%s. Show cause notice under Section 73. ITC denied under Section 16(2)(aa); interest under Section 50.",
+                     "answer_key": {"issues": [{"card_ids": ["T-001"]}, {"card_ids": ["T-003"]}]}}
+                    """.formatted(i + 1, words[i]));
+        }
+        String model = "test-shortlist-model";
+        com.noticedesk.api.service.llm.LlmProvider llm = org.mockito.Mockito.mock(com.noticedesk.api.service.llm.LlmProvider.class);
+        org.mockito.Mockito.when(llm.generateWithEffort(org.mockito.Mockito.any(), org.mockito.Mockito.any(), org.mockito.Mockito.any(),
+                org.mockito.Mockito.anyInt(), org.mockito.Mockito.any(), org.mockito.Mockito.anyBoolean())).thenAnswer(inv -> {
+            String user = inv.getArgument(1);
+            int maxTokens = inv.getArgument(3);
+            com.noticedesk.api.service.llm.LlmResponse ok = new com.noticedesk.api.service.llm.LlmResponse(
+                    "{\"card_ids\": [\"T-003\"]}", model, "anthropic", 1000, 300);
+            com.noticedesk.api.service.llm.LlmResponse cut = new com.noticedesk.api.service.llm.LlmResponse(
+                    "{\"card_ids\": [\"T-0", model, "anthropic", 1000, maxTokens, "max_tokens");
+            if (user.contains("ALPHA")) return maxTokens == 6000 ? cut : ok;
+            if (user.contains("CHARLIE")) return ok;
+            return cut;
+        });
+        LlmFactory factory = org.mockito.Mockito.mock(LlmFactory.class);
+        org.mockito.Mockito.when(factory.getLlmForAgent(org.mockito.Mockito.anyString())).thenReturn(llm);
+
+        java.io.PrintStream original = System.out;
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        try {
+            System.setOut(new java.io.PrintStream(buf, true, java.nio.charset.StandardCharsets.UTF_8));
+            run(tmp.toFile(), props -> {
+                props.getLlm().setProviderPrimary("anthropic");
+                props.getLlm().setModelShortlist(model);
+                AppProperties.Pricing.ModelPrice price = new AppProperties.Pricing.ModelPrice();
+                price.setInputPerMillion(1.0);
+                price.setOutputPerMillion(5.0);
+                price.setCacheReadPerMillion(0.1);
+                price.setCacheWritePerMillion(1.25);
+                props.getPricing().getModels().put(model, price);
+                ApiUsageLogService usage = new ApiUsageLogService(null, props);
+                return new AiHarness(new ShortlistTitleAgent(props, new ObjectMapper(), usage, factory), usage, new LiveRunGuard(name -> null));
+            });
+        } finally {
+            System.setOut(original);
+        }
+        String out = buf.toString(java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(out.contains("relative cutoff 0.35, min cards 15 (with AI picks: 0.50, 8)"), out);
+        assertTrue(java.util.regex.Pattern.compile("N-1 \\[scn_73\\] pool 4 \\| labels 2 -> .* \\| ai 1 \\| labels with-AI cut-off 2 \\| union \\d+ cards").matcher(out).find(), out);
+        assertTrue(out.contains("N-2 [scn_73]") && out.contains("| AI FAILED after retry: labels only | union"), out);
+        assertTrue(java.util.regex.Pattern.compile("N-3 .* \\| ai 1 \\| labels with-AI cut-off 2").matcher(out).find(), out);
+        assertTrue(out.contains("N-4 [scn_73]"), out);
+        assertFalse(out.contains("N-5 [scn_73]"), "the run stops on the second failed notice in a row");
+        assertTrue(out.contains("RUN STOPPED: 2 consecutive failed or unusable model calls [shortlist#2:max_tokens, shortlist#2:max_tokens]"), out);
+        assertTrue(out.contains("Labels + AI: 4 notices"), out);
+        assertTrue(out.contains("AI title pass: 2 call(s) unusable; AI picks median 1;"), out);
+        assertFalse(out.contains("Show cause notice"), "no notice text is printed");
     }
 }

@@ -112,8 +112,7 @@ noticedesk:
     max-tokens-high-stakes-retry: ${LLM_MAX_TOKENS_HIGH_STAKES_RETRY:24000}
     max-tokens-template-variables: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES:2000}
     max-tokens-template-variables-retry: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES_RETRY:4000}
-    max-tokens-shortlist: ${LLM_MAX_TOKENS_SHORTLIST:1500}
-    max-tokens-shortlist-retry: ${LLM_MAX_TOKENS_SHORTLIST_RETRY:3000}
+    # (the shortlist title pass: matching.shortlist.title-max-tokens / title-retry-max-tokens)
     # Per-notice cost control. Once either limit is reached, the remaining AI issues get a
     # [[PARTNER: ...]] placeholder and a block flag instead of another model call.
     max-cost-inr-per-notice: ${LLM_MAX_COST_INR_PER_NOTICE:60}
@@ -152,6 +151,14 @@ noticedesk:
       min-cards: ${MATCHING_SHORTLIST_MIN_CARDS:15}
       # AI title pass over the one-line card titles; a failed call degrades to labels only
       ai-titles: ${MATCHING_SHORTLIST_AI:true}
+      # stricter label cut-off when the AI title pass returned at least one card (the values above apply when the
+      # pass is off, failed, or returned no card)
+      relative-cutoff-with-ai: ${MATCHING_SHORTLIST_RELATIVE_CUTOFF_WITH_AI:0.5}
+      min-cards-with-ai: ${MATCHING_SHORTLIST_MIN_CARDS_WITH_AI:8}
+      # max_tokens of the AI title pass and of its one retry after a max_tokens stop; thinking tokens count against
+      # it (measured: 1,500 truncated 11 of 14 notices, 3,000 still truncated one)
+      title-max-tokens: ${MATCHING_SHORTLIST_TITLE_MAX_TOKENS:6000}
+      title-retry-max-tokens: ${MATCHING_SHORTLIST_TITLE_RETRY_MAX_TOKENS:9000}
   catalogue:
     # Provisional content = 'draft' issue cards promoted from an approved AI issue section (card ids
     # NDK-AI-nnn or a new draft version of an existing card) and their 'provisional' reply templates.

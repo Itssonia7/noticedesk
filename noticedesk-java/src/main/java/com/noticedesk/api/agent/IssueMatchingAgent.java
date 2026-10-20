@@ -366,13 +366,13 @@ public class IssueMatchingAgent {
                 || properties.getMatching().getShortlist().isAiTitles();
     }
 
-    /** {@code matching.shortlist.relative-cutoff} / {@code min-cards}. */
+    /** {@code matching.shortlist.relative-cutoff} / {@code min-cards} and their {@code -with-ai} variants. */
     CardShortlister.Options shortlistOptions() {
         if (properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null) {
             return CardShortlister.Options.DEFAULT;
         }
         AppProperties.Matching.Shortlist s = properties.getMatching().getShortlist();
-        return new CardShortlister.Options(s.getRelativeCutoff(), s.getMinCards());
+        return new CardShortlister.Options(s.getRelativeCutoff(), s.getMinCards(), s.getRelativeCutoffWithAi(), s.getMinCardsWithAi());
     }
 
     /**
@@ -384,17 +384,19 @@ public class IssueMatchingAgent {
                                              NoticeCallBudget budget) {
         Set<String> aiPicks = null;
         String aiStatus = CardShortlister.AI_OFF;
+        boolean parseFallback = false;
         if (shortlistAiEnabled() && shortlistTitleAgent != null && shortlistTitleAgent.available()) {
             ShortlistTitleAgent.Picks picks = shortlistTitleAgent.pickCards(cards, noticeType, text, noticeId, budget);
             if (picks != null) {
                 aiPicks = picks.cardIds();
                 aiStatus = CardShortlister.AI_USED;
+                parseFallback = picks.parseFallback();
             } else {
                 aiStatus = CardShortlister.AI_SKIPPED;
             }
         }
         return CardShortlister.shortlist(cards, noticeType, StageResolver.resolve(noticeType, text), text, shortlistOptions(),
-                aiPicks, aiStatus);
+                aiPicks, aiStatus).withAiParseFallback(parseFallback);
     }
 
     /**

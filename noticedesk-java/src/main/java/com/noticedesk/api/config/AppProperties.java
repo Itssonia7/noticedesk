@@ -88,9 +88,6 @@ public class AppProperties {
         /** The variable step returns a short JSON object (a few values per issue). */
         private Integer maxTokensTemplateVariables = 2000;
         private Integer maxTokensTemplateVariablesRetry = 4000;
-        /** The shortlist title pass returns a short list of card ids. */
-        private Integer maxTokensShortlist = 1500;
-        private Integer maxTokensShortlistRetry = 3000;
 
         /** Per-notice spend cap (INR) across all v7 model calls; once reached, remaining AI issues are left to the partner. */
         private Double maxCostInrPerNotice = 60.0;
@@ -122,7 +119,10 @@ public class AppProperties {
             return v != null ? v.trim() : "";
         }
 
-        /** max_tokens for a v7 agent key; {@code retry} = the higher cap used after a max_tokens stop. */
+        /**
+         * max_tokens for a v7 agent key; {@code retry} = the higher cap used after a max_tokens stop. The shortlist
+         * title pass reads its caps from {@code matching.shortlist}: use {@link AppProperties#maxTokensForAgent}.
+         */
         public int maxTokensForAgent(String agent, boolean retry) {
             return switch (agent) {
                 case "matching" -> orDefault(retry ? maxTokensMatchingRetry : maxTokensMatching, retry ? 20000 : 12000);
@@ -130,7 +130,6 @@ public class AppProperties {
                 case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 24000 : 16000);
                 case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 24000 : 16000);
                 case TEMPLATE_VARIABLES -> orDefault(retry ? maxTokensTemplateVariablesRetry : maxTokensTemplateVariables, retry ? 4000 : 2000);
-                case SHORTLIST -> orDefault(retry ? maxTokensShortlistRetry : maxTokensShortlist, retry ? 3000 : 1500);
                 default -> retry ? 16000 : 8000;
             };
         }
@@ -202,6 +201,14 @@ public class AppProperties {
             private int minCards = 15;
             /** Run the AI title pass ({@code ShortlistTitleAgent}) and add its picks to the label picks. */
             private boolean aiTitles = true;
+            /** Relative cut-off of the label scoring when the AI title pass returned at least one card. */
+            private double relativeCutoffWithAi = 0.5;
+            /** Min-cards top-up of the label scoring when the AI title pass returned at least one card. */
+            private int minCardsWithAi = 8;
+            /** max_tokens of the AI title pass (thinking tokens count against it). */
+            private Integer titleMaxTokens = 6000;
+            /** max_tokens of the AI title pass retry after a max_tokens stop. */
+            private Integer titleRetryMaxTokens = 9000;
         }
     }
 
@@ -350,6 +357,19 @@ public class AppProperties {
         private String model = "";
         private double similarityThreshold = 0.70;
         private int outputDimensionality = 1536;
+    }
+
+    /**
+     * max_tokens for a v7 agent key: {@code matching.shortlist.title-max-tokens} / {@code title-retry-max-tokens}
+     * for the shortlist title pass, else {@link Llm#maxTokensForAgent}.
+     */
+    public int maxTokensForAgent(String agent, boolean retry) {
+        if (Llm.SHORTLIST.equals(agent)) {
+            Matching.Shortlist s = matching != null ? matching.getShortlist() : null;
+            Integer v = s == null ? null : retry ? s.getTitleRetryMaxTokens() : s.getTitleMaxTokens();
+            return v != null && v > 0 ? v : retry ? 9000 : 6000;
+        }
+        return llm.maxTokensForAgent(agent, retry);
     }
 
     public String modelForAgent(String agent, String provider) {

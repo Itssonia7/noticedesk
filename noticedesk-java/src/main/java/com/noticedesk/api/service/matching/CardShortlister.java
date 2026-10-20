@@ -20,7 +20,8 @@ import java.util.regex.Pattern;
  *       df the number of cards carrying it ({@link LabelIndex}); a pool card scores the sum of the weights of its
  *       distinct keywords found in the notice. Kept: every card scoring at least {@code relativeCutoff} x the best
  *       score; when that keeps fewer than {@code minCards}, the top {@code minCards} by score (positive scores
- *       only);</li>
+ *       only). When the AI title pass named at least one card, the stricter {@code relativeCutoffWithAi} /
+ *       {@code minCardsWithAi} apply instead (the AI reads by meaning what labels catch by section);</li>
  *   <li><b>union</b>: full cards = label picks + AI picks + the NOT THIS IF siblings of the AI picks that are inside
  *       the stage pool. Any other sibling a full card names ("use NDK-xxx") is listed by title only
  *       ({@link Shortlist#titlesOnly()}), so the matcher can still name it as an alternate;</li>
@@ -51,17 +52,33 @@ public final class CardShortlister {
     /** Defaults of {@code matching.shortlist.relative-cutoff} / {@code matching.shortlist.min-cards}. */
     public static final double DEFAULT_RELATIVE_CUTOFF = 0.35;
     public static final int DEFAULT_MIN_CARDS = 15;
+    /** Defaults of {@code matching.shortlist.relative-cutoff-with-ai} / {@code min-cards-with-ai}. */
+    public static final double DEFAULT_RELATIVE_CUTOFF_WITH_AI = 0.5;
+    public static final int DEFAULT_MIN_CARDS_WITH_AI = 8;
 
     /** Card stage that passes every notice type. */
     static final String STAGE_OTHER = "other";
 
-    /** Scoring thresholds. */
-    public record Options(double relativeCutoff, int minCards) {
-        public static final Options DEFAULT = new Options(DEFAULT_RELATIVE_CUTOFF, DEFAULT_MIN_CARDS);
+    /** Scoring thresholds: without AI picks, and when the AI title pass named at least one card. */
+    public record Options(double relativeCutoff, int minCards, double relativeCutoffWithAi, int minCardsWithAi) {
+        public static final Options DEFAULT = new Options(DEFAULT_RELATIVE_CUTOFF, DEFAULT_MIN_CARDS,
+                DEFAULT_RELATIVE_CUTOFF_WITH_AI, DEFAULT_MIN_CARDS_WITH_AI);
 
         public Options {
             if (!(relativeCutoff >= 0) || relativeCutoff > 1) relativeCutoff = DEFAULT_RELATIVE_CUTOFF;
             if (minCards < 0) minCards = DEFAULT_MIN_CARDS;
+            if (!(relativeCutoffWithAi >= 0) || relativeCutoffWithAi > 1) relativeCutoffWithAi = DEFAULT_RELATIVE_CUTOFF_WITH_AI;
+            if (minCardsWithAi < 0) minCardsWithAi = DEFAULT_MIN_CARDS_WITH_AI;
+        }
+
+        /** The same thresholds with or without AI picks. */
+        public Options(double relativeCutoff, int minCards) {
+            this(relativeCutoff, minCards, relativeCutoff, minCards);
+        }
+
+        /** The thresholds that apply when the AI title pass named at least one card. */
+        Options withAi() {
+            return new Options(relativeCutoffWithAi, minCardsWithAi, relativeCutoffWithAi, minCardsWithAi);
         }
     }
 
@@ -170,12 +187,24 @@ public final class CardShortlister {
     /**
      * Shortlist and how it was built: the full cards (catalogue order), the cards listed by title only, the level,
      * the catalogue and stage-pool sizes, the label picks and AI picks (raw sets: they may overlap), the number of
-     * siblings added in full, the AI pass status ({@link #AI_USED} / {@link #AI_OFF} / {@link #AI_SKIPPED}) and the
-     * notice keys the stage filter read.
+     * siblings added in full, the AI pass status ({@link #AI_USED} / {@link #AI_OFF} / {@link #AI_SKIPPED}), the
+     * notice keys the stage filter read, and whether the AI picks came from an answer whose JSON could not be read.
      */
     public record Shortlist(List<IssueCard> cards, List<IssueCard> titlesOnly, String level, int catalogueSize, int poolSize,
                             Set<String> labelPicks, Set<String> aiPicks, int siblingCount, String aiStatus,
-                            List<String> noticeKeys) {
+                            List<String> noticeKeys, boolean aiParseFallback) {
+
+        public Shortlist(List<IssueCard> cards, List<IssueCard> titlesOnly, String level, int catalogueSize, int poolSize,
+                         Set<String> labelPicks, Set<String> aiPicks, int siblingCount, String aiStatus,
+                         List<String> noticeKeys) {
+            this(cards, titlesOnly, level, catalogueSize, poolSize, labelPicks, aiPicks, siblingCount, aiStatus, noticeKeys, false);
+        }
+
+        /** This shortlist, marked as built from AI picks found in an unreadable answer (flag {@code warn:shortlist_ai_parse_fallback}). */
+        public Shortlist withAiParseFallback(boolean fallback) {
+            return new Shortlist(cards, titlesOnly, level, catalogueSize, poolSize, labelPicks, aiPicks, siblingCount, aiStatus,
+                    noticeKeys, fallback);
+        }
 
         public Shortlist {
             cards = cards != null ? List.copyOf(cards) : List.of();
@@ -240,6 +269,7 @@ public final class CardShortlister {
             d.put("ai_status", aiStatus);
             d.put("siblings", siblingCount);
             d.put("titles_only", titlesOnly.size());
+            if (aiParseFallback) d.put("ai_parse_fallback", true);
             return d;
         }
     }
@@ -292,14 +322,15 @@ public final class CardShortlister {
         Set<String> poolIds = new HashSet<>();
         for (IssueCard c : pool.cards()) poolIds.add(c.cardId());
 
-        // step 2: label scoring
-        Set<String> labelPicks = labelPicks(pool.cards(), LabelIndex.of(all), Labels.in(text), opt);
-
-        // step 3: union with the AI picks and their in-pool siblings
         Set<String> ai = new LinkedHashSet<>();
         if (aiPicks != null) {
             for (String id : aiPicks) if (id != null && byId.containsKey(id)) ai.add(id);
         }
+
+        // step 2: label scoring (stricter thresholds when the AI title pass named a card)
+        Set<String> labelPicks = labelPicks(pool.cards(), LabelIndex.of(all), Labels.in(text), ai.isEmpty() ? opt : opt.withAi());
+
+        // step 3: union with the AI picks and their in-pool siblings
         Set<String> picked = new HashSet<>(labelPicks);
         picked.addAll(ai);
         Set<String> siblings = siblingIds(cardsOf(ai, byId), byId.keySet());

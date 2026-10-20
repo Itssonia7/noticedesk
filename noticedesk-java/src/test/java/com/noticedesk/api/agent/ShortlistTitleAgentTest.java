@@ -12,6 +12,7 @@ import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
 import com.noticedesk.api.service.matching.CardShortlister;
 import com.noticedesk.api.service.matching.CatalogueService;
+import com.noticedesk.api.testsupport.LiveRunGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -32,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ShortlistTitleAgentTest {
 
     private static final String MODEL = "test-matching-model";
-    private static final String SYSTEM_START = "You are given a GST department document";
+    private static final String SYSTEM_START = "# Shortlist title pass (v1.1)";
 
     private final ObjectMapper om = new ObjectMapper();
     private AppProperties props;
@@ -85,9 +86,13 @@ class ShortlistTitleAgentTest {
     @Test
     void systemPromptIsTheInstructionsPlusOneTitleLinePerCardInIdOrder() {
         String system = agent().systemPrompt(CARDS);
-        assertTrue(system.startsWith(SYSTEM_START + " and a numbered list of issue cards (id and one-line title)."), system);
+        assertTrue(system.startsWith(SYSTEM_START + "\n\nYou are given a GST department document and a numbered list of issue cards"
+                + " (id and one-line title)."), system);
         assertTrue(system.contains("Be generous: include a card when in doubt; the full cards will be read later."));
-        assertTrue(system.contains("Return JSON {\"card_ids\": [...]}."));
+        assertTrue(system.contains("never leave one out to keep the list short"));
+        assertTrue(system.contains("Your answer must be ONLY this JSON object: {\"card_ids\": [\"NDK-001\", \"NDK-002\"]}"));
+        assertTrue(system.contains("card ids only: no titles, no reasons"));
+        assertTrue(system.contains("no markdown fences"));
         assertTrue(system.endsWith("ISSUE CARDS (id | title):\n"
                 + "NDK-001 | Vague show cause notice: no grounds stated\n"
                 + "NDK-002 | ITC not in GSTR-2B (Section 16(2)(aa))\n"
@@ -119,7 +124,96 @@ class ShortlistTitleAgentTest {
     // ------------------------------------------------------------------ the call
 
     @Test
-    void liveCallUsesLowEffort1500TokensTheCacheAndTheShortlistStep() {
+    void tolerantParserIdsOnlyFencedAndRegexFallback() {
+        Set<String> ids = Set.of("NDK-001", "NDK-002", "NDK-003", "NDK-AI-001");
+        ShortlistTitleAgent.Parsed plain = agent().parseTolerant("{\"card_ids\": [\"NDK-002\", \"NDK-AI-001\"]}", ids);
+        assertEquals(List.of("NDK-002", "NDK-AI-001"), List.copyOf(plain.ids()));
+        assertFalse(plain.fallback());
+        ShortlistTitleAgent.Parsed fenced = agent().parseTolerant("```json\n{\"card_ids\": [\"NDK-003\"]}\n```", ids);
+        assertEquals(Set.of("NDK-003"), fenced.ids());
+        assertFalse(fenced.fallback(), "a fenced object is still JSON");
+        ShortlistTitleAgent.Parsed broken = agent().parseTolerant(
+                "{\"card_ids\": [\"NDK-003\" (Section 16(5)), \"NDK-999\", NDK-001, \"NDK-003\"", ids);
+        assertEquals(List.of("NDK-003", "NDK-001"), List.copyOf(broken.ids()), "catalogue ids by regex, first-seen order");
+        assertTrue(broken.fallback());
+        ShortlistTitleAgent.Parsed wrongKey = agent().parseTolerant("{\"cards\": [{\"id\": \"NDK-002\", \"title\": \"t\"}]}", ids);
+        assertEquals(Set.of("NDK-002"), wrongKey.ids());
+        assertTrue(wrongKey.fallback());
+        assertThrows(IllegalArgumentException.class, () -> agent().parseTolerant("no ids at all", ids));
+        assertThrows(IllegalArgumentException.class, () -> agent().parseTolerant("NDK-999 only", ids), "ids outside the catalogue");
+    }
+
+    @Test
+    void regexFallbackPicksAreUsedAndMarked() {
+        answer("Cards: NDK-003, NDK-001");
+        ShortlistTitleAgent.Picks picks = agent().pickCards(CARDS, "scn_73", NOTICE, null, null);
+        assertEquals(List.of("NDK-003", "NDK-001"), List.copyOf(picks.cardIds()));
+        assertTrue(picks.parseFallback());
+        Mockito.verify(llm, Mockito.times(1)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(),
+                Mockito.any(), Mockito.anyBoolean());
+    }
+
+    @Test
+    void maxTokensComeFromTheShortlistSettings() {
+        assertEquals(6000, props.maxTokensForAgent(ShortlistTitleAgent.AGENT_KEY, false));
+        assertEquals(9000, props.maxTokensForAgent(ShortlistTitleAgent.AGENT_KEY, true));
+        assertEquals(props.getLlm().maxTokensForAgent("matching", false), props.maxTokensForAgent("matching", false));
+        AppProperties yml = com.noticedesk.api.testsupport.TestAppProperties.fromApplicationYml();
+        if (System.getenv("MATCHING_SHORTLIST_TITLE_MAX_TOKENS") == null) {
+            assertEquals(6000, yml.maxTokensForAgent(ShortlistTitleAgent.AGENT_KEY, false));
+        }
+        if (System.getenv("MATCHING_SHORTLIST_TITLE_RETRY_MAX_TOKENS") == null) {
+            assertEquals(9000, yml.maxTokensForAgent(ShortlistTitleAgent.AGENT_KEY, true));
+        }
+
+        props.getMatching().getShortlist().setTitleMaxTokens(7000);
+        props.getMatching().getShortlist().setTitleRetryMaxTokens(11000);
+        Mockito.when(llm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
+                .thenReturn(truncated(), new LlmResponse("{\"card_ids\": [\"NDK-002\"]}", MODEL, "anthropic", 4000, 900));
+        assertEquals(Set.of("NDK-002"), agent().pickCards(CARDS, "scn_73", NOTICE, null, null).cardIds());
+        ArgumentCaptor<Integer> maxTokens = ArgumentCaptor.forClass(Integer.class);
+        Mockito.verify(llm, Mockito.times(2)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), maxTokens.capture(),
+                Mockito.any(), Mockito.anyBoolean());
+        assertEquals(List.of(7000, 11000), maxTokens.getAllValues());
+    }
+
+    private static LlmResponse truncated() {
+        return new LlmResponse("{\"card_ids\": [\"NDK-0", MODEL, "anthropic", 4000, 6000, "max_tokens");
+    }
+
+    @Test
+    void aTruncatedCallRepairedByTheRetryIsNotCountedByTheFailureGuard() {
+        ApiUsageLogService real = new ApiUsageLogService(null, props);
+        LiveRunGuard guard = new LiveRunGuard(name -> null);
+        guard.attach(real);
+        List<ApiUsageLogService.CallOutcome> outcomes = new ArrayList<>();
+        real.addOutcomeListener(outcomes::add);
+        usage = real;
+        LlmResponse ok = new LlmResponse("{\"card_ids\": [\"NDK-002\"]}", MODEL, "anthropic", 4000, 900);
+
+        // notice 1: truncated, then usable: one usable outcome, no failure counted
+        Mockito.when(llm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
+                .thenReturn(truncated(), ok);
+        assertNotNull(agent().pickCards(CARDS, "scn_73", NOTICE, null, null));
+        assertEquals(List.of(new ApiUsageLogService.CallOutcome("shortlist", 2, true, null)), outcomes);
+        assertEquals(0, guard.consecutiveFailures());
+
+        // notice 2: truncated twice: the pair is one failure, the run goes on (labels only)
+        Mockito.reset(llm);
+        Mockito.when(llm.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
+                .thenReturn(truncated());
+        assertNull(agent().pickCards(CARDS, "scn_73", NOTICE, null, null));
+        assertEquals(new ApiUsageLogService.CallOutcome("shortlist", 2, false, LlmResponse.FAILURE_MAX_TOKENS), outcomes.get(1));
+        assertEquals(1, guard.consecutiveFailures());
+
+        // notice 3 fails as well: two failed notices in a row stop the run
+        assertThrows(LlmFatalException.class, () -> agent().pickCards(CARDS, "scn_73", NOTICE, null, null));
+        Mockito.verify(llm, Mockito.times(4)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(),
+                Mockito.any(), Mockito.anyBoolean());
+    }
+
+    @Test
+    void liveCallUsesLowEffort6000TokensTheCacheAndTheShortlistStep() {
         answer("{\"card_ids\": [\"NDK-003\", \"NDK-001\"]}");
 
         ShortlistTitleAgent.Picks picks = agent().pickCards(CARDS, "scn_73", NOTICE, UUID.randomUUID(), null);
@@ -130,7 +224,7 @@ class ShortlistTitleAgentTest {
         ArgumentCaptor<String> effort = ArgumentCaptor.forClass(String.class);
         Mockito.verify(llm).generateWithEffort(Mockito.startsWith(SYSTEM_START), Mockito.startsWith("NOTICE TYPE: scn_73"),
                 Mockito.eq(MODEL), maxTokens.capture(), effort.capture(), Mockito.eq(true));
-        assertEquals(1500, maxTokens.getValue());
+        assertEquals(6000, maxTokens.getValue());
         assertEquals("low", effort.getValue());
         Mockito.verify(factory).getLlmForAgent("shortlist");
         Mockito.verify(usage).logCall(Mockito.any(), Mockito.eq(MODEL), Mockito.eq("shortlist"), Mockito.eq(1), Mockito.any(), Mockito.any());
@@ -148,7 +242,7 @@ class ShortlistTitleAgentTest {
 
     @Test
     void unusableOutputTwiceDegradesToNull() {
-        answer("I think NDK-001 applies.");
+        answer("I think the first card applies.");
         assertNull(agent().pickCards(CARDS, "scn_73", NOTICE, null, null));
         Mockito.verify(llm, Mockito.times(2)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(),
                 Mockito.any(), Mockito.anyBoolean());
@@ -243,6 +337,15 @@ class ShortlistTitleAgentTest {
         MatchingResult r = matcher().matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null);
         assertTrue(r.shortlist().aiSkipped());
         assertEquals(CardShortlister.LEVEL_STAGE, r.shortlist().level(), "one label pick: the stage-pool floor");
+    }
+
+    @Test
+    void matcherMarksRegexFallbackPicks() {
+        answer("NDK-001 and NDK-003 apply");
+        MatchingResult r = matcher().matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null);
+        assertEquals(CardShortlister.AI_USED, r.shortlist().aiStatus());
+        assertEquals(Set.of("NDK-001", "NDK-003"), r.shortlist().aiPicks());
+        assertTrue(r.shortlist().aiParseFallback());
     }
 
     @Test
