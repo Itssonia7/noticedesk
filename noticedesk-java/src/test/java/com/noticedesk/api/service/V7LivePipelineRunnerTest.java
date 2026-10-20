@@ -184,6 +184,9 @@ public class V7LivePipelineRunnerTest {
                 matchingAgent, jdbc, om, fillService, assemblyService, checkService,
                 partialAgent, newIssueAgent, highStakesAgent, citationAgent, variableAgent, props, usageLogService
         );
+        // REQUIRED: the pipeline is built by hand here, so Spring's setter injection does not run; without this call
+        // the post-matching stage correction (and the code defect card lookup) silently never runs in live tests
+        pipelineService.setCatalogueService(catalogueService);
 
         String envNotices = System.getenv("V7_LIVE_NOTICES");
         if (envNotices == null || envNotices.isBlank()) {
@@ -353,6 +356,7 @@ public class V7LivePipelineRunnerTest {
                     .filter(c -> !c.passed() && "block".equals(c.severity())).count();
             statusByNotice.put(noticeId, "DRAFTED (" + blocking + " blocking checks failed)");
             System.out.printf("Citation Statuses: %s%n", citStatuses.isEmpty() ? "None" : citStatuses);
+            System.out.printf("Shortlist: %s%n", shortlistLine(result.checkResults()));
             System.out.printf("Flags: %s%n", allFlags);
             System.out.printf("Saved draft to: %s%n", draftFile.getAbsolutePath());
 
@@ -399,6 +403,28 @@ public class V7LivePipelineRunnerTest {
                 .replace("<td>", "").replace("</td>", " | ")
                 .replace(" | \n", "\n")
                 .replaceAll("<[^>]+>", "");
+    }
+
+    /**
+     * The "Shortlist:" line of a notice from the {@code info:shortlist} flag details, e.g. "23 cards (level keyword;
+     * stage 61, keyword 19, siblings 4)", plus the widening when it ran; "none (full catalogue, shortlist off)"
+     * without the flag.
+     */
+    static String shortlistLine(List<DraftCheckResult> checkResults) {
+        Map<String, Object> d = null;
+        Map<String, Object> widened = null;
+        if (checkResults != null) {
+            for (DraftCheckResult c : checkResults) {
+                Object flag = c.details() != null ? c.details().get("flag") : null;
+                if (V7DraftingPipelineService.FLAG_SHORTLIST.equals(flag)) d = c.details();
+                if (V7DraftingPipelineService.FLAG_SHORTLIST_WIDENED.equals(flag)) widened = c.details();
+            }
+        }
+        if (d == null) return "none (full catalogue, shortlist off)";
+        String line = d.get("size") + " cards (level " + d.get("level") + "; stage " + d.get("stage") + ", keyword "
+                + d.get("keyword") + ", siblings " + d.get("siblings") + ")";
+        if (widened != null) line += "; widened to " + widened.get("full_size") + " cards for issue(s) " + widened.get("unmatched_issues");
+        return line;
     }
 
     /** The "Flags:" line of a notice: every failed check as "<check name>:<severity>". */

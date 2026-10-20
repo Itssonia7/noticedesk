@@ -170,6 +170,16 @@ public class AppProperties {
     @Data
     public static class Matching {
         private boolean allowDraftCards = false;
+        private Shortlist shortlist = new Shortlist();
+
+        @Data
+        public static class Shortlist {
+            /**
+             * Render only the cards a code shortlist keeps for the notice (card stages and statutory / form keywords
+             * against the notice text; see {@code CardShortlister}) instead of the whole catalogue.
+             */
+            private boolean enabled = true;
+        }
     }
 
     @Data

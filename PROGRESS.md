@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 17-10-2026 (procedural defect checks in code merged into matching; stage-sibling tie-break; issue flags visible)
+Last updated: 20-10-2026 (code shortlist of catalogue cards per notice before matching; live runner wires the catalogue for stage correction)
 
 ---
 
@@ -704,8 +704,47 @@ or writer change; no LLM call added (the matcher's `defect_checks` stay as a sec
   one already primary elsewhere -> swap to the other; both free -> warn), `V7CodeDefectPipelineTest` (full pipeline:
   variable step on the renumbered issue, template fill, Section 07 rendering, Section 13 flags, runner flag line).
 
+## (b20) Code shortlist of catalogue cards before matching; runner wiring fix (20-10-2026)
+
+Why: every matching call carried all 269 cards. Plain code now picks the cards a notice can need and only those
+are rendered into the prompt. No model, cap or writer change; the matching prompt is v3.6.
+
+- **`CardShortlister`** (matching package, pure). Step 1 stage filter: the card's `stages` against a notice-key table
+  (`NOTICE_STAGES`, one place: scn_73 -> scn_73 + generic_scn; scn_74 -> scn_74 + generic_scn; drc_01a / asmt_10 ->
+  themselves + generic_scn; appeal / DRC-07 -> order_appeal, RFD-06 + refund, REG-05 + registration, MOV-09 +
+  inspection; REG-17 -> registration; REG-19 -> registration + order_appeal; refund / RFD-08 -> refund; DRC-13 /
+  DRC-22 / recovery letter -> recovery; MOV-07 / Section 129 / 130 -> inspection; ADT-01 -> audit). Keys come from
+  the detected notice type, the StageResolver response stage and the forms in the heading; their stages are
+  united. other / unknown / a type not in the table: no stage filter. A card with stage `other` passes everything.
+  Step 2 keyword filter on LABEL keywords only (sections, rules, forms, e-way bill, notifications, circulars; free
+  text ignored), normalised on both sides ("Sec." / "u/s" / spacing / hyphens / leading zeros); a section or rule
+  hit is exact at the keyword's sub-section level ("Section 16" hits 16(4); "Section 16(4)" does not hit 16(2)(c)).
+  Step 3 siblings named in kept cards' NOT THIS IF rules (one level). Step 4 floor: fewer than 3 -> stage filter
+  only (level `stage`), still fewer -> full catalogue (level `full`). Dynamic size, no cap, catalogue order.
+- **Matching agent**: `matching.shortlist.enabled` (**`MATCHING_SHORTLIST`**, default true). With a shortlist the
+  system prompt is the rules alone (cached) and the shortlisted cards go in the per-call user message before the
+  notice; with every card shown (shortlist off, level full, widening call) the catalogue stays in the cached system
+  prompt. The budget's worst-case pre-check uses that split. The catalogue hash is always the full catalogue's.
+- **Widening on miss**: shortlist level not full and an issue with status none on a substantive ground (the
+  new-issue writer's test) -> matching runs ONCE more on the full catalogue through the same budget and that result
+  is used (**`info:shortlist_widened`**: sizes, issue numbers). A failed / refused second call keeps the first result
+  with a partner note. Every shortlist adds **`info:shortlist`** {size, level, catalogue size, step counts} and one
+  Section 13 line; the live runner prints "Shortlist: 23 cards (level keyword; stage 61, keyword 19, siblings 4)".
+- **Runner fix**: `V7LivePipelineRunnerTest` built the pipeline by hand and never called `setCatalogueService`, so
+  the stage correction (and the code-defect card lookup) never ran in live tests. It is called now.
+- Dev seeds (20 cards, code only, no calls): notices 01 / 06 / 08 / 09 / 13 / 14 -> 3-4 cards (keyword); 02 / 03 /
+  04 / 07 / 10-12 / 15 -> 10-18 (stage); 05 -> full (dev card stage `rfd_08` is not in the table). Two answer-key
+  cards fall outside: notice 08 CARD-010 (no label keyword at all) and notice 13 CARD-004 (keyword "section 16(5)",
+  the defence; the notice cites 16(4) and CARD-003 names CARD-004 by text, not id). Both depend on the matcher
+  answering none (then widening fires) rather than forcing CARD-001 / CARD-003.
+- Tests: `CardShortlisterTest` (stage table, normalisation, sub-section exactness, forms, notifications, siblings,
+  floor levels, determinism), `V7ShortlistWideningTest` (widening with a stubbed matcher, no widening for a
+  non-substantive ground, failed widening kept, stage correction active only with a CatalogueService),
+  `CacheAwareCostEstimateTest` (prompt layout, rules as the cached prefix, full-catalogue hash).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn -o test`): **460 tests, 0 failures, 0 errors** on 20-10-2026 after (b20).
 - Offline unit suite (`mvn test`): **439 tests, 0 failures, 0 errors** on 17-10-2026 after (b19), `RealNoticesBatchRunnerTest`
   included (it passed); 409 after (b18) the same day. Before that: 364 tests (`RealNoticesBatchRunnerTest` excluded)
   on 16-10-2026 after (b17) (345 after (b16) the same day, 329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
@@ -737,7 +776,11 @@ or writer change; no LLM call added (the matcher's `defect_checks` stay as a sec
    `RealNoticesBatchRunnerTest.java`): decide whether to remove them and clean history.
 7. **Enable the privacy hook in every clone**: `git config core.hooksPath .githooks`.
 8. **Merge to main and switch `DRAFTING_PIPELINE=v7`** once items 1 to 5 are done.
-9. **Provisional templates**: review the first promoted templates (`reply_templates.status='provisional'`)
+9. **Shortlist misses on look-alike / phrase-only cards** (see b20): cards with no label keyword never pass the
+   keyword step, and a defence card whose keyword is the defence section (16(5)) is not hit by the department's
+   citation. Check the real catalogue's keywords and that NOT THIS IF rules name siblings by id; watch
+   `info:shortlist_widened` and wrong-card rates in the next live run.
+10. **Provisional templates**: review the first promoted templates (`reply_templates.status='provisional'`)
    and either set them 'active' (with the card) or retire them; set `INDIANKANOON_COST_INR_PER_*` from
    the IndianKanoon plan; run `CitationCheckRunnerTest` once the token exists.
 

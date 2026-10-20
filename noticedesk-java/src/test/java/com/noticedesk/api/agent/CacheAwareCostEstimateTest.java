@@ -237,6 +237,56 @@ class CacheAwareCostEstimateTest {
         assertEquals(64, PromptCacheRegistry.hash("x").length());
     }
 
+    /**
+     * Shortlist on (default): the system prompt is the rules alone, the shortlisted cards go in the per-call user
+     * message, the budget's cacheable prefix is the rules, and the catalogue hash is that of the full catalogue. With
+     * the shortlist off the full catalogue stays in the system prompt.
+     */
+    @Test
+    void shortlistLayout_rulesAreTheCachedPrefix_cardsArePerCall_hashIsTheFullCatalogue() {
+        List<com.noticedesk.api.model.matching.IssueCard> cards = new java.util.ArrayList<>();
+        for (int i = 1; i <= 6; i++) {
+            cards.add(new com.noticedesk.api.model.matching.IssueCard("T-00" + i, 1, "Title " + i, "summary", List.of(), null, null,
+                    List.of(i <= 4 ? "scn_73" : "scn_74"), List.of(i <= 3 ? "Section 16(2)(aa)" : "Section 54"), List.of(),
+                    null, "active", null, null, null));
+        }
+        CatalogueService catalogue = Mockito.spy(new CatalogueService(null, props, om));
+        Mockito.doReturn(cards).when(catalogue).getActiveCards();
+        IssueMatchingAgent agent = new IssueMatchingAgent(factory, catalogue, pricing, props, null, om);
+        org.mockito.ArgumentCaptor<String> system = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.ArgumentCaptor<String> user = org.mockito.ArgumentCaptor.forClass(String.class);
+        Mockito.when(llm.generateWithEffort(system.capture(), user.capture(), Mockito.eq(SONNET), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
+                .thenReturn(new LlmResponse(MATCHING_JSON, SONNET, "anthropic", 600, 1500, "end_turn", 5000, 0));
+        String notice = "Show Cause Notice under Section 73\n1. ITC denied under Section 16(2)(aa).";
+
+        NoticeCallBudget budget = new NoticeCallBudget(Integer.MAX_VALUE, inr("100"), pricing);
+        MatchingResult r = agent.matchNoticeWithOcrText(notice, "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget);
+
+        assertEquals("keyword", r.shortlist().level());
+        assertEquals(List.of("T-001", "T-002", "T-003"), r.shortlist().cardIds());
+        assertFalse(system.getValue().contains("CARD_ID:"), "no card in the cached system prompt");
+        assertTrue(user.getValue().contains("Total Cards: 3"), user.getValue());
+        assertTrue(user.getValue().contains("CARD_ID: T-003") && !user.getValue().contains("CARD_ID: T-004"));
+        assertTrue(user.getValue().indexOf("CARD_ID:") < user.getValue().indexOf("FULL NOTICE OCR TEXT"), "cards before the notice");
+        assertEquals(catalogue.getCatalogueHash(catalogue.renderCatalogueCompactText(cards)), r.catalogueHash(), "hash of all 6 cards");
+        // the budget priced and recorded the rules alone as the cacheable prefix
+        assertTrue(pricing.promptCache().isWarm(SONNET, PromptCacheRegistry.hash(system.getValue())));
+        assertEquals(5000, pricing.promptCache().measuredTokens(SONNET, PromptCacheRegistry.hash(system.getValue())));
+
+        // the widening call renders every card: the catalogue goes back into the cached system prompt
+        MatchingResult full = agent.matchNoticeWithOcrText(notice, "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget, true);
+        assertTrue(full.shortlist().isFull());
+        assertTrue(system.getValue().contains("Total Cards: 6"));
+        assertFalse(user.getValue().contains("CARD_ID:"));
+
+        // shortlist off: no shortlist record, the whole catalogue in the system prompt
+        props.getMatching().getShortlist().setEnabled(false);
+        MatchingResult off = agent.matchNoticeWithOcrText(notice, "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget);
+        assertNull(off.shortlist());
+        assertTrue(system.getValue().contains("Total Cards: 6"));
+        assertEquals(r.catalogueHash(), off.catalogueHash());
+    }
+
     private IssueMatchingAgent matcher() {
         CatalogueService catalogue = Mockito.mock(CatalogueService.class);
         Mockito.when(catalogue.getActiveCards()).thenReturn(List.of());

@@ -51,8 +51,8 @@ class MatchingPromptRulesTest {
 
     @Test
     void agentLoadsTheV3Prompt_andV1V2StayUntouched() throws IOException {
-        assertEquals("issue_matching_v3_5", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
-        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.5 is edited in place in the v3 file");
+        assertEquals("issue_matching_v3_6", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.6 is edited in place in the v3 file");
         String v1 = resource("/prompts/issue_matching_v1.md");
         assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
         assertFalse(v1.contains("alternates"));
@@ -62,12 +62,22 @@ class MatchingPromptRulesTest {
         assertFalse(v2.contains("\"kind\""), "v2 has no issue kind");
         assertFalse(v2.contains("Step 1b"), "v2 has no visible-defect step");
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.5)"));
-        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.5 version");
-        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.5 version");
-        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.5 version");
-        assertFalse(v3.contains("Matching Agent (v3.3)"), "the heading carries the v3.5 version");
-        assertFalse(v3.contains("Matching Agent (v3.4)"), "the heading carries the v3.5 version");
+        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.6)"));
+        assertFalse(v3.contains("Matching Agent (v3.5)"), "the heading carries the v3.6 version");
+        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.6 version");
+        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.6 version");
+        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.6 version");
+        assertFalse(v3.contains("Matching Agent (v3.3)"), "the heading carries the v3.6 version");
+        assertFalse(v3.contains("Matching Agent (v3.4)"), "the heading carries the v3.6 version");
+    }
+
+    /** v3.6: the catalogue in the prompt is a code shortlist; a ground no shown card fits is none, never forced. */
+    @Test
+    void v36SaysTheCatalogueIsAShortlist() throws IOException {
+        String v3 = resource(PROMPT);
+        assertTrue(v3.contains("The catalogue below is a shortlist chosen by code for this notice from a larger catalogue"));
+        assertTrue(v3.contains("Cards not shown exist."));
+        assertTrue(v3.contains("never force a fit onto a shown card"));
     }
 
     /**

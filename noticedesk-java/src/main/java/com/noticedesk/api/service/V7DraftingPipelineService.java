@@ -44,6 +44,7 @@ import com.noticedesk.api.service.matching.ReplyAssemblyService.AiIssueContent;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledReplyResult;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledSection;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.HighStakesContent;
+import com.noticedesk.api.service.matching.CardShortlister;
 import com.noticedesk.api.service.matching.StageDetector;
 import com.noticedesk.api.service.matching.StageResolver;
 import com.noticedesk.api.service.matching.StageResolver.ResponseStage;
@@ -118,6 +119,11 @@ public class V7DraftingPipelineService {
     public static final String FLAG_STAGE_CORRECTED = "info:stage_corrected";
     /** Draft flag (warn): a primary card's response stage differs from the input document's and no single sibling exists. */
     public static final String FLAG_STAGE_MISMATCH = "warn:stage_mismatch";
+
+    /** Draft flag (info): the matching prompt carried a code shortlist of the catalogue; details size, level, step counts. */
+    public static final String FLAG_SHORTLIST = "info:shortlist";
+    /** Draft flag (info): a substantive ground matched no shortlisted card, so matching ran once more on the full catalogue. */
+    public static final String FLAG_SHORTLIST_WIDENED = "info:shortlist_widened";
 
     /** Card read access for the post-matching stage correction; null (tests) skips the correction. */
     private CatalogueService catalogueService;
@@ -329,11 +335,16 @@ public class V7DraftingPipelineService {
             throw new MatchingFailedException(matchingFailure,
                     matchingResult != null && matchingResult.flags() != null && matchingResult.flags().contains(IssueMatchingAgent.FLAG_COST_CAP));
         }
+        List<String> notes = new ArrayList<>();
+        Map<String, Map<String, Object>> stageFlagDetails = new LinkedHashMap<>();
+
+        // ---- Stage 1 widening: a substantive ground the shortlist could not place is matched once more on every card
+        matchingResult = widenOnShortlistMiss(matchingResult, fullOcrText, noticeType, tenantId, noticeId, budget, notes,
+                stageFlags, stageFlagDetails);
+
         List<MatchedIssue> issues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
         log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
                 issues.stream().map(i -> i.status() + i.cardIds()).toList(), matchingResult.catalogueHash());
-
-        List<String> notes = new ArrayList<>();
 
         // ---- Stage 1a0: procedural defects tested by code (limitation, premature s.74, DIN, signature, DRC-01A reply
         // time), merged into the matched issues; the matcher's defect_checks stay as a second opinion
@@ -345,7 +356,6 @@ public class V7DraftingPipelineService {
         }
 
         // ---- Stage 1a: response-stage correction of the primary cards by code, before any template is selected
-        Map<String, Map<String, Object>> stageFlagDetails = new LinkedHashMap<>();
         List<MatchedIssue> stageCorrected = applyStageCorrection(issues, triageType != null ? triageType.toString() : null,
                 fullOcrText, noticeId, notes, stageFlags, stageFlagDetails);
         if (stageCorrected != issues) {
@@ -671,6 +681,60 @@ public class V7DraftingPipelineService {
         log.info("Template variable step for notice {}: {} issue(s) asked, {} value(s) returned, {} not found",
                 noticeId, requests.size(), result.valueCount(), result.notFound().size());
         return changed ? merged : issues;
+    }
+
+    /**
+     * Stage 1 widening. When the matcher saw a shortlist (level not {@code full}) and an issue came back with status
+     * none on a substantive ground (one the new-issue writer would be called for: {@link #lacksSubstantiveGround} is
+     * false), matching runs ONCE more on the full catalogue through the same budget and that result is used (flag
+     * {@link #FLAG_SHORTLIST_WIDENED}). A second result that failed (refused by the cost cap, unusable output) is not
+     * used: the first result stays, with a partner note. Every shortlist gets {@link #FLAG_SHORTLIST} and one partner
+     * note line. Returns {@code mr} itself when no second call was made or it was not used.
+     */
+    MatchingResult widenOnShortlistMiss(MatchingResult mr, String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
+                                        NoticeCallBudget budget, List<String> notes, Set<String> flags,
+                                        Map<String, Map<String, Object>> flagDetails) {
+        CardShortlister.Shortlist first = mr != null ? mr.shortlist() : null;
+        if (first == null) return mr;
+        flags.add(FLAG_SHORTLIST);
+        flagDetails.put(FLAG_SHORTLIST, first.details());
+        notes.add("Catalogue shortlist: " + first.size() + " of " + first.catalogueSize() + " cards shown to the matcher (level "
+                + first.level() + "; stage " + first.stageCount() + ", keyword " + first.keywordCount() + ", siblings "
+                + first.siblingCount() + ").");
+        if (first.isFull()) return mr;
+        List<Integer> misses = new ArrayList<>();
+        for (MatchedIssue issue : mr.issues() != null ? mr.issues() : List.<MatchedIssue>of()) {
+            if ("none".equalsIgnoreCase(issue.status()) && issue.primaryCardId() == null && !lacksSubstantiveGround(issue)) {
+                misses.add(issue.issueNo());
+            }
+        }
+        if (misses.isEmpty()) return mr;
+
+        log.info("Notice {}: issue(s) {} matched no shortlisted card on a substantive ground; matching again on the full catalogue",
+                noticeId, misses);
+        MatchingResult widened = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, budget, true);
+        String failure = matchingFailure(widened);
+        if (failure != null) {
+            log.warn("Notice {}: widened matching gave no usable result ({}); the shortlist result is kept", noticeId, failure);
+            notes.add("Issue(s) " + misses + " matched no shortlisted card; matching on the full catalogue gave no usable result ("
+                    + HtmlSanitizer.sanitize(failure) + "), so the shortlist result is kept: partner to check those grounds.");
+            return mr;
+        }
+        int fullSize = widened.shortlist() != null ? widened.shortlist().size() : first.catalogueSize();
+        long stillNone = widened.issues() == null ? 0 : widened.issues().stream()
+                .filter(i -> "none".equalsIgnoreCase(i.status()) && i.primaryCardId() == null && !lacksSubstantiveGround(i)).count();
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("shortlist_size", first.size());
+        details.put("shortlist_level", first.level());
+        details.put("full_size", fullSize);
+        details.put("unmatched_issues", List.copyOf(misses));
+        details.put("unmatched_after_widening", stillNone);
+        flags.add(FLAG_SHORTLIST_WIDENED);
+        flagDetails.put(FLAG_SHORTLIST_WIDENED, details);
+        notes.add("Matching widened: issue(s) " + misses + " matched no card among the " + first.size()
+                + " shortlisted, so matching ran again on all " + fullSize + " cards and that result is used ("
+                + stillNone + " substantive ground(s) still without a card).");
+        return widened;
     }
 
     /** Minimum days between a DRC-01A and its reply date (drafting.defects.drc01a-min-days, DEFECT_DRC01A_MIN_DAYS). */

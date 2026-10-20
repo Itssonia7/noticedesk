@@ -11,7 +11,9 @@ import com.noticedesk.api.service.llm.LlmFatalException;
 import com.noticedesk.api.service.llm.LlmProvider;
 import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.service.llm.NoticeCallBudget;
+import com.noticedesk.api.service.matching.CardShortlister;
 import com.noticedesk.api.service.matching.CatalogueService;
+import com.noticedesk.api.service.matching.StageResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ClassPathResource;
@@ -181,7 +183,9 @@ public class IssueMatchingAgent {
      * The matcher's result. {@code defectChecks} (v3.4) is the model's {@code defect_checks} object in its own order,
      * empty before v3.4 and when the object is absent; it is reported, never stored. {@code paraStance} (v3.5) maps
      * each {@code para_map} key to one of {@link #PARA_STANCES}; empty before v3.5 and when the object is absent, in
-     * which case the para-wise reply keeps its earlier wording.
+     * which case the para-wise reply keeps its earlier wording. {@code shortlist} records the catalogue cards the
+     * prompt carried and how code chose them; null when the whole catalogue was rendered without a shortlist (feature
+     * off) and for results not made by the agent.
      */
     public record MatchingResult(
             MatchedNoticeInfo notice,
@@ -195,11 +199,21 @@ public class IssueMatchingAgent {
             int cacheReadTokens,
             int cacheWriteTokens,
             Map<String, DefectCheck> defectChecks,
-            Map<String, String> paraStance
+            Map<String, String> paraStance,
+            CardShortlister.Shortlist shortlist
     ) {
         public MatchingResult {
             if (defectChecks == null) defectChecks = Map.of();
             if (paraStance == null) paraStance = Map.of();
+        }
+
+        /** A result without a shortlist record (the v3.5 shape). */
+        public MatchingResult(MatchedNoticeInfo notice, List<MatchedIssue> issues, Map<String, List<Integer>> paraMap,
+                              List<String> missingOrDoubtful, List<String> flags, String catalogueHash,
+                              int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens,
+                              Map<String, DefectCheck> defectChecks, Map<String, String> paraStance) {
+            this(notice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens, outputTokens,
+                    cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, null);
         }
 
         /** A result without the v3.5 paragraph stances (the v3.4 shape). */
@@ -222,13 +236,13 @@ public class IssueMatchingAgent {
         /** The same result with other issues (the template variable step merges extracted values into the facts). */
         public MatchingResult withIssues(List<MatchedIssue> newIssues) {
             return new MatchingResult(notice, newIssues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
-                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance);
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, shortlist);
         }
 
         /** The same result with other issues and paragraph map (the code defect merge renumbers the issues). */
         public MatchingResult withIssues(List<MatchedIssue> newIssues, Map<String, List<Integer>> newParaMap) {
             return new MatchingResult(notice, newIssues, newParaMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
-                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance);
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, shortlist);
         }
     }
 
@@ -268,7 +282,8 @@ public class IssueMatchingAgent {
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
     /**
-     * Version of the live matching prompt (v3.5: a {@code para_stance} object gives every {@code para_map} paragraph
+     * Version of the live matching prompt (v3.6: the catalogue in the prompt is a code shortlist for the notice; a
+     * ground no shown card fits is status none, never a forced fit; v3.5: a {@code para_stance} object gives every {@code para_map} paragraph
      * one of admitted / denied / explained / not_applicable, so the para-wise reply no longer denies factual
      * recitals; v3.4: a mandatory ten-item {@code defect_checks} object replaces the
      * free-form defect scan, one defect ground per "defect" result; consequential interest / penalty with a dedicated
@@ -282,7 +297,7 @@ public class IssueMatchingAgent {
      * date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one primary card + alternates
      * and grounds-first splitting).
      */
-    public static final String PROMPT_VERSION = "issue_matching_v3_5";
+    public static final String PROMPT_VERSION = "issue_matching_v3_6";
     /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
     public static final String PROMPT_FILE = "issue_matching_v3";
 
@@ -321,9 +336,41 @@ public class IssueMatchingAgent {
      */
     public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
                                                  NoticeCallBudget budget) {
+        return matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, budget, false);
+    }
+
+    /** {@code matching.shortlist.enabled} (env MATCHING_SHORTLIST, default true). */
+    boolean shortlistEnabled() {
+        return properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null
+                || properties.getMatching().getShortlist().isEnabled();
+    }
+
+    /**
+     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID, NoticeCallBudget)}; {@code fullCatalogue} true
+     * renders every visible card (the pipeline's widening call after a shortlist miss). When a shortlist narrower than
+     * the catalogue is rendered, the system prompt is the rules alone (cached across notices) and the shortlisted cards
+     * go in the per-call user message before the notice; when every card is rendered (shortlist off, level full, the
+     * widening call) the catalogue stays in the cached system prompt as before. The catalogue hash is always that of
+     * the FULL visible catalogue, so results stay comparable.
+     */
+    public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
+                                                 NoticeCallBudget budget, boolean fullCatalogue) {
         List<IssueCard> cards = catalogueService.getActiveCards();
-        String compactCatalogueText = catalogueService.renderCatalogueCompactText(cards);
-        String catalogueHash = catalogueService.getCatalogueHash(compactCatalogueText);
+        String fullCatalogueText = catalogueService.renderCatalogueCompactText(cards);
+        String catalogueHash = catalogueService.getCatalogueHash(fullCatalogueText);
+
+        boolean shortlistOn = shortlistEnabled();
+        CardShortlister.Shortlist shortlist = null;
+        String compactCatalogueText = fullCatalogueText;
+        if (shortlistOn) {
+            String text = fullOcrText != null ? fullOcrText : "";
+            shortlist = fullCatalogue ? CardShortlister.full(cards)
+                    : CardShortlister.shortlist(cards, noticeType, StageResolver.resolve(noticeType, text), text);
+            if (!shortlist.isFull()) compactCatalogueText = catalogueService.renderCatalogueCompactText(shortlist.cards());
+            log.info("matching_shortlist noticeId={} {} of {} catalogue cards, notice keys {}, rendered {} chars (full catalogue {} chars)",
+                    noticeId, shortlist.describe(), shortlist.catalogueSize(), shortlist.noticeKeys(),
+                    compactCatalogueText.length(), fullCatalogueText.length());
+        }
 
         Set<String> validCardIds = new HashSet<>();
         for (IssueCard card : cards) {
@@ -334,8 +381,17 @@ public class IssueMatchingAgent {
         String modelName = properties.getLlm().getModelMatching();
 
         String promptTemplate = loadPromptTemplate();
-        String systemPrompt = promptTemplate + "\n\n" + compactCatalogueText;
-        String userPrompt = "NOTICE TYPE FROM TRIAGE: " + noticeType + "\n\nFULL NOTICE OCR TEXT:\n" + fullOcrText;
+        String noticePart = "NOTICE TYPE FROM TRIAGE: " + noticeType + "\n\nFULL NOTICE OCR TEXT:\n" + fullOcrText;
+        String systemPrompt;
+        String userPrompt;
+        if (shortlist != null && !shortlist.isFull()) {
+            // the rules are the cached prefix; the cards differ per notice, so they are sent fresh with the notice
+            systemPrompt = promptTemplate;
+            userPrompt = compactCatalogueText + "\n\n" + noticePart;
+        } else {
+            systemPrompt = promptTemplate + "\n\n" + compactCatalogueText;
+            userPrompt = noticePart;
+        }
 
         String effort = properties.getLlm().effortForAgent("matching");
         boolean raiseCap = false;
@@ -358,7 +414,8 @@ public class IssueMatchingAgent {
             jsonNode = null;
 
             // hard cap: worst case of exactly this call (prompt and max_tokens as sent) must fit the budget;
-            // the system prompt (rules + catalogue) is the cacheable prefix, the notice text the per-call part
+            // the system prompt is the cacheable prefix (the rules; plus the full catalogue when every card is shown),
+            // the user prompt the per-call part (the notice; plus the shortlisted cards when a shortlist is shown)
             NoticeCallBudget.Prompt shape = NoticeCallBudget.Prompt.of(modelName, systemPrompt, activeUserPrompt);
             String refusal = budget != null ? budget.refusalReason("matching", shape, maxTokens) : null;
             if (refusal != null) {
@@ -394,7 +451,7 @@ public class IssueMatchingAgent {
             if (budget != null) {
                 budget.recordCall("matching", response, modelName, shape);
             } else if (apiUsageLogService != null && apiUsageLogService.promptCache() != null) {
-                // no budget: still remember the catalogue's measured token count and that it is cached now
+                // no budget: still remember the prefix's measured token count and that it is cached now
                 int cacheTokens = response.cacheWriteTokensOrZero() + response.cacheReadTokensOrZero();
                 if (cacheTokens > 0) apiUsageLogService.promptCache().recordUse(modelName, shape.prefixHash(), cacheTokens);
             }
@@ -564,7 +621,7 @@ public class IssueMatchingAgent {
             }
 
             return new MatchingResult(noticeInfo, issues, paraMap, missingOrDoubtful, List.copyOf(resultFlags), catalogueHash,
-                    totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens, defectChecks, paraStance);
+                    totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens, defectChecks, paraStance, shortlist);
 
         } catch (Exception e) {
             log.error("matching_parse_failed error={}", e.getMessage(), e);
