@@ -1,5 +1,7 @@
 package com.noticedesk.api.testsupport;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.model.matching.IssueCard;
 import com.noticedesk.api.service.matching.CatalogueService;
 import org.springframework.core.io.ClassPathResource;
@@ -13,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -130,6 +133,59 @@ public final class PrivateSetSupport {
     public static String dummyCardRefusal(JdbcTemplate jdbc, String privateSeedDir) {
         if (privateSeedDir == null || privateSeedDir.isBlank()) return null;
         return dummyCardRefusal(dummyCardIds(jdbc), privateSeedDir);
+    }
+
+    /**
+     * The issue cards of a private-seed {@code cards} folder ({@code *.json}, each one card object or an array of
+     * them, the {@code issue_cards} column names as {@code PrivateSeedLoader} reads them; status defaults to draft),
+     * in the catalogue's load order (card_id ascending, version descending). Read without a database, for the
+     * zero-cost shortlist dry run. A file that is not valid JSON or a card without {@code card_id} is reported by
+     * file number only, never by name or content.
+     */
+    public static List<IssueCard> readCards(File cardsDir, ObjectMapper om) {
+        List<IssueCard> out = new ArrayList<>();
+        File[] files = cardsDir != null ? cardsDir.listFiles((d, name) -> name.toLowerCase(Locale.ROOT).endsWith(".json")) : null;
+        if (files == null) return out;
+        Arrays.sort(files);
+        for (int i = 0; i < files.length; i++) {
+            JsonNode node;
+            try {
+                node = om.readTree(files[i]);
+            } catch (IOException e) {
+                throw new IllegalStateException("cards file #" + (i + 1) + " is not valid JSON (" + e.getClass().getSimpleName() + ")");
+            }
+            List<JsonNode> items = new ArrayList<>();
+            if (node.isArray()) node.forEach(items::add);
+            else items.add(node);
+            for (JsonNode c : items) {
+                String id = text(c, "card_id");
+                if (id == null || id.isBlank()) throw new IllegalStateException("cards file #" + (i + 1) + " has a card without card_id");
+                String status = text(c, "status");
+                out.add(new IssueCard(id.trim(), c.path("version").asInt(1), text(c, "title"), text(c, "summary"),
+                        list(c, "sections"), text(c, "period_from"), text(c, "period_to"), list(c, "stages"), list(c, "keywords"),
+                        list(c, "not_this_if"), text(c, "template_id"), status == null || status.isBlank() ? "draft" : status,
+                        null, null, null, text(c, "source_ai_section_id")));
+            }
+        }
+        out.sort(Comparator.comparing(IssueCard::cardId).thenComparing(Comparator.comparingInt(IssueCard::version).reversed()));
+        return out;
+    }
+
+    private static String text(JsonNode n, String key) {
+        JsonNode v = n.get(key);
+        return v == null || v.isNull() ? null : v.asText();
+    }
+
+    private static List<String> list(JsonNode n, String key) {
+        JsonNode v = n.get(key);
+        if (v == null || v.isNull()) return List.of();
+        List<String> out = new ArrayList<>();
+        if (v.isArray()) {
+            for (JsonNode e : v) if (!e.isNull()) out.add(e.asText());
+        } else {
+            out.add(v.asText());
+        }
+        return List.copyOf(out);
     }
 
     /** One line with the number of cards matching will see and the catalogue hash the matcher reports. */

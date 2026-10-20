@@ -262,7 +262,8 @@ class CacheAwareCostEstimateTest {
         NoticeCallBudget budget = new NoticeCallBudget(Integer.MAX_VALUE, inr("100"), pricing);
         MatchingResult r = agent.matchNoticeWithOcrText(notice, "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget);
 
-        assertEquals("keyword", r.shortlist().level());
+        assertEquals("labels", r.shortlist().level(), "no title agent wired: labels only, no warn");
+        assertEquals("off", r.shortlist().aiStatus());
         assertEquals(List.of("T-001", "T-002", "T-003"), r.shortlist().cardIds());
         assertFalse(system.getValue().contains("CARD_ID:"), "no card in the cached system prompt");
         assertTrue(user.getValue().contains("Total Cards: 3"), user.getValue());
@@ -273,10 +274,22 @@ class CacheAwareCostEstimateTest {
         assertTrue(pricing.promptCache().isWarm(SONNET, PromptCacheRegistry.hash(system.getValue())));
         assertEquals(5000, pricing.promptCache().measuredTokens(SONNET, PromptCacheRegistry.hash(system.getValue())));
 
-        // the widening call renders every card: the catalogue goes back into the cached system prompt
-        MatchingResult full = agent.matchNoticeWithOcrText(notice, "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget, true);
+        assertFalse(user.getValue().contains("KEYWORDS:"), "a shortlist carries no keywords line");
+
+        // the widening call renders the stage pool (the four scn_73 cards), never the full catalogue
+        MatchingResult widened = agent.matchNoticeWithOcrText(notice, "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget, true);
+        assertEquals("stage", widened.shortlist().level());
+        assertEquals(List.of("T-001", "T-002", "T-003", "T-004"), widened.shortlist().cardIds());
+        assertFalse(system.getValue().contains("CARD_ID:"));
+        assertTrue(user.getValue().contains("Total Cards: 4"), user.getValue());
+
+        // a widening whose stage pool is the whole catalogue (no stage filter): the catalogue goes back into the
+        // cached system prompt
+        MatchingResult full = agent.matchNoticeWithOcrText("A letter with no references", "unknown", UUID.randomUUID(),
+                UUID.randomUUID(), budget, true);
         assertTrue(full.shortlist().isFull());
         assertTrue(system.getValue().contains("Total Cards: 6"));
+        assertTrue(system.getValue().contains("KEYWORDS:"), "the full catalogue keeps its keywords");
         assertFalse(user.getValue().contains("CARD_ID:"));
 
         // shortlist off: no shortlist record, the whole catalogue in the system prompt

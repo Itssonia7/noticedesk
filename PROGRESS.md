@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 20-10-2026 (code shortlist of catalogue cards per notice before matching; live runner wires the catalogue for stage correction)
+Last updated: 20-10-2026 (shortlist v2: rarity-weighted label scoring, AI title pre-pass, siblings by title, stage-pool widening; shortlist dry-run tool)
 
 ---
 
@@ -742,9 +742,44 @@ are rendered into the prompt. No model, cap or writer change; the matching promp
   non-substantive ground, failed widening kept, stage correction active only with a CatalogueService),
   `CacheAwareCostEstimateTest` (prompt layout, rules as the cached prefix, full-catalogue hash).
 
+## (b21) Shortlist v2: label scoring + AI title pass; stage-pool widening; dry-run tool (20-10-2026)
+
+Why: the first live run of (b20) gave 66 to 128 cards per notice (target 15 to 40) and cost more than the full
+cached catalogue. Measured causes and the fix for each are in open item 9. Matching prompt is v3.7.
+
+- **`CardShortlister` v2** (pure). Stage pool as before, plus letter patterns for documents with no form name and
+  no known type (Section 62 / ASMT-13, "recovery", Section 79 -> recovery; Section 129 / 130 / MOV-07 ->
+  inspection; Section 65 / ADT-01 -> audit; REG-17 / 19, RFD-08 / 06, DRC-13 / 22), earliest match in the text wins.
+  Label scoring: each label keyword weighs ln(N / df) (df = cards carrying it, cached per catalogue); a card scores
+  the sum over its DISTINCT keywords found; kept = score >= `relative-cutoff` x best (0.35), topped up to
+  `min-cards` (15) by score, positive scores only. Full cards = label picks + AI picks + in-pool NOT THIS IF
+  siblings of the AI picks; every other named sibling goes in a closing "OTHER CARDS NAMED BY NOT THIS IF RULES"
+  block by id and title. Floor: fewer than 3 full cards -> stage pool.
+- **`ShortlistTitleAgent`** (new, `prompts/shortlist_titles_v1.md`): one call per notice before matching; system
+  prompt = instructions + `NDK-001 | <title>` for the whole catalogue (cached prefix), user message = notice type +
+  text; `LLM_MODEL_SHORTLIST` (blank: matching model), effort `LLM_EFFORT_SHORTLIST` low, max_tokens
+  `LLM_MAX_TOKENS_SHORTLIST` 1500; budgeted through `WriterCall`. `MATCHING_SHORTLIST_AI` (default true). A failed
+  or refused call -> labels only + **`warn:shortlist_ai_skipped`**.
+- **Matcher**: shortlist render drops the KEYWORDS line (the full-catalogue render keeps it, so the hash is
+  unchanged). A full match whose primary is a titles-only card is lowered to partial (issue flag
+  `titles_only_primary`).
+- **Widening**: one more call on the STAGE POOL only (full catalogue only when the pool is the catalogue), never when
+  the shortlist already is the pool; refused by the budget -> no call, **`info:shortlist_widening_skipped`**.
+- Log / runner line: "Shortlist: 27 cards (pool 128; labels 19, ai 14, siblings 6; titles-only 11)". Both live
+  runners wire the title agent and price-check its model.
+- **`ShortlistDryRunTest`** (skipped unless `SHORTLIST_DRY_RUN_DIR` is set; zero cost unless
+  `SHORTLIST_DRY_RUN_AI=true`): per notice pool, label picks, full / titles-only counts and each answer-key card as
+  full / titles-only / MISSED; summary median / p90 / max size and recall. Card JSON read by
+  `PrivateSetSupport.readCards`. Prints ids and counts only.
+- Tests: `CardShortlisterTest` (weights, distinct keywords, cutoff, min-cards, letter stages, union, titles-only
+  block, render), `ShortlistTitleAgentTest` (prompt, parser, settings, degrade, budget refusal, fatal errors, union
+  in the matcher, titles-only primary), `V7ShortlistWideningTest` (stage-pool widening, skip flag, ai-skipped flag),
+  `MatchingPromptRulesTest` (v3.7), `ShortlistDryRunTest` offline run on a synthetic set.
+
 ## (c) Verification
 
-- Offline unit suite (`mvn -o test`): **460 tests, 0 failures, 0 errors** on 20-10-2026 after (b20).
+- Offline unit suite (`mvn -o test`): **492 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 20-10-2026 after (b21); 460 after (b20).
 - Offline unit suite (`mvn test`): **439 tests, 0 failures, 0 errors** on 17-10-2026 after (b19), `RealNoticesBatchRunnerTest`
   included (it passed); 409 after (b18) the same day. Before that: 364 tests (`RealNoticesBatchRunnerTest` excluded)
   on 16-10-2026 after (b17) (345 after (b16) the same day, 329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
@@ -776,10 +811,15 @@ are rendered into the prompt. No model, cap or writer change; the matching promp
    `RealNoticesBatchRunnerTest.java`): decide whether to remove them and clean history.
 7. **Enable the privacy hook in every clone**: `git config core.hooksPath .githooks`.
 8. **Merge to main and switch `DRAFTING_PIPELINE=v7`** once items 1 to 5 are done.
-9. **Shortlist misses on look-alike / phrase-only cards** (see b20): cards with no label keyword never pass the
-   keyword step, and a defence card whose keyword is the defence section (16(5)) is not hit by the department's
-   citation. Check the real catalogue's keywords and that NOT THIS IF rules name siblings by id; watch
-   `info:shortlist_widened` and wrong-card rates in the next live run.
+9. **Shortlist size and recall** (measured on the private catalogue, 269 cards, and 308 test notices; v2 in b21):
+   "any label hit" kept most cards because common keywords are in nearly every notice (APL-01 on 46 cards, DRC-07
+   36, DRC-01 28, ASMT-10 25, Section 74 23, Section 73 18, GSTR-3B 17); NOT THIS IF siblings added 28 to 61 full
+   cards; letters with no form name passed all 269 through the stage filter; widening fell back to all 269 (INR 46)
+   and the per-notice cap refused it. Any label-only filter misses about 7% of the right cards (the notice cites the
+   allegation section, e.g. 73, the card is about the defence section, e.g. 77; procedural cards such as "vague SCN",
+   "no section cited", "no DIN" lack the keyword because the defect exists), hence the AI title pass. Next: run
+   `ShortlistDryRunTest` (labels, free), then with `SHORTLIST_DRY_RUN_AI=true` on a few notices, and tune
+   `relative-cutoff` / `min-cards` before the next live run.
 10. **Provisional templates**: review the first promoted templates (`reply_templates.status='provisional'`)
    and either set them 'active' (with the card) or retire them; set `INDIANKANOON_COST_INR_PER_*` from
    the IndianKanoon plan; run `CitationCheckRunnerTest` once the token exists.

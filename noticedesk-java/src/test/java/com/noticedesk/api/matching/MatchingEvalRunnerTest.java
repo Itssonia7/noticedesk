@@ -76,16 +76,24 @@ class MatchingEvalRunnerTest {
             props.getLlm().getAnthropic().setWorkspaceId(wsId);
         }
         props.getLlm().setModelMatching(matchingModel);
+        // shortlist title pass: LLM_MODEL_SHORTLIST, else the matching model
+        props.getLlm().setModelShortlist(guard.model("LLM_MODEL_SHORTLIST", props.getLlm().getModelShortlist()));
         props.getMatching().setAllowDraftCards(true); // Allow dev draft cards for test bench evaluation
 
-        if (!new ApiUsageLogService(null, props).hasPrice(matchingModel)) {
-            // an unpriced model would make the cost caps blind
-            fail("REFUSED: no price configured for model " + matchingModel + " under noticedesk.pricing.models in application.yml");
+        for (String m : new java.util.LinkedHashSet<>(List.of(matchingModel, props.getLlm().shortlistModel()))) {
+            if (!new ApiUsageLogService(null, props).hasPrice(m)) {
+                // an unpriced model would make the cost caps blind
+                fail("REFUSED: no price configured for model " + m + " under noticedesk.pricing.models in application.yml");
+            }
         }
         guard.printSettings(System.out);
         System.out.println("Matching effort=" + props.getLlm().effortForAgent("matching")
                 + " max_tokens=" + props.getLlm().maxTokensForAgent("matching", false)
                 + " retry_max_tokens=" + props.getLlm().maxTokensForAgent("matching", true));
+        System.out.println("Shortlist title pass: ai=" + props.getMatching().getShortlist().isAiTitles()
+                + " model=" + props.getLlm().shortlistModel()
+                + " effort=" + props.getLlm().effortForAgent(AppProperties.Llm.SHORTLIST)
+                + " max_tokens=" + props.getLlm().maxTokensForAgent(AppProperties.Llm.SHORTLIST, false));
 
         org.springframework.jdbc.datasource.DriverManagerDataSource ds = new org.springframework.jdbc.datasource.DriverManagerDataSource();
         ds.setDriverClassName("org.postgresql.Driver");
@@ -102,6 +110,7 @@ class MatchingEvalRunnerTest {
         this.guard = guard;
         this.pricing = usageLogService;
         IssueMatchingAgent agent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, null, objectMapper);
+        agent.setShortlistTitleAgent(new com.noticedesk.api.agent.ShortlistTitleAgent(props, objectMapper, usageLogService, llmFactory));
 
         // The private catalogue (PRIVATE_SEED_DIR set) must never be evaluated next to the dummy cards
         String privateSeedDir = envOrProperty("PRIVATE_SEED_DIR");

@@ -88,6 +88,8 @@ noticedesk:
     model-partial-drafting: ${LLM_MODEL_PARTIAL_DRAFTING:}
     model-new-issue: ${LLM_MODEL_NEW_ISSUE:}
     model-high-stakes: ${LLM_MODEL_HIGH_STAKES:}
+    # Shortlist title pass (ShortlistTitleAgent); empty = the matching model
+    model-shortlist: ${LLM_MODEL_SHORTLIST:}
     # Thinking effort (output_config.effort: low|medium|high|xhigh|max), sent only to the models in
     # anthropic.effort-models. An empty value sends no effort (the model's own default applies).
     effort-matching: ${LLM_EFFORT_MATCHING:medium}
@@ -97,6 +99,7 @@ noticedesk:
     # Template variable extraction (TemplateVariableAgent, one call per notice after matching, on the
     # partial-drafting model): copies the values of card-specific template variables out of the notice text.
     effort-template-variables: ${LLM_EFFORT_TEMPLATE_VARIABLES:low}
+    effort-shortlist: ${LLM_EFFORT_SHORTLIST:low}
     # max_tokens per agent. Thinking tokens count against it, so it must leave room for thinking + JSON.
     # A max_tokens stop is treated as a failure and retried once with the *-retry cap.
     max-tokens-matching: ${LLM_MAX_TOKENS_MATCHING:12000}
@@ -109,6 +112,8 @@ noticedesk:
     max-tokens-high-stakes-retry: ${LLM_MAX_TOKENS_HIGH_STAKES_RETRY:24000}
     max-tokens-template-variables: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES:2000}
     max-tokens-template-variables-retry: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES_RETRY:4000}
+    max-tokens-shortlist: ${LLM_MAX_TOKENS_SHORTLIST:1500}
+    max-tokens-shortlist-retry: ${LLM_MAX_TOKENS_SHORTLIST_RETRY:3000}
     # Per-notice cost control. Once either limit is reached, the remaining AI issues get a
     # [[PARTNER: ...]] placeholder and a block flag instead of another model call.
     max-cost-inr-per-notice: ${LLM_MAX_COST_INR_PER_NOTICE:60}
@@ -138,9 +143,15 @@ noticedesk:
   matching:
     allow-draft-cards: ${ALLOW_DRAFT_CARDS:false}
     shortlist:
-      # true: the matching prompt carries only the cards a code shortlist keeps for the notice (stages +
-      # statutory / form keywords, dynamic size, widened to the full catalogue on a substantive miss)
+      # true: the matching prompt carries only the cards a shortlist keeps for the notice (stage pool, rarity-
+      # weighted label scoring, AI title pass; widened once to the stage pool on a substantive miss)
       enabled: ${MATCHING_SHORTLIST:true}
+      # keep every card scoring at least this fraction of the best label score in the stage pool
+      relative-cutoff: ${MATCHING_SHORTLIST_RELATIVE_CUTOFF:0.35}
+      # fewer kept than this: the top cards by label score up to this many
+      min-cards: ${MATCHING_SHORTLIST_MIN_CARDS:15}
+      # AI title pass over the one-line card titles; a failed call degrades to labels only
+      ai-titles: ${MATCHING_SHORTLIST_AI:true}
   catalogue:
     # Provisional content = 'draft' issue cards promoted from an approved AI issue section (card ids
     # NDK-AI-nnn or a new draft version of an existing card) and their 'provisional' reply templates.

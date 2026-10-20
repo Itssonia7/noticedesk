@@ -51,8 +51,8 @@ class MatchingPromptRulesTest {
 
     @Test
     void agentLoadsTheV3Prompt_andV1V2StayUntouched() throws IOException {
-        assertEquals("issue_matching_v3_6", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
-        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.6 is edited in place in the v3 file");
+        assertEquals("issue_matching_v3_7", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3", com.noticedesk.api.agent.IssueMatchingAgent.PROMPT_FILE, "v3.7 is edited in place in the v3 file");
         String v1 = resource("/prompts/issue_matching_v1.md");
         assertTrue(v1.contains("Assign up to 2-3 `card_ids` per issue"));
         assertFalse(v1.contains("alternates"));
@@ -62,22 +62,40 @@ class MatchingPromptRulesTest {
         assertFalse(v2.contains("\"kind\""), "v2 has no issue kind");
         assertFalse(v2.contains("Step 1b"), "v2 has no visible-defect step");
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.6)"));
-        assertFalse(v3.contains("Matching Agent (v3.5)"), "the heading carries the v3.6 version");
-        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.6 version");
-        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.6 version");
-        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.6 version");
-        assertFalse(v3.contains("Matching Agent (v3.3)"), "the heading carries the v3.6 version");
-        assertFalse(v3.contains("Matching Agent (v3.4)"), "the heading carries the v3.6 version");
+        assertTrue(v3.contains("# System Prompt: GST Issue Matching Agent (v3.7)"));
+        assertFalse(v3.contains("Matching Agent (v3.6)"), "the heading carries the v3.7 version");
+        assertFalse(v3.contains("Matching Agent (v3.5)"), "the heading carries the v3.7 version");
+        assertFalse(v3.contains("Matching Agent (v3)\n"), "the heading carries the v3.7 version");
+        assertFalse(v3.contains("Matching Agent (v3.1)"), "the heading carries the v3.7 version");
+        assertFalse(v3.contains("Matching Agent (v3.2)"), "the heading carries the v3.7 version");
+        assertFalse(v3.contains("Matching Agent (v3.3)"), "the heading carries the v3.7 version");
+        assertFalse(v3.contains("Matching Agent (v3.4)"), "the heading carries the v3.7 version");
     }
 
     /** v3.6: the catalogue in the prompt is a code shortlist; a ground no shown card fits is none, never forced. */
     @Test
     void v36SaysTheCatalogueIsAShortlist() throws IOException {
         String v3 = resource(PROMPT);
-        assertTrue(v3.contains("The catalogue below is a shortlist chosen by code for this notice from a larger catalogue"));
+        assertTrue(v3.contains("The catalogue below is a shortlist chosen for this notice from a larger catalogue"));
         assertTrue(v3.contains("Cards not shown exist."));
         assertTrue(v3.contains("never force a fit onto a shown card"));
+    }
+
+    /**
+     * v3.7: the shortlist comes from label scoring plus an AI title pass, cards carry no KEYWORDS line, and siblings
+     * named by NOT THIS IF rules but not shown are listed by title only: alternates or a reason for partial / none,
+     * never the primary of a full match.
+     */
+    @Test
+    void v37TitlesOnlyCardsAreNeverThePrimaryOfAFullMatch() throws IOException {
+        String v3 = resource(PROMPT);
+        assertTrue(v3.contains("by how rare the sections, rules, forms and notifications the notice cites are among the cards, and by a quick reading of the card titles against the notice"));
+        assertTrue(v3.contains("`KEYWORDS` (in the full catalogue only; a shortlist omits them)"));
+        assertTrue(v3.contains("The shortlist may end with a block \"OTHER CARDS NAMED BY NOT THIS IF RULES (not shown in full)\" listing sibling cards by id and title only"));
+        assertTrue(v3.contains("a card listed only by title may be named in `alternates`, or may be the reason the status is `\"partial\"` or `\"none\"`, but it is never the primary card of a `\"full\"` match."));
+        assertTrue(v3.contains(com.noticedesk.api.service.matching.CatalogueService.TITLES_ONLY_HEADING.replace(":", "")),
+                "the prompt names the block by the heading the renderer writes");
+        assertFalse(v3.contains("shortlist chosen by code"), "the v3.6 wording is gone");
     }
 
     /**

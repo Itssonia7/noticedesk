@@ -116,10 +116,35 @@ public class CatalogueService {
         return allowDraft || (includeProvisional && card.isProvisional());
     }
 
+    /** Heading of the block that lists, by title only, the siblings NOT THIS IF rules name but the shortlist does not show. */
+    public static final String TITLES_ONLY_HEADING = "OTHER CARDS NAMED BY NOT THIS IF RULES (not shown in full):";
+
     /**
-     * Renders loaded cards into a byte-identical compact text block for Anthropic prompt caching.
+     * Renders loaded cards into a byte-identical compact text block for Anthropic prompt caching (the full catalogue
+     * render: its text is what the catalogue hash is taken of, so it keeps the KEYWORDS line).
      */
     public String renderCatalogueCompactText(List<IssueCard> cards) {
+        return render(cards, true);
+    }
+
+    /**
+     * Renders a shortlist for the matcher: the full cards as {@link #renderCatalogueCompactText} without the KEYWORDS
+     * line (the keywords did their work in code), then, when {@code titlesOnly} is not empty, a closing block
+     * {@link #TITLES_ONLY_HEADING} with one {@code NDK-xxx | <title>} line per card.
+     */
+    public String renderShortlistText(List<IssueCard> cards, List<IssueCard> titlesOnly) {
+        String body = render(cards, false);
+        if (titlesOnly == null || titlesOnly.isEmpty()) return body;
+        List<IssueCard> sorted = new ArrayList<>(titlesOnly);
+        sorted.sort(Comparator.comparing(IssueCard::cardId));
+        StringBuilder sb = new StringBuilder(body).append("\n").append(TITLES_ONLY_HEADING).append("\n");
+        for (IssueCard c : sorted) {
+            sb.append(c.cardId()).append(" | ").append(c.title() != null ? c.title().replaceAll("\\s+", " ").trim() : "").append("\n");
+        }
+        return sb.toString();
+    }
+
+    private static String render(List<IssueCard> cards, boolean withKeywords) {
         if (cards == null || cards.isEmpty()) {
             return "ISSUE CATALOGUE: Empty";
         }
@@ -141,7 +166,7 @@ public class CatalogueService {
             if (card.stages() != null && !card.stages().isEmpty()) {
                 sb.append("STAGES: ").append(String.join(", ", card.stages())).append("\n");
             }
-            if (card.keywords() != null && !card.keywords().isEmpty()) {
+            if (withKeywords && card.keywords() != null && !card.keywords().isEmpty()) {
                 sb.append("KEYWORDS: ").append(String.join(", ", card.keywords())).append("\n");
             }
             if (card.notThisIf() != null && !card.notThisIf().isEmpty()) {

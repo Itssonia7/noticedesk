@@ -7,12 +7,14 @@ import com.noticedesk.api.service.matching.StageResolver.ResponseStage;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** Code shortlist of catalogue cards per notice (synthetic cards and notices only). */
+/** Shortlist v2 of catalogue cards per notice: stage pool, rarity-weighted label scoring, AI picks union (synthetic cards and notices only). */
 class CardShortlisterTest {
 
     private static IssueCard card(String id, List<String> stages, List<String> keywords, List<String> notThisIf) {
@@ -139,95 +141,256 @@ class CardShortlisterTest {
         assertTrue(CardShortlister.stageFits(card("T-4", List.of("order_appeal")), null));
     }
 
-    // ------------------------------------------------------------------ the four steps
+    // ------------------------------------------------------------------ stage pool for documents with no form name
 
-    private static final String SCN_73 = """
+    @Test
+    void lettersWithNoFormNameArePlacedByTheLetterPatterns() {
+        assertEquals(Set.of("recovery"), pool("other", "Letter regarding the outstanding dues. Action under Section 79 will follow."));
+        assertEquals(Set.of("recovery"), pool("unknown", "Sub: Recovery of arrears for 2019-20"));
+        assertEquals(Set.of("recovery"), pool("other", "Assessment under Section 62: you failed to file returns"));
+        assertEquals(Set.of("recovery"), pool("other", "best judgment assessment order in ASMT 13"));
+        assertEquals(Set.of("audit"), pool("other", "Intimation of audit under Section 65 of the CGST Act"));
+        assertEquals(Set.of("inspection"), pool("other", "x".repeat(2000) + " goods detained under Section 129"),
+                "the whole text is read, not only the heading");
+        assertEquals(Set.of("registration", "order_appeal"), pool("letter", "cancellation of registration, REG-19 enclosed"));
+        assertEquals(Set.of("refund"), pool("letter", "deficiency memo; see RFD-08 issued earlier"));
+        // the earliest pattern wins
+        assertEquals(Set.of("audit"), pool("other", "Audit under Section 65; recovery will be made under Section 79"));
+        // nothing to read: no stage filter
+        assertNull(pool("other", "Please appear for a personal hearing on 12.03.2024."));
+        // a document the type or heading already places is not re-read
+        assertEquals(Set.of("scn_73", "generic_scn"), pool("scn_73", "Show cause notice under Section 73; recovery under Section 79"));
+    }
+
+    /** The stages of the pool's cards for a catalogue of one card per stage; null when the pool is every card. */
+    private static Set<String> pool(String type, String text) {
+        List<String> stages = List.of("scn_73", "scn_74", "generic_scn", "drc_01a", "asmt_10", "order_appeal", "registration",
+                "refund", "recovery", "inspection", "audit");
+        List<IssueCard> cards = new ArrayList<>();
+        for (String st : stages) cards.add(card("S-" + st, List.of(st), "x"));
+        CardShortlister.StagePool p = CardShortlister.stagePool(cards, type, StageResolver.resolve(type, text), text);
+        if (p.noticeKeys().isEmpty()) {
+            assertEquals(cards.size(), p.size());
+            return null;
+        }
+        Set<String> out = new java.util.TreeSet<>();
+        for (IssueCard c : p.cards()) out.addAll(c.stages());
+        return out;
+    }
+
+    @Test
+    void otherStageCardsAlwaysPassThePool() {
+        List<IssueCard> cards = List.of(card("T-1", List.of("recovery"), "x"), card("T-2", List.of("other"), "x"),
+                card("T-3", List.of("scn_73"), "x"));
+        assertEquals(List.of("T-1", "T-2"), ids(CardShortlister.stagePool(cards, "other", null, "Section 79 recovery").cards()));
+    }
+
+    // ------------------------------------------------------------------ label scoring
+
+    private static final String NOTICE = """
             Show Cause Notice under Section 73 of the CGST Act, 2017
-            1. ITC of Rs. 1,00,000 availed in GSTR-3B is not reflected in GSTR-2B as required by Section 16(2)(aa).
-            Statutory reference: Sections 16(2)(aa), 73
+            1. ITC of Rs. 1,00,000 is not reflected in GSTR-2B as required by Section 16(2)(aa) read with Rule 36(4).
             """;
 
-    private static List<IssueCard> catalogue() {
+    /**
+     * Ten scn_73 cards: Section 73 on five (weight ln 2), Section 16(2)(aa) on two (ln 5), Rule 36(4) on one (ln 10).
+     * Scores against {@link #NOTICE}: T-01 = ln5 + ln10 = 3.91, T-02 = ln5 + ln2 = 2.30, T-03..T-06 = ln2 = 0.69,
+     * T-07..T-10 = 0.
+     */
+    private static List<IssueCard> scored() {
         return List.of(
-                card("T-001", List.of("scn_73"), List.of("Section 16(2)(aa)", "gstr-2b mismatch"), List.of("Not this if a Section 74 SCN (use T-002)")),
-                card("T-002", List.of("scn_74"), "Section 16(2)(aa)"),
-                card("T-003", List.of("scn_73", "scn_74"), "Section 16(4)"),
-                card("T-004", List.of("generic_scn"), "Section 73"),
-                card("T-005", List.of("order_appeal"), "Section 16(2)(aa)"),
-                card("T-006", List.of("other"), "GSTR-2B"),
-                card("T-007", List.of("scn_73"), "routine mismatch"),
-                card("T-008", List.of("refund"), "RFD-06"));
+                card("T-01", List.of("scn_73"), "Section 16(2)(aa)", "Rule 36(4)"),
+                card("T-02", List.of("scn_73"), "Section 16(2)(aa)", "Section 73", "Sec. 73 of the CGST Act"),
+                card("T-03", List.of("scn_73"), "Section 73"),
+                card("T-04", List.of("scn_73"), "Section 73"),
+                card("T-05", List.of("scn_73"), "Section 73"),
+                card("T-06", List.of("scn_73"), "Section 73"),
+                card("T-07", List.of("scn_73"), "Section 74"),
+                card("T-08", List.of("scn_73"), "Section 54"),
+                card("T-09", List.of("scn_73"), "routine mismatch"),
+                card("T-10", List.of("scn_73"), "Section 129"));
     }
 
     @Test
-    void stageThenKeywordThenSiblings() {
-        Shortlist s = CardShortlister.shortlist(catalogue(), "scn_73", ResponseStage.REPLY, SCN_73);
-        assertEquals(CardShortlister.LEVEL_KEYWORD, s.level());
-        assertEquals(8, s.catalogueSize());
-        assertEquals(5, s.stageCount(), "T-001, T-003, T-004, T-006, T-007");
-        assertEquals(3, s.keywordCount(), "T-001 (16(2)(aa)), T-004 (73), T-006 (GSTR-2B)");
-        assertEquals(1, s.siblingCount(), "T-002 named by T-001's NOT THIS IF");
-        assertEquals(List.of("T-001", "T-002", "T-004", "T-006"), s.cardIds(), "catalogue order");
-        assertFalse(s.cardIds().contains("T-003"), "Section 16(4) is not cited");
-        assertFalse(s.cardIds().contains("T-005"), "appeal-stage card");
-        assertEquals("4 cards (level keyword; stage 5, keyword 3, siblings 1)", s.describe());
+    void rareKeywordsWeighMoreAndDistinctKeywordsCountOnce() {
+        Map<String, Double> sc = CardShortlister.scores(scored(), scored(), NOTICE);
+        assertEquals(Math.log(5) + Math.log(10), sc.get("T-01"), 1e-9);
+        assertEquals(Math.log(5) + Math.log(2), sc.get("T-02"), 1e-9, "'Section 73' and 'Sec. 73 of the CGST Act' are one keyword");
+        assertEquals(Math.log(2), sc.get("T-03"), 1e-9);
+        assertEquals(0.0, sc.get("T-07"), 1e-9, "Section 74 is not cited");
+        assertEquals(0.0, sc.get("T-09"), 1e-9, "free-text keywords do not score");
     }
 
     @Test
-    void siblingsAreOneLevelOnly() {
-        List<IssueCard> cards = List.of(
-                card("T-101", List.of("scn_73"), List.of("Section 50"), List.of("use T-102")),
-                card("T-102", List.of("scn_73"), List.of("free text"), List.of("use T-103")),
-                card("T-103", List.of("scn_73"), "free text"),
-                card("T-104", List.of("scn_73"), "Section 50(3)"),
-                card("T-105", List.of("scn_73"), "Section 50(1)"));
-        Shortlist s = CardShortlister.shortlist(cards, "scn_73", null, "Interest under Section 50(3) and Section 50(1)");
-        assertEquals(List.of("T-101", "T-102", "T-104", "T-105"), s.cardIds());
-        assertEquals(1, s.siblingCount());
+    void keywordOnEveryCardWeighsNothing() {
+        List<IssueCard> cards = List.of(card("T-1", List.of("scn_73"), "Section 73"), card("T-2", List.of("scn_73"), "Section 73"));
+        assertEquals(Map.of("T-1", 0.0, "T-2", 0.0), CardShortlister.scores(cards, cards, NOTICE));
     }
 
     @Test
-    void floorDropsTheKeywordFilterThenUsesTheFullCatalogue() {
-        // keyword step keeps one card (T-001 + sibling T-002 = 2 < 3): stage level
+    void relativeCutoffKeepsCardsNearTheBestScore() {
+        // cutoff 0.35 x 3.91 = 1.37: T-01 and T-02 only (min-cards off)
+        Shortlist s = shortlist(scored(), new CardShortlister.Options(0.35, 0), null, CardShortlister.AI_OFF);
+        assertEquals(Set.of("T-01", "T-02"), s.labelPicks());
+        // a cutoff of 0.1 (0.39) also keeps the Section 73 cards
+        Shortlist low = shortlist(scored(), new CardShortlister.Options(0.1, 0), null, CardShortlister.AI_OFF);
+        assertEquals(Set.of("T-01", "T-02", "T-03", "T-04", "T-05", "T-06"), low.labelPicks());
+    }
+
+    @Test
+    void minCardsTopsUpByScorePositiveScoresOnly() {
+        // the cutoff keeps two; min-cards 3 adds the best of the rest (ties: catalogue order)
+        assertEquals(List.of("T-01", "T-02", "T-03"),
+                List.copyOf(shortlist(scored(), new CardShortlister.Options(0.35, 3), null, CardShortlister.AI_OFF).labelPicks()));
+        // the default (15) keeps every card with a positive score, never a zero-score card
+        Shortlist dflt = CardShortlister.shortlist(scored(), "scn_73", ResponseStage.REPLY, NOTICE);
+        assertEquals(List.of("T-01", "T-02", "T-03", "T-04", "T-05", "T-06"), dflt.cardIds());
+        assertEquals(CardShortlister.LEVEL_LABELS, dflt.level());
+        assertEquals(CardShortlister.AI_OFF, dflt.aiStatus());
+    }
+
+    @Test
+    void thresholdsComeFromTheProperties() {
+        com.noticedesk.api.config.AppProperties.Matching.Shortlist p = new com.noticedesk.api.config.AppProperties.Matching.Shortlist();
+        assertEquals(CardShortlister.DEFAULT_RELATIVE_CUTOFF, p.getRelativeCutoff());
+        assertEquals(CardShortlister.DEFAULT_MIN_CARDS, p.getMinCards());
+        assertTrue(p.isAiTitles());
+        assertEquals(CardShortlister.Options.DEFAULT, new CardShortlister.Options(Double.NaN, -1), "bad values fall back to the defaults");
+    }
+
+    private static Shortlist shortlist(List<IssueCard> cards, CardShortlister.Options opt, Set<String> ai, String aiStatus) {
+        return CardShortlister.shortlist(cards, "scn_73", ResponseStage.REPLY, NOTICE, opt, ai, aiStatus);
+    }
+
+    // ------------------------------------------------------------------ union with the AI picks; titles only
+
+    /**
+     * Label picks T-01 / T-02 (min-cards off); T-01 names T-07 and T-02 names T-20 (label-only siblings: titles
+     * only); the AI picks T-09 (no label), which names T-10 (in the pool: full) and T-30 (appeal stage: titles only),
+     * and T-31 (appeal stage, outside the pool: still full, the title pass read it by meaning).
+     */
+    private static List<IssueCard> unionCatalogue() {
+        List<IssueCard> cards = new ArrayList<>(scored());
+        cards.set(0, card("T-01", List.of("scn_73"), List.of("Section 16(2)(aa)", "Rule 36(4)"), List.of("Not this if X (use T-07)")));
+        cards.set(1, card("T-02", List.of("scn_73"), List.of("Section 16(2)(aa)", "Section 73"), List.of("use T-20")));
+        cards.set(8, card("T-09", List.of("scn_73"), List.of("vague grounds"), List.of("use T-10", "use T-30")));
+        cards.add(card("T-20", List.of("scn_73"), "Section 61"));
+        cards.add(card("T-30", List.of("order_appeal"), "Section 107"));
+        cards.add(card("T-31", List.of("order_appeal"), "Section 107(6)"));
+        return cards;
+    }
+
+    @Test
+    void unionOfLabelsAiAndTheAiPicksSiblingsInThePool() {
+        Shortlist s = shortlist(unionCatalogue(), new CardShortlister.Options(0.35, 0), new LinkedHashSet<>(List.of("T-09", "T-31", "NOPE")),
+                CardShortlister.AI_USED);
+        assertEquals(CardShortlister.LEVEL_HYBRID, s.level());
+        assertEquals(List.of("T-01", "T-02", "T-09", "T-10", "T-31"), s.cardIds(), "catalogue order");
+        assertEquals(Set.of("T-01", "T-02"), s.labelPicks());
+        assertEquals(Set.of("T-09", "T-31"), s.aiPicks(), "ids not in the catalogue are dropped");
+        assertEquals(1, s.siblingCount(), "T-10");
+        assertEquals(List.of("T-07", "T-20", "T-30"), s.titlesOnlyIds(),
+                "siblings of label-only picks, and an AI pick's sibling outside the pool, are listed by title only");
+        assertEquals(11, s.poolSize(), "T-01..T-10 and T-20");
+        assertEquals("5 cards (pool 11; labels 2, ai 2, siblings 1; titles-only 3)", s.describe());
+        assertEquals(Map.of("size", 5, "level", "hybrid", "catalogue_size", 13, "pool", 11, "labels", 2, "ai", 2,
+                "ai_status", "used", "siblings", 1, "titles_only", 3), s.details());
+        assertEquals(s.describe(), Shortlist.describe(s.details()));
+    }
+
+    @Test
+    void aiSkippedLeavesTheLabelsAlone() {
+        Shortlist s = shortlist(unionCatalogue(), new CardShortlister.Options(0.35, 3), null, CardShortlister.AI_SKIPPED);
+        assertEquals(CardShortlister.LEVEL_LABELS, s.level());
+        assertTrue(s.aiSkipped());
+        assertEquals(List.of("T-01", "T-02", "T-03"), s.cardIds());
+        assertEquals(List.of("T-07", "T-20"), s.titlesOnlyIds(), "no AI: the label picks' siblings by title only");
+        assertEquals("3 cards (pool 11; labels 3, ai skipped, siblings 0; titles-only 2)", s.describe());
+    }
+
+    @Test
+    void anEmptyAiAnswerIsStillHybrid() {
+        Shortlist s = shortlist(scored(), new CardShortlister.Options(0.35, 3), Set.of(), CardShortlister.AI_USED);
+        assertEquals(CardShortlister.LEVEL_HYBRID, s.level());
+        assertEquals(List.of("T-01", "T-02", "T-03"), s.cardIds());
+        assertEquals("3 cards (pool 10; labels 3, ai 0, siblings 0; titles-only 0)", s.describe());
+    }
+
+    // ------------------------------------------------------------------ floor, widening, determinism
+
+    @Test
+    void floorUsesTheStagePoolThenTheFullCatalogue() {
         List<IssueCard> cards = new ArrayList<>(List.of(
                 card("T-001", List.of("scn_73"), List.of("Section 16(2)(aa)"), List.of("use T-002")),
                 card("T-002", List.of("scn_74"), "x"),
                 card("T-003", List.of("scn_73"), "Section 16(4)"),
                 card("T-004", List.of("scn_73"), "y"),
                 card("T-005", List.of("order_appeal"), "z")));
-        Shortlist stage = CardShortlister.shortlist(cards, "scn_73", null, SCN_73);
+        // one label pick (< 3): the stage pool
+        Shortlist stage = CardShortlister.shortlist(cards, "scn_73", null, NOTICE);
         assertEquals(CardShortlister.LEVEL_STAGE, stage.level());
         assertEquals(List.of("T-001", "T-003", "T-004"), stage.cardIds());
+        assertEquals(List.of("T-002"), stage.titlesOnlyIds(), "T-001's sibling outside the pool, by title");
+        assertTrue(stage.describe().startsWith("3 cards (level stage; pool 3;"), stage.describe());
 
-        // stage step keeps two: full catalogue
-        Shortlist full = CardShortlister.shortlist(cards.subList(0, 4).stream()
-                .map(c -> c.cardId().equals("T-004") ? card("T-004", List.of("refund"), "y") : c).toList(), "scn_73", null, SCN_73);
-        assertEquals(CardShortlister.LEVEL_FULL, full.level());
-        assertEquals(4, full.size());
-        assertTrue(full.isFull());
-
-        // no stage filter (unknown notice) and no keyword hit: the stage level would be the whole catalogue -> full
+        // no stage filter (unknown notice) and no label hit: the pool is the catalogue -> full
         Shortlist unknown = CardShortlister.shortlist(cards, "unknown", null, "a letter with no references");
         assertEquals(CardShortlister.LEVEL_FULL, unknown.level());
         assertEquals(5, unknown.size());
+        assertTrue(unknown.isFull());
+    }
+
+    @Test
+    void wideningRendersTheStagePoolNeverMoreThanThePool() {
+        Shortlist w = CardShortlister.widened(unionCatalogue(), "scn_73", ResponseStage.REPLY, NOTICE);
+        assertEquals(CardShortlister.LEVEL_STAGE, w.level());
+        assertEquals(11, w.size());
+        assertFalse(w.cardIds().contains("T-30"));
+        // the pool is the whole catalogue: full
+        assertTrue(CardShortlister.widened(unionCatalogue(), "unknown", null, "no references").isFull());
     }
 
     @Test
     void fullShortlistOfTheCatalogue() {
-        Shortlist s = CardShortlister.full(catalogue());
+        Shortlist s = CardShortlister.full(scored());
         assertTrue(s.isFull());
-        assertEquals(8, s.size());
-        assertEquals(8, s.details().get("size"));
+        assertEquals(10, s.size());
+        assertEquals(10, s.details().get("size"));
         assertEquals("full", s.details().get("level"));
     }
 
     @Test
     void deterministic() {
-        Shortlist a = CardShortlister.shortlist(catalogue(), "scn_73", ResponseStage.REPLY, SCN_73);
+        Set<String> ai = new LinkedHashSet<>(List.of("T-09"));
+        Shortlist a = shortlist(unionCatalogue(), CardShortlister.Options.DEFAULT, ai, CardShortlister.AI_USED);
         for (int i = 0; i < 5; i++) {
-            Shortlist b = CardShortlister.shortlist(catalogue(), "scn_73", ResponseStage.REPLY, SCN_73);
+            Shortlist b = shortlist(unionCatalogue(), CardShortlister.Options.DEFAULT, ai, CardShortlister.AI_USED);
             assertEquals(a.cardIds(), b.cardIds());
+            assertEquals(a.titlesOnlyIds(), b.titlesOnlyIds());
             assertEquals(a.details(), b.details());
         }
+    }
+
+    // ------------------------------------------------------------------ rendering for the matcher
+
+    @Test
+    void shortlistRenderDropsKeywordsAndEndsWithTheTitlesOnlyBlock() {
+        CatalogueService catalogue = new CatalogueService(null, null, null);
+        Shortlist s = shortlist(unionCatalogue(), new CardShortlister.Options(0.35, 0), Set.of("T-09"), CardShortlister.AI_USED);
+        String text = catalogue.renderShortlistText(s.cards(), s.titlesOnly());
+        assertTrue(text.contains("Total Cards: " + s.size()), text);
+        assertTrue(text.contains("CARD_ID: T-01 (v1)"));
+        assertFalse(text.contains("KEYWORDS:"), "keywords did their work in code");
+        assertTrue(text.contains("NOT THIS IF:"));
+        assertTrue(text.endsWith(CatalogueService.TITLES_ONLY_HEADING + "\nT-07 | Title T-07\nT-20 | Title T-20\nT-30 | Title T-30\n"), text);
+        // the full-catalogue render keeps the KEYWORDS line (the catalogue hash is taken of it)
+        String full = catalogue.renderCatalogueCompactText(unionCatalogue());
+        assertTrue(full.contains("KEYWORDS: Section 16(2)(aa), Rule 36(4)"));
+        assertFalse(full.contains(CatalogueService.TITLES_ONLY_HEADING));
+        assertFalse(catalogue.renderShortlistText(s.cards(), List.of()).contains(CatalogueService.TITLES_ONLY_HEADING));
+    }
+
+    private static List<String> ids(List<IssueCard> cards) {
+        return cards.stream().map(IssueCard::cardId).toList();
     }
 }

@@ -8,36 +8,70 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Per-notice shortlist of catalogue cards for the matching prompt, chosen by plain code from labels (no model call,
- * no ranking, no fixed size):
+ * Per-notice shortlist of catalogue cards for the matching prompt (v2, hybrid). Plain code does the stage filter and
+ * the label scoring; an optional AI title pass ({@code ShortlistTitleAgent}, run by the caller) adds the cards it
+ * judges plausible by meaning:
  * <ol>
- *   <li><b>stage</b>: a card is kept when its {@code stages} fit the notice ({@link #NOTICE_STAGES});</li>
- *   <li><b>keyword</b>: of those, a card is kept when one of its LABEL keywords (a section / rule reference, a form
- *       name, a notification / circular number) occurs in the notice text; free-text phrase keywords are ignored;</li>
- *   <li><b>siblings</b>: every card a kept card's NOT THIS IF rules name ("use NDK-xxx") is added, one level only;</li>
- *   <li><b>floor</b>: fewer than {@link #MIN_CARDS} cards: the keyword filter is dropped (level {@code stage}); still
- *       fewer: the full catalogue (level {@code full}).</li>
+ *   <li><b>stage pool</b>: a card is kept when its {@code stages} fit the notice ({@link #NOTICE_STAGES}); a
+ *       document with no form name and no known type is placed by the letter patterns ({@link #LETTER_FORMS});
+ *       cards with stage {@code other} always pass; a notice that cannot be placed gets no stage filter;</li>
+ *   <li><b>label scoring</b>: each LABEL keyword (a section / rule reference, a form name, a notification /
+ *       circular number; free-text phrase keywords are ignored) weighs {@code ln(N / df)}, N the catalogue size and
+ *       df the number of cards carrying it ({@link LabelIndex}); a pool card scores the sum of the weights of its
+ *       distinct keywords found in the notice. Kept: every card scoring at least {@code relativeCutoff} x the best
+ *       score; when that keeps fewer than {@code minCards}, the top {@code minCards} by score (positive scores
+ *       only);</li>
+ *   <li><b>union</b>: full cards = label picks + AI picks + the NOT THIS IF siblings of the AI picks that are inside
+ *       the stage pool. Any other sibling a full card names ("use NDK-xxx") is listed by title only
+ *       ({@link Shortlist#titlesOnly()}), so the matcher can still name it as an alternate;</li>
+ *   <li><b>floor</b>: fewer than {@link #MIN_CARDS} full cards: the stage pool (level {@code stage}), or the full
+ *       catalogue when the pool is the full catalogue (level {@code full}).</li>
  * </ol>
  * The output keeps catalogue order, so the same inputs always give the same shortlist.
  */
 public final class CardShortlister {
 
-    public static final String LEVEL_KEYWORD = "keyword";
+    /** Label scoring and AI title pass both ran. */
+    public static final String LEVEL_HYBRID = "hybrid";
+    /** Label scoring only (AI title pass off, skipped or failed). */
+    public static final String LEVEL_LABELS = "labels";
     public static final String LEVEL_STAGE = "stage";
     public static final String LEVEL_FULL = "full";
 
-    /** Below this many cards the next wider level is used. */
+    /** AI title pass: picks used. */
+    public static final String AI_USED = "used";
+    /** AI title pass: switched off, or not available (no agent, stub provider). */
+    public static final String AI_OFF = "off";
+    /** AI title pass: called but failed, refused or was refused by the budget (labels only; warn flag). */
+    public static final String AI_SKIPPED = "skipped";
+
+    /** Below this many full cards the stage pool is used. */
     public static final int MIN_CARDS = 3;
+
+    /** Defaults of {@code matching.shortlist.relative-cutoff} / {@code matching.shortlist.min-cards}. */
+    public static final double DEFAULT_RELATIVE_CUTOFF = 0.35;
+    public static final int DEFAULT_MIN_CARDS = 15;
 
     /** Card stage that passes every notice type. */
     static final String STAGE_OTHER = "other";
 
+    /** Scoring thresholds. */
+    public record Options(double relativeCutoff, int minCards) {
+        public static final Options DEFAULT = new Options(DEFAULT_RELATIVE_CUTOFF, DEFAULT_MIN_CARDS);
+
+        public Options {
+            if (!(relativeCutoff >= 0) || relativeCutoff > 1) relativeCutoff = DEFAULT_RELATIVE_CUTOFF;
+            if (minCards < 0) minCards = DEFAULT_MIN_CARDS;
+        }
+    }
+
     /**
      * Notice key -> the card stages a notice of that key may be answered with. A notice key is the detected notice
-     * type ({@link StageDetector#detect}), a form found in the document heading ({@link #HEADING_FORMS}) or "appeal"
-     * when {@link StageResolver} says the response is an appeal; the allowed stages of every key found are united
-     * (conservative: a doubtful notice sees more cards, never fewer). A key not in this table (other, unknown,
-     * anti_profiteering, a triage label nobody mapped) switches the stage filter off. Edit here only.
+     * type ({@link StageDetector#detect}), a form found in the document heading ({@link #HEADING_FORMS}), a letter
+     * pattern ({@link #LETTER_FORMS}) or "appeal" when {@link StageResolver} says the response is an appeal; the
+     * allowed stages of every key found are united (conservative: a doubtful notice sees more cards, never fewer). A
+     * key not in this table (other, unknown, anti_profiteering, a triage label nobody mapped) switches the stage
+     * filter off unless a letter pattern places the document. Edit here only.
      */
     static final Map<String, Set<String>> NOTICE_STAGES = Map.ofEntries(
             // show cause notices
@@ -63,10 +97,12 @@ public final class CardShortlister {
             // refund
             Map.entry("refund", Set.of("refund")),
             Map.entry("rfd_08", Set.of("refund")),
-            // recovery / attachment
+            // recovery / attachment; best-judgement assessment (Section 62 / ASMT-13) is answered with a representation
+            // against the recovery that follows it
             Map.entry("recovery", Set.of("recovery")),
             Map.entry("drc_13", Set.of("recovery")),
             Map.entry("drc_22", Set.of("recovery")),
+            Map.entry("best_judgement", Set.of("recovery")),
             // inspection / detention (Section 129 / 130)
             Map.entry("inspection", Set.of("inspection")),
             Map.entry("mov_07", Set.of("inspection")),
@@ -101,17 +137,54 @@ public final class CardShortlister {
             heading("\\brecovery\\s+letter\\b", "recovery")
     );
 
+    /**
+     * Letter patterns, read only when the notice type and the heading forms give no stage (a letter with no form
+     * name): the pattern found EARLIEST anywhere in the text places the document (ties: list order). Mirrors the
+     * {@link StageResolver} table for the inputs whose response stage has its own cards.
+     */
+    static final List<Map.Entry<Pattern, String>> LETTER_FORMS = List.of(
+            heading("\\bsection\\s*62\\b|\\bASMT" + SEP + "13\\b", "best_judgement"),
+            heading("\\brecovery\\b", "recovery"),
+            heading("\\bsection\\s*79\\b", "recovery"),
+            heading("\\bsection\\s*(?:129|130)\\b|\\bMOV" + SEP + "0?7\\b", "inspection"),
+            heading("\\bsection\\s*65\\b|\\bADT" + SEP + "0?1\\b", "audit"),
+            heading("\\bREG" + SEP + "19\\b", "reg_19"),
+            heading("\\bREG" + SEP + "17\\b", "reg_17"),
+            heading("\\bRFD" + SEP + "0?8\\b", "rfd_08"),
+            heading("\\bRFD" + SEP + "0?6\\b", "rfd_06"),
+            heading("\\bDRC" + SEP + "13\\b", "drc_13"),
+            heading("\\bDRC" + SEP + "22\\b", "drc_22")
+    );
+
     private static Map.Entry<Pattern, String> heading(String regex, String key) {
         return Map.entry(Pattern.compile("(?i)" + regex), key);
     }
 
+    /** The stage pool of a notice: the cards whose stages fit, and the notice keys read (empty: no filter). */
+    public record StagePool(List<IssueCard> cards, List<String> noticeKeys) {
+        public int size() {
+            return cards.size();
+        }
+    }
+
     /**
-     * Shortlist and how it was built: the cards (catalogue order), the level used, the catalogue size and the count
-     * after each step ({@code stageCount} after the stage filter, {@code keywordCount} after the keyword filter,
-     * {@code siblingCount} cards added as siblings), and the notice keys the stage filter read (empty: no filter).
+     * Shortlist and how it was built: the full cards (catalogue order), the cards listed by title only, the level,
+     * the catalogue and stage-pool sizes, the label picks and AI picks (raw sets: they may overlap), the number of
+     * siblings added in full, the AI pass status ({@link #AI_USED} / {@link #AI_OFF} / {@link #AI_SKIPPED}) and the
+     * notice keys the stage filter read.
      */
-    public record Shortlist(List<IssueCard> cards, String level, int catalogueSize, int stageCount, int keywordCount,
-                            int siblingCount, List<String> noticeKeys) {
+    public record Shortlist(List<IssueCard> cards, List<IssueCard> titlesOnly, String level, int catalogueSize, int poolSize,
+                            Set<String> labelPicks, Set<String> aiPicks, int siblingCount, String aiStatus,
+                            List<String> noticeKeys) {
+
+        public Shortlist {
+            cards = cards != null ? List.copyOf(cards) : List.of();
+            titlesOnly = titlesOnly != null ? List.copyOf(titlesOnly) : List.of();
+            labelPicks = labelPicks != null ? Collections.unmodifiableSet(new LinkedHashSet<>(labelPicks)) : Set.of();
+            aiPicks = aiPicks != null ? Collections.unmodifiableSet(new LinkedHashSet<>(aiPicks)) : Set.of();
+            aiStatus = aiStatus != null ? aiStatus : AI_OFF;
+            noticeKeys = noticeKeys != null ? List.copyOf(noticeKeys) : List.of();
+        }
 
         public int size() {
             return cards.size();
@@ -121,17 +194,38 @@ public final class CardShortlister {
             return LEVEL_FULL.equals(level);
         }
 
-        /** Card ids in shortlist order (no repeats). */
+        /** True when the AI title pass was called and could not be used (flag {@code warn:shortlist_ai_skipped}). */
+        public boolean aiSkipped() {
+            return AI_SKIPPED.equals(aiStatus);
+        }
+
+        /** Full card ids in shortlist order (no repeats). */
         public List<String> cardIds() {
             LinkedHashSet<String> ids = new LinkedHashSet<>();
             for (IssueCard c : cards) ids.add(c.cardId());
             return List.copyOf(ids);
         }
 
-        /** "23 cards (level keyword; stage 61, keyword 19, siblings 4)" for logs, the runner and the partner note. */
+        /** Ids of the cards listed by title only. */
+        public List<String> titlesOnlyIds() {
+            LinkedHashSet<String> ids = new LinkedHashSet<>();
+            for (IssueCard c : titlesOnly) ids.add(c.cardId());
+            return List.copyOf(ids);
+        }
+
+        /** "27 cards (pool 128; labels 19, ai 14, siblings 6; titles-only 11)" for logs, the runner and the partner note. */
         public String describe() {
-            return size() + " cards (level " + level + "; stage " + stageCount + ", keyword " + keywordCount
-                    + ", siblings " + siblingCount + ")";
+            return describe(details());
+        }
+
+        /** The {@link #describe()} line rebuilt from {@link #details()} (the live runner reads the flag details). */
+        public static String describe(Map<String, Object> d) {
+            Object status = d.get("ai_status");
+            String ai = AI_USED.equals(status) ? String.valueOf(d.get("ai")) : String.valueOf(status);
+            Object level = d.get("level");
+            String prefix = LEVEL_STAGE.equals(level) || LEVEL_FULL.equals(level) ? "level " + level + "; " : "";
+            return d.get("size") + " cards (" + prefix + "pool " + d.get("pool") + "; labels " + d.get("labels") + ", ai " + ai
+                    + ", siblings " + d.get("siblings") + "; titles-only " + d.get("titles_only") + ")";
         }
 
         /** Details for the {@code info:shortlist} draft flag. */
@@ -140,19 +234,39 @@ public final class CardShortlister {
             d.put("size", size());
             d.put("level", level);
             d.put("catalogue_size", catalogueSize);
-            d.put("stage", stageCount);
-            d.put("keyword", keywordCount);
+            d.put("pool", poolSize);
+            d.put("labels", labelPicks.size());
+            d.put("ai", aiPicks.size());
+            d.put("ai_status", aiStatus);
             d.put("siblings", siblingCount);
+            d.put("titles_only", titlesOnly.size());
             return d;
         }
     }
 
     private CardShortlister() {}
 
-    /** The whole catalogue as a level {@code full} shortlist (the widening call). */
+    /** The whole catalogue as a level {@code full} shortlist. */
     public static Shortlist full(List<IssueCard> cards) {
         List<IssueCard> all = cards != null ? List.copyOf(cards) : List.of();
-        return new Shortlist(all, LEVEL_FULL, all.size(), all.size(), all.size(), 0, List.of());
+        return new Shortlist(all, List.of(), LEVEL_FULL, all.size(), all.size(), Set.of(), Set.of(), 0, AI_OFF, List.of());
+    }
+
+    /**
+     * The stage pool as a shortlist (the widening call after a miss): level {@code stage}, or {@code full} when the
+     * pool is the whole catalogue.
+     */
+    public static Shortlist widened(List<IssueCard> cards, String noticeType, ResponseStage responseStage, String noticeText) {
+        List<IssueCard> all = cards != null ? cards : List.of();
+        StagePool pool = stagePool(all, noticeType, responseStage, noticeText);
+        if (pool.size() >= all.size()) return full(all);
+        return new Shortlist(pool.cards(), List.of(), LEVEL_STAGE, all.size(), pool.size(), Set.of(), Set.of(), 0, AI_OFF,
+                pool.noticeKeys());
+    }
+
+    /** Label shortlist with the default thresholds and no AI pass. */
+    public static Shortlist shortlist(List<IssueCard> cards, String noticeType, ResponseStage responseStage, String noticeText) {
+        return shortlist(cards, noticeType, responseStage, noticeText, Options.DEFAULT, null, AI_OFF);
     }
 
     /**
@@ -162,55 +276,92 @@ public final class CardShortlister {
      * @param noticeType    the detected notice type ({@link StageDetector#detect})
      * @param responseStage the response the document calls for ({@link StageResolver#resolve}), or null
      * @param noticeText    the full OCR text
+     * @param options       scoring thresholds
+     * @param aiPicks       card ids the AI title pass returned (null when it did not run or failed)
+     * @param aiStatus      {@link #AI_USED} / {@link #AI_OFF} / {@link #AI_SKIPPED}
      */
-    public static Shortlist shortlist(List<IssueCard> cards, String noticeType, ResponseStage responseStage, String noticeText) {
+    public static Shortlist shortlist(List<IssueCard> cards, String noticeType, ResponseStage responseStage, String noticeText,
+                                      Options options, Set<String> aiPicks, String aiStatus) {
         List<IssueCard> all = cards != null ? cards : List.of();
         String text = noticeText != null ? noticeText : "";
+        Options opt = options != null ? options : Options.DEFAULT;
+        Map<String, IssueCard> byId = CatalogueService.byId(all);
 
-        // step 1: stage filter
-        List<String> keys = noticeKeys(noticeType, responseStage, text);
-        Set<String> allowed = allowedStages(keys);
-        List<IssueCard> byStage = new ArrayList<>();
-        for (IssueCard c : all) {
-            if (stageFits(c, allowed)) byStage.add(c);
+        // step 1: stage pool
+        StagePool pool = stagePool(all, noticeType, responseStage, text);
+        Set<String> poolIds = new HashSet<>();
+        for (IssueCard c : pool.cards()) poolIds.add(c.cardId());
+
+        // step 2: label scoring
+        Set<String> labelPicks = labelPicks(pool.cards(), LabelIndex.of(all), Labels.in(text), opt);
+
+        // step 3: union with the AI picks and their in-pool siblings
+        Set<String> ai = new LinkedHashSet<>();
+        if (aiPicks != null) {
+            for (String id : aiPicks) if (id != null && byId.containsKey(id)) ai.add(id);
         }
+        Set<String> picked = new HashSet<>(labelPicks);
+        picked.addAll(ai);
+        Set<String> siblings = siblingIds(cardsOf(ai, byId), byId.keySet());
+        siblings.retainAll(poolIds);
+        siblings.removeAll(picked);
+        Set<String> fullIds = new HashSet<>(picked);
+        fullIds.addAll(siblings);
 
-        // step 2: keyword filter on the label keywords
-        Labels found = Labels.in(text);
-        List<IssueCard> byKeyword = new ArrayList<>();
-        for (IssueCard c : byStage) {
-            if (keywordHit(c, found)) byKeyword.add(c);
-        }
-
-        // step 3: siblings named in the kept cards' NOT THIS IF rules (one level)
-        Set<String> kept = new HashSet<>();
-        for (IssueCard c : byKeyword) kept.add(c.cardId());
-        Set<String> siblingIds = siblingIds(byKeyword, CatalogueService.byId(all).keySet());
-        siblingIds.removeAll(kept);
-        List<IssueCard> withSiblings = new ArrayList<>();
-        for (IssueCard c : all) {
-            if (kept.contains(c.cardId()) || siblingIds.contains(c.cardId())) withSiblings.add(c);
-        }
-        int siblingsAdded = (int) all.stream().filter(c -> siblingIds.contains(c.cardId())).count();
-
-        // step 4: floor and widening
-        List<IssueCard> chosen;
-        String level;
-        if (withSiblings.size() >= MIN_CARDS) {
-            chosen = withSiblings;
-            level = LEVEL_KEYWORD;
-        } else if (byStage.size() >= MIN_CARDS && byStage.size() < all.size()) {
-            chosen = byStage;
+        String level = ai.isEmpty() && !AI_USED.equals(aiStatus) ? LEVEL_LABELS : LEVEL_HYBRID;
+        if (fullIds.size() < MIN_CARDS) {
+            // step 4: floor
+            if (pool.size() >= all.size()) {
+                return new Shortlist(all, List.of(), LEVEL_FULL, all.size(), pool.size(), labelPicks, ai, 0, aiStatus,
+                        pool.noticeKeys());
+            }
+            fullIds = new HashSet<>(poolIds);
             level = LEVEL_STAGE;
-        } else {
-            chosen = all;
-            level = LEVEL_FULL;
         }
-        return new Shortlist(List.copyOf(chosen), level, all.size(), byStage.size(), byKeyword.size(), siblingsAdded,
-                List.copyOf(keys));
+
+        List<IssueCard> chosen = new ArrayList<>();
+        for (IssueCard c : all) if (fullIds.contains(c.cardId())) chosen.add(c);
+        // titles only: siblings the full cards name that are not shown in full
+        Set<String> named = siblingIds(chosen, byId.keySet());
+        named.removeAll(fullIds);
+        List<IssueCard> titlesOnly = new ArrayList<>();
+        for (IssueCard c : byId.values()) if (named.contains(c.cardId())) titlesOnly.add(c);
+        int siblingsAdded = LEVEL_STAGE.equals(level) ? 0 : siblings.size();
+        return new Shortlist(chosen, titlesOnly, level, all.size(), pool.size(), labelPicks, ai, siblingsAdded, aiStatus,
+                pool.noticeKeys());
+    }
+
+    private static List<IssueCard> cardsOf(Collection<String> ids, Map<String, IssueCard> byId) {
+        List<IssueCard> out = new ArrayList<>();
+        for (String id : ids) {
+            IssueCard c = byId.get(id);
+            if (c != null) out.add(c);
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------ step 1
+
+    /** The stage pool of a notice (step 1 alone). */
+    public static StagePool stagePool(List<IssueCard> cards, String noticeType, ResponseStage responseStage, String noticeText) {
+        List<IssueCard> all = cards != null ? cards : List.of();
+        String text = noticeText != null ? noticeText : "";
+        List<String> keys = noticeKeys(noticeType, responseStage, text);
+        Set<String> allowed = allowedStages(keys);
+        if (allowed == null) {
+            String letter = letterKey(text);
+            if (letter != null) {
+                keys = List.of(letter);
+                allowed = allowedStages(keys);
+            }
+        }
+        if (allowed == null) return new StagePool(List.copyOf(all), List.of());
+        List<IssueCard> out = new ArrayList<>();
+        for (IssueCard c : all) {
+            if (stageFits(c, allowed)) out.add(c);
+        }
+        return new StagePool(List.copyOf(out), List.copyOf(keys));
+    }
 
     /** The notice keys read from the notice type, the response stage and the document heading. */
     static List<String> noticeKeys(String noticeType, ResponseStage responseStage, String text) {
@@ -223,6 +374,20 @@ public final class CardShortlister {
         }
         keys.removeAll(NO_INFO_KEYS);
         return new ArrayList<>(keys);
+    }
+
+    /** The key of the letter pattern found earliest in {@code text} (ties: list order), or null. */
+    static String letterKey(String text) {
+        String best = null;
+        int bestAt = Integer.MAX_VALUE;
+        for (Map.Entry<Pattern, String> form : LETTER_FORMS) {
+            Matcher m = form.getKey().matcher(text);
+            if (m.find() && m.start() < bestAt) {
+                best = form.getValue();
+                bestAt = m.start();
+            }
+        }
+        return best;
     }
 
     /** The card stages the keys allow, or null (no stage filter) when no key is known or one is not in the table. */
@@ -250,13 +415,102 @@ public final class CardShortlister {
 
     // ------------------------------------------------------------------ step 2
 
-    static boolean keywordHit(IssueCard card, Labels found) {
-        if (card.keywords() == null) return false;
-        for (String kw : card.keywords()) {
-            Labels labels = labelKeyword(kw);
-            if (labels != null && found.covers(labels)) return true;
+    /**
+     * The label keywords of a catalogue and their weights: per card its distinct label keywords (by canonical
+     * {@link Labels#key()}), and per keyword {@code ln(N / df)}. Built once per catalogue and cached (the last
+     * catalogue seen; an equal list reuses it).
+     */
+    static final class LabelIndex {
+        private final List<IssueCard> source;
+        private final Map<String, Map<String, Labels>> cardKeywords;
+        private final Map<String, Double> weights;
+
+        private static volatile LabelIndex cached;
+
+        private LabelIndex(List<IssueCard> source) {
+            this.source = source;
+            Map<String, Map<String, Labels>> perCard = new HashMap<>();
+            Map<String, Integer> df = new HashMap<>();
+            Set<String> seen = new HashSet<>();
+            for (IssueCard c : source) {
+                if (c == null || c.cardId() == null || !seen.add(c.cardId())) continue;   // latest version only
+                Map<String, Labels> kws = new LinkedHashMap<>();
+                if (c.keywords() != null) {
+                    for (String kw : c.keywords()) {
+                        Labels l = labelKeyword(kw);
+                        if (l != null) kws.putIfAbsent(l.key(), l);
+                    }
+                }
+                perCard.put(c.cardId(), kws);
+                for (String k : kws.keySet()) df.merge(k, 1, Integer::sum);
+            }
+            int n = Math.max(1, seen.size());
+            Map<String, Double> w = new HashMap<>();
+            for (Map.Entry<String, Integer> e : df.entrySet()) w.put(e.getKey(), Math.log((double) n / e.getValue()));
+            this.cardKeywords = perCard;
+            this.weights = w;
         }
-        return false;
+
+        static LabelIndex of(List<IssueCard> cards) {
+            List<IssueCard> list = cards != null ? cards : List.of();
+            LabelIndex c = cached;
+            if (c != null && (c.source == list || c.source.equals(list))) return c;
+            LabelIndex fresh = new LabelIndex(List.copyOf(list));
+            cached = fresh;
+            return fresh;
+        }
+
+        /** Weight of a keyword key; 0 when unknown. */
+        double weight(String key) {
+            return weights.getOrDefault(key, 0.0);
+        }
+
+        /** Score of a card: the sum of the weights of its distinct label keywords found among {@code found}. */
+        double score(String cardId, Labels found) {
+            double s = 0;
+            for (Map.Entry<String, Labels> e : cardKeywords.getOrDefault(cardId, Map.of()).entrySet()) {
+                if (found.covers(e.getValue())) s += weight(e.getKey());
+            }
+            return s;
+        }
+    }
+
+    /** Label score of every card of {@code cards} against {@code noticeText} (catalogue order; for tests and the dry run). */
+    public static Map<String, Double> scores(List<IssueCard> catalogue, List<IssueCard> cards, String noticeText) {
+        LabelIndex index = LabelIndex.of(catalogue);
+        Labels found = Labels.in(noticeText);
+        Map<String, Double> out = new LinkedHashMap<>();
+        for (IssueCard c : cards) out.putIfAbsent(c.cardId(), index.score(c.cardId(), found));
+        return out;
+    }
+
+    /** Step 2: the pool cards kept by score (see the class comment), in pool order. */
+    static Set<String> labelPicks(List<IssueCard> pool, LabelIndex index, Labels found, Options opt) {
+        Map<String, Double> scores = new LinkedHashMap<>();
+        double best = 0;
+        for (IssueCard c : pool) {
+            if (scores.containsKey(c.cardId())) continue;
+            double s = index.score(c.cardId(), found);
+            scores.put(c.cardId(), s);
+            best = Math.max(best, s);
+        }
+        Set<String> out = new LinkedHashSet<>();
+        if (best <= 0) return out;
+        double cut = opt.relativeCutoff() * best;
+        for (Map.Entry<String, Double> e : scores.entrySet()) {
+            if (e.getValue() > 0 && e.getValue() >= cut - 1e-9) out.add(e.getKey());
+        }
+        if (out.size() < opt.minCards()) {
+            List<Map.Entry<String, Double>> ranked = new ArrayList<>(scores.entrySet());
+            ranked.removeIf(e -> e.getValue() <= 0);
+            ranked.sort((a, b) -> Double.compare(b.getValue(), a.getValue()));   // stable: pool order on ties
+            Set<String> top = new HashSet<>();
+            for (int i = 0; i < Math.min(opt.minCards(), ranked.size()); i++) top.add(ranked.get(i).getKey());
+            top.addAll(out);
+            out = new LinkedHashSet<>();
+            for (String id : scores.keySet()) if (top.contains(id)) out.add(id);
+        }
+        return out;
     }
 
     /** Words that may stand next to a label in a keyword without making it a free-text phrase. */
@@ -290,6 +544,21 @@ public final class CardShortlister {
             boolean hits(Ref t) {
                 return number.equals(t.number) && t.path.size() >= path.size() && t.path.subList(0, path.size()).equals(path);
             }
+        }
+
+        /** Canonical text of these labels ("s16(2)(c)+r36(4)+drc1a"): equal for keywords that name the same labels. */
+        String key() {
+            TreeSet<String> parts = new TreeSet<>();
+            for (Ref r : sections) parts.add("s" + r.number() + pathText(r.path()));
+            for (Ref r : rules) parts.add("r" + r.number() + pathText(r.path()));
+            parts.addAll(names);
+            return String.join("+", parts);
+        }
+
+        private static String pathText(List<String> path) {
+            StringBuilder sb = new StringBuilder();
+            for (String p : path) sb.append('(').append(p).append(')');
+            return sb.toString();
         }
 
         boolean isEmpty() {
@@ -376,7 +645,7 @@ public final class CardShortlister {
         }
     }
 
-    // ------------------------------------------------------------------ step 3
+    // ------------------------------------------------------------------ step 3 (siblings)
 
     private static final Pattern CARD_ID_TOKEN = Pattern.compile("(?<![A-Za-z0-9])[A-Za-z]+(?:-[A-Za-z]+)*-\\d+[A-Za-z]?(?![A-Za-z0-9])");
 

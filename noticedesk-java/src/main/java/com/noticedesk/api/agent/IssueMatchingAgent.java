@@ -36,6 +36,14 @@ public class IssueMatchingAgent {
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
 
+    /** AI title pass of the shortlist; null (tests, or not wired) shortlists by labels only. */
+    private ShortlistTitleAgent shortlistTitleAgent;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShortlistTitleAgent(ShortlistTitleAgent shortlistTitleAgent) {
+        this.shortlistTitleAgent = shortlistTitleAgent;
+    }
+
     public record MatchedNoticeInfo(
             String noticeNumber,
             String din,
@@ -282,7 +290,9 @@ public class IssueMatchingAgent {
     public static final String FLAG_COST_CAP = "matching_cost_cap";
 
     /**
-     * Version of the live matching prompt (v3.6: the catalogue in the prompt is a code shortlist for the notice; a
+     * Version of the live matching prompt (v3.7: the shortlist is chosen by label scoring plus an AI title pass, cards
+     * carry no KEYWORDS line, and the siblings named by NOT THIS IF rules but not shown are listed by title only: such
+     * a card may be an alternate or make the status partial / none, never be the primary of a full match; v3.6: the catalogue in the prompt is a code shortlist for the notice; a
      * ground no shown card fits is status none, never a forced fit; v3.5: a {@code para_stance} object gives every {@code para_map} paragraph
      * one of admitted / denied / explained / not_applicable, so the para-wise reply no longer denies factual
      * recitals; v3.4: a mandatory ten-item {@code defect_checks} object replaces the
@@ -297,7 +307,7 @@ public class IssueMatchingAgent {
      * date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one primary card + alternates
      * and grounds-first splitting).
      */
-    public static final String PROMPT_VERSION = "issue_matching_v3_6";
+    public static final String PROMPT_VERSION = "issue_matching_v3_7";
     /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
     public static final String PROMPT_FILE = "issue_matching_v3";
 
@@ -326,6 +336,11 @@ public class IssueMatchingAgent {
      * holds at least one entry. Informational: the issues are kept.
      */
     public static final String FLAG_DEFECT_COUNT_MISMATCH = "defect_count_mismatch";
+    /**
+     * Issue flag (v3.7): the primary of a full match was a card the prompt listed by title only; the status is lowered
+     * to partial (a card the matcher has not read in full cannot be a full match).
+     */
+    public static final String FLAG_TITLES_ONLY_PRIMARY = "titles_only_primary";
     /** Most alternates kept per issue; any beyond are dropped. */
     static final int MAX_ALTERNATES = 2;
 
@@ -345,16 +360,54 @@ public class IssueMatchingAgent {
                 || properties.getMatching().getShortlist().isEnabled();
     }
 
+    /** {@code matching.shortlist.ai-titles} (env MATCHING_SHORTLIST_AI, default true). */
+    boolean shortlistAiEnabled() {
+        return properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null
+                || properties.getMatching().getShortlist().isAiTitles();
+    }
+
+    /** {@code matching.shortlist.relative-cutoff} / {@code min-cards}. */
+    CardShortlister.Options shortlistOptions() {
+        if (properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null) {
+            return CardShortlister.Options.DEFAULT;
+        }
+        AppProperties.Matching.Shortlist s = properties.getMatching().getShortlist();
+        return new CardShortlister.Options(s.getRelativeCutoff(), s.getMinCards());
+    }
+
     /**
-     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID, NoticeCallBudget)}; {@code fullCatalogue} true
-     * renders every visible card (the pipeline's widening call after a shortlist miss). When a shortlist narrower than
-     * the catalogue is rendered, the system prompt is the rules alone (cached across notices) and the shortlisted cards
-     * go in the per-call user message before the notice; when every card is rendered (shortlist off, level full, the
-     * widening call) the catalogue stays in the cached system prompt as before. The catalogue hash is always that of
+     * The shortlist for a first matching call: the AI title pass (when on and available; it goes through the same
+     * budget) and the label scoring, united by {@link CardShortlister#shortlist}. A failed or refused title pass
+     * leaves the labels alone (status {@link CardShortlister#AI_SKIPPED}); {@link LlmFatalException} is passed on.
+     */
+    CardShortlister.Shortlist buildShortlist(List<IssueCard> cards, String noticeType, String text, UUID noticeId,
+                                             NoticeCallBudget budget) {
+        Set<String> aiPicks = null;
+        String aiStatus = CardShortlister.AI_OFF;
+        if (shortlistAiEnabled() && shortlistTitleAgent != null && shortlistTitleAgent.available()) {
+            ShortlistTitleAgent.Picks picks = shortlistTitleAgent.pickCards(cards, noticeType, text, noticeId, budget);
+            if (picks != null) {
+                aiPicks = picks.cardIds();
+                aiStatus = CardShortlister.AI_USED;
+            } else {
+                aiStatus = CardShortlister.AI_SKIPPED;
+            }
+        }
+        return CardShortlister.shortlist(cards, noticeType, StageResolver.resolve(noticeType, text), text, shortlistOptions(),
+                aiPicks, aiStatus);
+    }
+
+    /**
+     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID, NoticeCallBudget)}; {@code widen} true renders the
+     * notice's whole stage pool (the pipeline's widening call after a shortlist miss; the full catalogue only when the
+     * pool is the full catalogue) and makes no title pass. When a shortlist narrower than the catalogue is rendered,
+     * the system prompt is the rules alone (cached across notices) and the shortlisted cards (no KEYWORDS line, plus
+     * the titles-only block) go in the per-call user message before the notice; when every card is rendered (shortlist
+     * off, level full) the catalogue stays in the cached system prompt as before. The catalogue hash is always that of
      * the FULL visible catalogue, so results stay comparable.
      */
     public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
-                                                 NoticeCallBudget budget, boolean fullCatalogue) {
+                                                 NoticeCallBudget budget, boolean widen) {
         List<IssueCard> cards = catalogueService.getActiveCards();
         String fullCatalogueText = catalogueService.renderCatalogueCompactText(cards);
         String catalogueHash = catalogueService.getCatalogueHash(fullCatalogueText);
@@ -362,12 +415,16 @@ public class IssueMatchingAgent {
         boolean shortlistOn = shortlistEnabled();
         CardShortlister.Shortlist shortlist = null;
         String compactCatalogueText = fullCatalogueText;
+        Set<String> titlesOnlyIds = Set.of();
         if (shortlistOn) {
             String text = fullOcrText != null ? fullOcrText : "";
-            shortlist = fullCatalogue ? CardShortlister.full(cards)
-                    : CardShortlister.shortlist(cards, noticeType, StageResolver.resolve(noticeType, text), text);
-            if (!shortlist.isFull()) compactCatalogueText = catalogueService.renderCatalogueCompactText(shortlist.cards());
-            log.info("matching_shortlist noticeId={} {} of {} catalogue cards, notice keys {}, rendered {} chars (full catalogue {} chars)",
+            shortlist = widen ? CardShortlister.widened(cards, noticeType, StageResolver.resolve(noticeType, text), text)
+                    : buildShortlist(cards, noticeType, text, noticeId, budget);
+            if (!shortlist.isFull()) {
+                compactCatalogueText = catalogueService.renderShortlistText(shortlist.cards(), shortlist.titlesOnly());
+                titlesOnlyIds = new HashSet<>(shortlist.titlesOnlyIds());
+            }
+            log.info("matching_shortlist noticeId={} Shortlist: {} of {} catalogue cards, notice keys {}, rendered {} chars (full catalogue {} chars)",
                     noticeId, shortlist.describe(), shortlist.catalogueSize(), shortlist.noticeKeys(),
                     compactCatalogueText.length(), fullCatalogueText.length());
         }
@@ -551,6 +608,13 @@ public class IssueMatchingAgent {
                             status = "none";
                             issueFlags.add(FLAG_UNKNOWN_CARD_ID);
                         }
+                    }
+
+                    // v3.7: a card listed by title only was never read in full, so it cannot carry a full match
+                    if ("full".equalsIgnoreCase(status) && !primary.isEmpty() && titlesOnlyIds.contains(primary.get(0))) {
+                        log.warn("Issue #{}: full match on titles-only card {}; lowered to partial", issueNo, primary.get(0));
+                        status = "partial";
+                        issueFlags.add(FLAG_TITLES_ONLY_PRIMARY);
                     }
 
                     // Unknown alternates are dropped silently (logged); the primary never repeats as an alternate

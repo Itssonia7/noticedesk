@@ -120,10 +120,14 @@ public class V7DraftingPipelineService {
     /** Draft flag (warn): a primary card's response stage differs from the input document's and no single sibling exists. */
     public static final String FLAG_STAGE_MISMATCH = "warn:stage_mismatch";
 
-    /** Draft flag (info): the matching prompt carried a code shortlist of the catalogue; details size, level, step counts. */
+    /** Draft flag (info): the matching prompt carried a shortlist of the catalogue; details size, level, counts per source. */
     public static final String FLAG_SHORTLIST = "info:shortlist";
-    /** Draft flag (info): a substantive ground matched no shortlisted card, so matching ran once more on the full catalogue. */
+    /** Draft flag (info): a substantive ground matched no shortlisted card, so matching ran once more on the stage pool. */
     public static final String FLAG_SHORTLIST_WIDENED = "info:shortlist_widened";
+    /** Draft flag (info): the widening call was not made because the per-notice budget would refuse it. */
+    public static final String FLAG_SHORTLIST_WIDENING_SKIPPED = "info:shortlist_widening_skipped";
+    /** Draft flag (warn): the shortlist's AI title pass failed or was refused; the shortlist used labels only. */
+    public static final String FLAG_SHORTLIST_AI_SKIPPED = "warn:shortlist_ai_skipped";
 
     /** Card read access for the post-matching stage correction; null (tests) skips the correction. */
     private CatalogueService catalogueService;
@@ -684,12 +688,15 @@ public class V7DraftingPipelineService {
     }
 
     /**
-     * Stage 1 widening. When the matcher saw a shortlist (level not {@code full}) and an issue came back with status
-     * none on a substantive ground (one the new-issue writer would be called for: {@link #lacksSubstantiveGround} is
-     * false), matching runs ONCE more on the full catalogue through the same budget and that result is used (flag
-     * {@link #FLAG_SHORTLIST_WIDENED}). A second result that failed (refused by the cost cap, unusable output) is not
-     * used: the first result stays, with a partner note. Every shortlist gets {@link #FLAG_SHORTLIST} and one partner
-     * note line. Returns {@code mr} itself when no second call was made or it was not used.
+     * Stage 1 widening. When the matcher saw a shortlist narrower than the notice's stage pool and an issue came back
+     * with status none on a substantive ground (one the new-issue writer would be called for:
+     * {@link #lacksSubstantiveGround} is false), matching runs ONCE more on the stage pool (never the full catalogue,
+     * unless the pool is the full catalogue) through the same budget and that result is used (flag
+     * {@link #FLAG_SHORTLIST_WIDENED}). When the budget refuses that call it is not made (flag
+     * {@link #FLAG_SHORTLIST_WIDENING_SKIPPED}); a second result that failed otherwise is not used either. In both cases
+     * the first result stays, with a partner note. Every shortlist gets {@link #FLAG_SHORTLIST} and one partner note
+     * line; a title pass that could not be used adds {@link #FLAG_SHORTLIST_AI_SKIPPED}. Returns {@code mr} itself when
+     * no second call was made or it was not used.
      */
     MatchingResult widenOnShortlistMiss(MatchingResult mr, String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
                                         NoticeCallBudget budget, List<String> notes, Set<String> flags,
@@ -698,10 +705,13 @@ public class V7DraftingPipelineService {
         if (first == null) return mr;
         flags.add(FLAG_SHORTLIST);
         flagDetails.put(FLAG_SHORTLIST, first.details());
-        notes.add("Catalogue shortlist: " + first.size() + " of " + first.catalogueSize() + " cards shown to the matcher (level "
-                + first.level() + "; stage " + first.stageCount() + ", keyword " + first.keywordCount() + ", siblings "
-                + first.siblingCount() + ").");
-        if (first.isFull()) return mr;
+        notes.add("Catalogue shortlist: " + first.size() + " of " + first.catalogueSize() + " cards shown to the matcher ("
+                + first.describe().substring(first.describe().indexOf('(') + 1));
+        if (first.aiSkipped()) {
+            flags.add(FLAG_SHORTLIST_AI_SKIPPED);
+            notes.add("The shortlist's AI title pass gave no usable answer; the shortlist was chosen by labels only.");
+        }
+        if (first.isFull() || first.size() >= first.poolSize()) return mr;
         List<Integer> misses = new ArrayList<>();
         for (MatchedIssue issue : mr.issues() != null ? mr.issues() : List.<MatchedIssue>of()) {
             if ("none".equalsIgnoreCase(issue.status()) && issue.primaryCardId() == null && !lacksSubstantiveGround(issue)) {
@@ -710,29 +720,43 @@ public class V7DraftingPipelineService {
         }
         if (misses.isEmpty()) return mr;
 
-        log.info("Notice {}: issue(s) {} matched no shortlisted card on a substantive ground; matching again on the full catalogue",
-                noticeId, misses);
+        log.info("Notice {}: issue(s) {} matched no shortlisted card on a substantive ground; matching again on the stage pool ({} cards)",
+                noticeId, misses, first.poolSize());
         MatchingResult widened = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, budget, true);
         String failure = matchingFailure(widened);
         if (failure != null) {
+            boolean refused = widened != null && widened.flags() != null && widened.flags().contains(IssueMatchingAgent.FLAG_COST_CAP);
+            if (refused) {
+                log.info("Notice {}: widening call not made (budget): {}", noticeId, failure);
+                flags.add(FLAG_SHORTLIST_WIDENING_SKIPPED);
+                Map<String, Object> details = new LinkedHashMap<>();
+                details.put("shortlist_size", first.size());
+                details.put("pool", first.poolSize());
+                details.put("unmatched_issues", List.copyOf(misses));
+                flagDetails.put(FLAG_SHORTLIST_WIDENING_SKIPPED, details);
+                notes.add("Issue(s) " + misses + " matched no shortlisted card; matching on the " + first.poolSize()
+                        + " cards of the stage pool was not run (per-notice budget), so the shortlist result is kept: partner to"
+                        + " check those grounds.");
+                return mr;
+            }
             log.warn("Notice {}: widened matching gave no usable result ({}); the shortlist result is kept", noticeId, failure);
-            notes.add("Issue(s) " + misses + " matched no shortlisted card; matching on the full catalogue gave no usable result ("
+            notes.add("Issue(s) " + misses + " matched no shortlisted card; matching on the stage pool gave no usable result ("
                     + HtmlSanitizer.sanitize(failure) + "), so the shortlist result is kept: partner to check those grounds.");
             return mr;
         }
-        int fullSize = widened.shortlist() != null ? widened.shortlist().size() : first.catalogueSize();
+        int widenedSize = widened.shortlist() != null ? widened.shortlist().size() : first.poolSize();
         long stillNone = widened.issues() == null ? 0 : widened.issues().stream()
                 .filter(i -> "none".equalsIgnoreCase(i.status()) && i.primaryCardId() == null && !lacksSubstantiveGround(i)).count();
         Map<String, Object> details = new LinkedHashMap<>();
         details.put("shortlist_size", first.size());
         details.put("shortlist_level", first.level());
-        details.put("full_size", fullSize);
+        details.put("widened_size", widenedSize);
         details.put("unmatched_issues", List.copyOf(misses));
         details.put("unmatched_after_widening", stillNone);
         flags.add(FLAG_SHORTLIST_WIDENED);
         flagDetails.put(FLAG_SHORTLIST_WIDENED, details);
         notes.add("Matching widened: issue(s) " + misses + " matched no card among the " + first.size()
-                + " shortlisted, so matching ran again on all " + fullSize + " cards and that result is used ("
+                + " shortlisted, so matching ran again on the " + widenedSize + " cards of the stage pool and that result is used ("
                 + stillNone + " substantive ground(s) still without a card).");
         return widened;
     }

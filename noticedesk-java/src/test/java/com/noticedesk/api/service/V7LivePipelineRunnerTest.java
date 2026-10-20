@@ -10,11 +10,13 @@ import com.noticedesk.api.agent.IndianKanoonClient;
 import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.agent.NewIssueDraftingAgent;
 import com.noticedesk.api.agent.PartialDraftingAgent;
+import com.noticedesk.api.agent.ShortlistTitleAgent;
 import com.noticedesk.api.agent.TemplateVariableAgent;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
+import com.noticedesk.api.service.matching.CardShortlister;
 import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.GstStateCodes;
@@ -101,6 +103,9 @@ public class V7LivePipelineRunnerTest {
         props.getLlm().setModelPartialDrafting(modelPartial);
         props.getLlm().setModelNewIssue(modelNewIssue);
         props.getLlm().setModelHighStakes(modelHighStakes);
+        // shortlist title pass: LLM_MODEL_SHORTLIST, else the matching model
+        props.getLlm().setModelShortlist(guard.model("LLM_MODEL_SHORTLIST", props.getLlm().getModelShortlist()));
+        String modelShortlist = props.getLlm().shortlistModel();
 
         props.getCitation().setProvider(citationProvider);
         props.getCitation().setIndiankanoonApiToken(ikToken);
@@ -114,17 +119,18 @@ public class V7LivePipelineRunnerTest {
         guard.printSettings(System.out);
         System.out.printf("per-notice caps: high-stakes calls=%s, cost INR=%s%n",
                 props.getLlm().getHighStakes().getMaxCallsPerNotice(), props.getLlm().getMaxCostInrPerNotice());
-        System.out.printf("models: matching=%s partial=%s new_issue=%s high_stakes=%s%n",
-                modelMatching, modelPartial, modelNewIssue, modelHighStakes);
+        System.out.printf("models: matching=%s partial=%s new_issue=%s high_stakes=%s shortlist=%s (ai titles %s)%n",
+                modelMatching, modelPartial, modelNewIssue, modelHighStakes, modelShortlist,
+                props.getMatching().getShortlist().isAiTitles());
 
         // an unpriced model would make every cost cap blind: refuse instead of warning
         ApiUsageLogService pricingCheck = new ApiUsageLogService(null, props);
-        for (String m : List.of(modelMatching, modelPartial, modelNewIssue, modelHighStakes)) {
+        for (String m : List.of(modelMatching, modelPartial, modelNewIssue, modelHighStakes, modelShortlist)) {
             if (!pricingCheck.hasPrice(m)) {
                 fail("REFUSED: no price configured for model " + m + " under noticedesk.pricing.models in application.yml");
             }
         }
-        for (String agent : List.of("matching", "partial_drafting", "new_issue", "high_stakes")) {
+        for (String agent : List.of("matching", "partial_drafting", "new_issue", "high_stakes", AppProperties.Llm.SHORTLIST)) {
             System.out.printf("%s: effort=%s max_tokens=%d retry_max_tokens=%d%n", agent,
                     props.getLlm().effortForAgent(agent),
                     props.getLlm().maxTokensForAgent(agent, false), props.getLlm().maxTokensForAgent(agent, true));
@@ -167,6 +173,8 @@ public class V7LivePipelineRunnerTest {
         guard.attach(usageLogService);
 
         IssueMatchingAgent matchingAgent = new IssueMatchingAgent(llmFactory, catalogueService, usageLogService, props, jdbc, om);
+        // REQUIRED for the same reason as setCatalogueService below: without it the shortlist uses labels only
+        matchingAgent.setShortlistTitleAgent(new ShortlistTitleAgent(props, om, usageLogService, llmFactory));
         PartialDraftingAgent partialAgent = new PartialDraftingAgent(props, om, usageLogService, llmFactory);
         NewIssueDraftingAgent newIssueAgent = new NewIssueDraftingAgent(props, om, usageLogService, llmFactory);
         HighStakesDraftingAgent highStakesAgent = new HighStakesDraftingAgent(props, om, usageLogService, llmFactory);
@@ -406,24 +414,26 @@ public class V7LivePipelineRunnerTest {
     }
 
     /**
-     * The "Shortlist:" line of a notice from the {@code info:shortlist} flag details, e.g. "23 cards (level keyword;
-     * stage 61, keyword 19, siblings 4)", plus the widening when it ran; "none (full catalogue, shortlist off)"
-     * without the flag.
+     * The "Shortlist:" line of a notice from the {@code info:shortlist} flag details, e.g. "27 cards (pool 128; labels
+     * 19, ai 14, siblings 6; titles-only 11)", plus the widening when it ran or was skipped; "none (full catalogue,
+     * shortlist off)" without the flag.
      */
     static String shortlistLine(List<DraftCheckResult> checkResults) {
         Map<String, Object> d = null;
         Map<String, Object> widened = null;
+        Map<String, Object> skipped = null;
         if (checkResults != null) {
             for (DraftCheckResult c : checkResults) {
                 Object flag = c.details() != null ? c.details().get("flag") : null;
                 if (V7DraftingPipelineService.FLAG_SHORTLIST.equals(flag)) d = c.details();
                 if (V7DraftingPipelineService.FLAG_SHORTLIST_WIDENED.equals(flag)) widened = c.details();
+                if (V7DraftingPipelineService.FLAG_SHORTLIST_WIDENING_SKIPPED.equals(flag)) skipped = c.details();
             }
         }
         if (d == null) return "none (full catalogue, shortlist off)";
-        String line = d.get("size") + " cards (level " + d.get("level") + "; stage " + d.get("stage") + ", keyword "
-                + d.get("keyword") + ", siblings " + d.get("siblings") + ")";
-        if (widened != null) line += "; widened to " + widened.get("full_size") + " cards for issue(s) " + widened.get("unmatched_issues");
+        String line = CardShortlister.Shortlist.describe(d);
+        if (widened != null) line += "; widened to " + widened.get("widened_size") + " cards for issue(s) " + widened.get("unmatched_issues");
+        if (skipped != null) line += "; widening skipped (budget) for issue(s) " + skipped.get("unmatched_issues");
         return line;
     }
 

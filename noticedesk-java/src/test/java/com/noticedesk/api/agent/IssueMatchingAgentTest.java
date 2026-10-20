@@ -732,7 +732,7 @@ class IssueMatchingAgentTest {
         assertEquals(IssueMatchingAgent.STANCE_NOT_APPLICABLE, stance.get("6"), "n/a reads as not_applicable");
         assertFalse(stance.containsKey("7"), "a value outside the four is dropped");
         assertEquals(Set.of("admitted", "denied", "explained", "not_applicable"), IssueMatchingAgent.PARA_STANCES);
-        assertEquals("issue_matching_v3_6", IssueMatchingAgent.PROMPT_VERSION);
+        assertEquals("issue_matching_v3_7", IssueMatchingAgent.PROMPT_VERSION);
     }
 
     @Test

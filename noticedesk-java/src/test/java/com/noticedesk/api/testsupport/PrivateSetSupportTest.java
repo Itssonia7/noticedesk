@@ -84,4 +84,34 @@ class PrivateSetSupportTest {
         assertNull(PrivateSetSupport.privateNotice(tmp.toString(), "notice_real_99.json"));
         assertNull(PrivateSetSupport.privateNotice(null, "notice_real_04D.json"));
     }
+
+    @Test
+    void readCards_objectOrArray_statusDefaultsToDraft_catalogueOrder(@TempDir Path tmp) throws IOException {
+        Path cards = Files.createDirectories(tmp.resolve("cards"));
+        Files.writeString(cards.resolve("b.json"), """
+                [{"card_id": "T-002", "version": 1, "title": "Two", "summary": "s", "keywords": ["Section 73"], "stages": ["scn_73"],
+                  "not_this_if": ["use T-001"], "status": "active"},
+                 {"card_id": "T-001", "version": 2, "title": "One v2", "summary": "s", "status": "active"}]
+                """);
+        Files.writeString(cards.resolve("a.json"), """
+                {"card_id": "T-001", "title": "One v1", "summary": "s", "sections": "Section 16"}
+                """);
+        Files.writeString(cards.resolve("notes.txt"), "ignored");
+
+        List<com.noticedesk.api.model.matching.IssueCard> read =
+                PrivateSetSupport.readCards(cards.toFile(), new com.fasterxml.jackson.databind.ObjectMapper());
+
+        assertEquals(List.of("T-001", "T-001", "T-002"), read.stream().map(c -> c.cardId()).toList());
+        assertEquals(2, read.get(0).version(), "latest version first");
+        assertEquals("draft", read.get(1).status(), "no status: draft, as the private seed loader");
+        assertEquals(List.of("Section 16"), read.get(1).sections(), "a single value becomes a one-item list");
+        assertEquals(List.of("Section 73"), read.get(2).keywords());
+        assertEquals(List.of("use T-001"), read.get(2).notThisIf());
+        assertTrue(PrivateSetSupport.readCards(tmp.resolve("absent").toFile(), new com.fasterxml.jackson.databind.ObjectMapper()).isEmpty());
+
+        Files.writeString(cards.resolve("c.json"), "{\"title\": \"no id\"}");
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> PrivateSetSupport.readCards(cards.toFile(), new com.fasterxml.jackson.databind.ObjectMapper()));
+        assertEquals("cards file #3 has a card without card_id", e.getMessage());
+    }
 }

@@ -59,6 +59,8 @@ public class AppProperties {
         private String modelPartialDrafting = "";
         private String modelNewIssue = "";
         private String modelHighStakes = "";
+        /** Shortlist title pass ({@code ShortlistTitleAgent}); blank = the matching model. */
+        private String modelShortlist = "";
         private String stubDefaultCanned;
 
         // Per-agent thinking effort (output_config.effort) for models listed in anthropic.effort-models.
@@ -69,6 +71,8 @@ public class AppProperties {
         private String effortHighStakes = "";
         /** Template variable extraction step (runs on the partial-drafting model): a lookup task, low effort. */
         private String effortTemplateVariables = "low";
+        /** Shortlist title pass: a generous read of one-line titles, low effort. */
+        private String effortShortlist = "low";
 
         // Per-agent max_tokens. A thinking model spends output tokens on thinking before the JSON,
         // so the cap must leave room for both. A max_tokens stop is retried once with the *Retry cap.
@@ -84,6 +88,9 @@ public class AppProperties {
         /** The variable step returns a short JSON object (a few values per issue). */
         private Integer maxTokensTemplateVariables = 2000;
         private Integer maxTokensTemplateVariablesRetry = 4000;
+        /** The shortlist title pass returns a short list of card ids. */
+        private Integer maxTokensShortlist = 1500;
+        private Integer maxTokensShortlistRetry = 3000;
 
         /** Per-notice spend cap (INR) across all v7 model calls; once reached, remaining AI issues are left to the partner. */
         private Double maxCostInrPerNotice = 60.0;
@@ -101,7 +108,7 @@ public class AppProperties {
             private Integer maxCallsPerNotice = 6;
         }
 
-        /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes, template_variables); "" when unset. */
+        /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes, template_variables, shortlist); "" when unset. */
         public String effortForAgent(String agent) {
             String v = switch (agent) {
                 case "matching" -> effortMatching;
@@ -109,6 +116,7 @@ public class AppProperties {
                 case "new_issue" -> effortNewIssue;
                 case "high_stakes" -> effortHighStakes;
                 case TEMPLATE_VARIABLES -> effortTemplateVariables;
+                case SHORTLIST -> effortShortlist;
                 default -> "";
             };
             return v != null ? v.trim() : "";
@@ -122,6 +130,7 @@ public class AppProperties {
                 case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 24000 : 16000);
                 case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 24000 : 16000);
                 case TEMPLATE_VARIABLES -> orDefault(retry ? maxTokensTemplateVariablesRetry : maxTokensTemplateVariables, retry ? 4000 : 2000);
+                case SHORTLIST -> orDefault(retry ? maxTokensShortlistRetry : maxTokensShortlist, retry ? 3000 : 1500);
                 default -> retry ? 16000 : 8000;
             };
         }
@@ -131,6 +140,14 @@ public class AppProperties {
          * own: it runs on the partial-drafting model ({@code LLM_MODEL_PARTIAL_DRAFTING}), so pricing needs nothing new.
          */
         public static final String TEMPLATE_VARIABLES = "template_variables";
+
+        /** Agent key of the shortlist title pass ({@code ShortlistTitleAgent}). */
+        public static final String SHORTLIST = "shortlist";
+
+        /** Model of the shortlist title pass: {@code model-shortlist} when set, else the matching model. */
+        public String shortlistModel() {
+            return modelShortlist != null && !modelShortlist.isBlank() ? modelShortlist.trim() : modelMatching;
+        }
 
         private static int orDefault(Integer value, int fallback) {
             return value != null && value > 0 ? value : fallback;
@@ -179,6 +196,12 @@ public class AppProperties {
              * against the notice text; see {@code CardShortlister}) instead of the whole catalogue.
              */
             private boolean enabled = true;
+            /** Label scoring keeps every card scoring at least this fraction of the best score in the stage pool. */
+            private double relativeCutoff = 0.35;
+            /** When the cutoff keeps fewer cards than this, the top cards by label score are kept up to this many. */
+            private int minCards = 15;
+            /** Run the AI title pass ({@code ShortlistTitleAgent}) and add its picks to the label picks. */
+            private boolean aiTitles = true;
         }
     }
 
@@ -348,6 +371,7 @@ public class AppProperties {
             case "partial_drafting", Llm.TEMPLATE_VARIABLES -> llm.modelPartialDrafting;
             case "new_issue"        -> llm.modelNewIssue;
             case "high_stakes"      -> llm.modelHighStakes;
+            case Llm.SHORTLIST      -> llm.shortlistModel();
             default         -> "";
         };
         return (override != null && !override.isBlank()) ? override : llm.anthropic.model;
