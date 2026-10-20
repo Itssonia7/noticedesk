@@ -193,6 +193,12 @@ noticedesk:
         output-per-million: 20.00
         cache-read-per-million: 0.20
         cache-write-per-million: 5.00
+      # list prices for prompts up to 100K tokens (above that 0.50 / 2.50); every prompt this app sends on it is far below 100K.
+      "claude-haiku-5-5":
+        input-per-million: 0.10
+        output-per-million: 0.50
+        cache-read-per-million: 0.01
+        cache-write-per-million: 0.125
       "claude-3-opus-20240229":
         input-per-million: 15.0
         output-per-million: 75.0
