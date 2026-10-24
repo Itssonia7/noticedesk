@@ -258,7 +258,9 @@ class CardShortlisterTest {
         assertEquals(CardShortlister.DEFAULT_RELATIVE_CUTOFF_WITH_AI, p.getRelativeCutoffWithAi());
         assertEquals(CardShortlister.DEFAULT_MIN_CARDS_WITH_AI, p.getMinCardsWithAi());
         assertEquals(0.5, CardShortlister.DEFAULT_RELATIVE_CUTOFF_WITH_AI);
-        assertEquals(8, CardShortlister.DEFAULT_MIN_CARDS_WITH_AI);
+        assertEquals(12, CardShortlister.DEFAULT_MIN_CARDS_WITH_AI);
+        assertEquals(List.of("no section", "vague"), p.getAbsenceTitlePatterns());
+        assertEquals(CardShortlister.DEFAULT_ABSENCE_TITLE_PATTERNS, CardShortlister.Options.DEFAULT.absenceTitlePatterns());
         assertEquals(CardShortlister.Options.DEFAULT, new CardShortlister.Options(Double.NaN, -1, 2.0, -3), "bad values fall back to the defaults");
         assertEquals(new CardShortlister.Options(0.2, 4, 0.2, 4), new CardShortlister.Options(0.2, 4), "two values: the same with or without AI");
     }
@@ -349,7 +351,7 @@ class CardShortlisterTest {
         assertEquals("3 cards (pool 10; labels 3, ai 0, siblings 0; titles-only 0)", s.describe());
     }
 
-    // ------------------------------------------------------------------ floor, widening, determinism
+    // ------------------------------------------------------------------ floor, absence cards, determinism
 
     @Test
     void floorUsesTheStagePoolThenTheFullCatalogue() {
@@ -373,14 +375,69 @@ class CardShortlisterTest {
         assertTrue(unknown.isFull());
     }
 
+    private static IssueCard titled(String id, String title, List<String> stages, String... keywords) {
+        return new IssueCard(id, 1, title, "summary", List.of(), null, null, stages, List.of(keywords), List.of(),
+                null, "active", null, null, null);
+    }
+
+    /** Four scored DRC-01 cards, two absence cards (one outside the scn_73 pool) and a card named like neither. */
+    private static List<IssueCard> absenceCatalogue() {
+        return List.of(
+                titled("A-01", "ITC on invoices not in GSTR-2B", List.of("scn_73"), "DRC-01", "GSTR-2B"),
+                titled("A-02", "Turnover mismatch GSTR-1 vs GSTR-3B", List.of("scn_73"), "DRC-01", "GSTR-3B"),
+                titled("A-03", "Interest on delayed payment", List.of("scn_73"), "DRC-01"),
+                titled("A-04", "Late fee", List.of("scn_73"), "DRC-01"),
+                titled("A-10", "Communication citing NO SECTION, rule or form: request the legal basis", List.of("other")),
+                titled("A-11", "Vague DRC-01 SCN: no allegation, provision, computation", List.of("asmt_10")),
+                titled("A-12", "Section-wise reconciliation", List.of("scn_73")));
+    }
+
+    private static final String SECTIONLESS_SCN = """
+            FORM GST DRC-01
+            Summary of the show cause notice
+            You are directed to show cause why the tax shown in GSTR-2B and GSTR-3B should not be demanded.
+            """;
+
     @Test
-    void wideningRendersTheStagePoolNeverMoreThanThePool() {
-        Shortlist w = CardShortlister.widened(unionCatalogue(), "scn_73", ResponseStage.REPLY, NOTICE);
-        assertEquals(CardShortlister.LEVEL_STAGE, w.level());
-        assertEquals(11, w.size());
-        assertFalse(w.cardIds().contains("T-30"));
-        // the pool is the whole catalogue: full
-        assertTrue(CardShortlister.widened(unionCatalogue(), "unknown", null, "no references").isFull());
+    void sectionlessShowCauseNoticeGetsTheAbsenceCards() {
+        Shortlist s = CardShortlister.shortlist(absenceCatalogue(), "scn_73", ResponseStage.REPLY, SECTIONLESS_SCN,
+                new CardShortlister.Options(0.35, 0), null, CardShortlister.AI_OFF);
+        assertEquals(Set.of("A-10", "A-11"), s.absencePicks(), "title match is case-insensitive, any stage");
+        assertTrue(s.cardIds().containsAll(List.of("A-10", "A-11")), s.cardIds().toString());
+        assertFalse(s.cardIds().contains("A-12"), "'Section-wise' is not 'no section'");
+        assertEquals(2, s.details().get("absence"));
+        assertTrue(s.describe().contains(", absence 2; titles-only"), s.describe());
+
+        // a DRC-01 heading alone places the document (no stage key from the notice type)
+        Shortlist byHeading = CardShortlister.shortlist(absenceCatalogue(), "unknown", null, SECTIONLESS_SCN,
+                new CardShortlister.Options(0.35, 0), null, CardShortlister.AI_OFF);
+        assertEquals(Set.of("A-10", "A-11"), byHeading.absencePicks());
+    }
+
+    @Test
+    void absenceCardsNeedAShowCauseNoticeWithoutAnySectionOrRule() {
+        CardShortlister.Options opt = new CardShortlister.Options(0.35, 0);
+        Shortlist cited = CardShortlister.shortlist(absenceCatalogue(), "scn_73", ResponseStage.REPLY,
+                SECTIONLESS_SCN + "\nThe demand is raised under Section 73.", opt, null, CardShortlister.AI_OFF);
+        assertTrue(cited.absencePicks().isEmpty(), "the notice cites a section");
+        assertFalse(cited.details().containsKey("absence"));
+        assertFalse(cited.describe().contains("absence"), cited.describe());
+
+        Shortlist rule = CardShortlister.shortlist(absenceCatalogue(), "scn_73", ResponseStage.REPLY,
+                SECTIONLESS_SCN + "\nRule 36(4) applies.", opt, null, CardShortlister.AI_OFF);
+        assertTrue(rule.absencePicks().isEmpty(), "the notice cites a rule");
+
+        Shortlist order = CardShortlister.shortlist(absenceCatalogue(), "drc_07", ResponseStage.APPEAL,
+                "ORDER\nThe demand is confirmed in GSTR-3B terms.", opt, null, CardShortlister.AI_OFF);
+        assertTrue(order.absencePicks().isEmpty(), "an order is not a show cause notice");
+
+        Shortlist none = CardShortlister.shortlist(absenceCatalogue(), "scn_73", ResponseStage.REPLY, SECTIONLESS_SCN,
+                new CardShortlister.Options(0.35, 0, 0.35, 0, List.of()), null, CardShortlister.AI_OFF);
+        assertTrue(none.absencePicks().isEmpty(), "no patterns configured");
+
+        Shortlist custom = CardShortlister.shortlist(absenceCatalogue(), "asmt_10", ResponseStage.REPLY, SECTIONLESS_SCN,
+                new CardShortlister.Options(0.35, 0, 0.35, 0, List.of(" Late FEE ", "")), null, CardShortlister.AI_OFF);
+        assertEquals(Set.of("A-04"), custom.absencePicks(), "configured patterns are trimmed and lower-cased; blanks dropped");
     }
 
     @Test

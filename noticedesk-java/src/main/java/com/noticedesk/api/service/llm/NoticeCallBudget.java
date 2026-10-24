@@ -26,7 +26,8 @@ import java.math.RoundingMode;
  *       with 3 characters per token used about 7,770) at the input price;</li>
  *   <li>output: the full max_tokens of the call (thinking included) at the output price.</li>
  * </ul>
- * With a cap set, a model with no configured price is refused (its cost could not be capped).
+ * With a cap set, a model MISSING from the price table is refused (its cost could not be capped); a model priced at
+ * zero (a free tier) is in the table and allowed, its worst case being 0.
  */
 @Slf4j
 public final class NoticeCallBudget {

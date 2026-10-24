@@ -114,4 +114,30 @@ class PrivateSetSupportTest {
                 () -> PrivateSetSupport.readCards(cards.toFile(), new com.fasterxml.jackson.databind.ObjectMapper()));
         assertEquals("cards file #3 has a card without card_id", e.getMessage());
     }
+
+    @Test
+    void readNotice_benchOrRealNotice() throws IOException {
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        PrivateSetSupport.NoticeJson bench = PrivateSetSupport.readNotice(om.readTree("""
+                {"notice_id": "n1", "document_type": "scn_73", "full_ocr_text": "SCN text",
+                 "answer_key": {"issues": [{"status": "partial"}]}}"""));
+        assertFalse(bench.realNotice());
+        assertEquals("partial", bench.expectedStatus());
+        assertEquals("SCN text", bench.text());
+
+        // the minimal real notice: no answer_key; "text" accepted for full_ocr_text; blank document_type is unknown
+        PrivateSetSupport.NoticeJson real = PrivateSetSupport.readNotice(om.readTree("""
+                {"notice_id": "real_01", "document_type": "", "text": "letter text"}"""));
+        assertTrue(real.realNotice());
+        assertEquals("none (real notice)", real.expectedStatus());
+        assertEquals("letter text", real.text());
+        assertEquals("unknown", real.documentType());
+        assertTrue(PrivateSetSupport.readNotice(om.readTree("""
+                {"notice_id": "real_02", "full_ocr_text": "t", "answer_key": null}""")).realNotice());
+
+        IllegalArgumentException noText = assertThrows(IllegalArgumentException.class,
+                () -> PrivateSetSupport.readNotice(om.readTree("{\"notice_id\": \"x\"}")));
+        assertTrue(noText.getMessage().contains("no full_ocr_text or text"));
+        assertThrows(IllegalArgumentException.class, () -> PrivateSetSupport.readNotice(om.readTree("{\"text\": \"t\"}")));
+    }
 }

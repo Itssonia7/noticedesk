@@ -33,12 +33,14 @@ public class LlmFactory {
     // -----------------------------------------------------------------------
 
     /**
-     * Returns the primary LLM provider with its model resolved for {@code agentName}.
+     * Returns the provider for {@code agentName} with its model resolved: the primary provider, or the agent's own
+     * provider when one is set ({@code llm.provider-new-issue} / {@code llm.provider-high-stakes}, see
+     * {@link AppProperties.Llm#providerForAgent}).
      *
-     * @param agentName  one of {@code "drafting"}, {@code "triage"}, {@code "parsing"}
+     * @param agentName  one of {@code "drafting"}, {@code "triage"}, {@code "parsing"}, {@code "new_issue"}, ...
      */
     public LlmProvider getLlmForAgent(String agentName) {
-        String providerName = properties.getLlm().getProviderPrimary();
+        String providerName = properties.getLlm().providerForAgent(agentName);
         if ("matching".equals(agentName)) {
             String matchingModel = properties.getLlm().getModelMatching();
             if (matchingModel == null || matchingModel.isBlank()) {

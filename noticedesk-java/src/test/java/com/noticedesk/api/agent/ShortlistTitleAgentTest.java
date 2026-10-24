@@ -349,16 +349,11 @@ class ShortlistTitleAgentTest {
     }
 
     @Test
-    void matcherMakesNoTitleCallWhenTheSwitchIsOffOrWhenWidening() {
+    void matcherMakesNoTitleCallWhenTheSwitchIsOff() {
         answer("{\"card_ids\": [\"NDK-001\"]}");
         props.getMatching().getShortlist().setAiTitles(false);
         MatchingResult off = matcher().matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null);
         assertEquals(CardShortlister.AI_OFF, off.shortlist().aiStatus());
-
-        props.getMatching().getShortlist().setAiTitles(true);
-        MatchingResult widened = matcher().matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null, true);
-        assertEquals(CardShortlister.LEVEL_STAGE, widened.shortlist().level());
-        assertEquals(List.of("NDK-002", "NDK-001", "NDK-003", "NDK-004"), widened.shortlist().cardIds(), "the scn_73 stage pool");
         Mockito.verify(llm, Mockito.never()).generateWithEffort(Mockito.startsWith(SYSTEM_START), Mockito.any(), Mockito.any(),
                 Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
     }

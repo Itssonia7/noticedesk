@@ -64,6 +64,8 @@ final class WriterCall {
                 return null;
             }
 
+            log.info("{} writer call provider={} model={} attempt={} max_tokens={}", label,
+                    llm != null ? llm.getName() : "none", model, attempt, maxTokens);
             LlmResponse response;
             try {
                 response = cachedUserPrefix != null

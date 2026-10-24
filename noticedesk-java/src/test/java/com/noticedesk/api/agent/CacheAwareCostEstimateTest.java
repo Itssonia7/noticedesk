@@ -276,17 +276,9 @@ class CacheAwareCostEstimateTest {
 
         assertFalse(user.getValue().contains("KEYWORDS:"), "a shortlist carries no keywords line");
 
-        // the widening call renders the stage pool (the four scn_73 cards), never the full catalogue
-        MatchingResult widened = agent.matchNoticeWithOcrText(notice, "scn_73", UUID.randomUUID(), UUID.randomUUID(), budget, true);
-        assertEquals("stage", widened.shortlist().level());
-        assertEquals(List.of("T-001", "T-002", "T-003", "T-004"), widened.shortlist().cardIds());
-        assertFalse(system.getValue().contains("CARD_ID:"));
-        assertTrue(user.getValue().contains("Total Cards: 4"), user.getValue());
-
-        // a widening whose stage pool is the whole catalogue (no stage filter): the catalogue goes back into the
-        // cached system prompt
+        // a shortlist at level full (no stage filter, no label hit): the catalogue goes back into the cached system prompt
         MatchingResult full = agent.matchNoticeWithOcrText("A letter with no references", "unknown", UUID.randomUUID(),
-                UUID.randomUUID(), budget, true);
+                UUID.randomUUID(), budget);
         assertTrue(full.shortlist().isFull());
         assertTrue(system.getValue().contains("Total Cards: 6"));
         assertTrue(system.getValue().contains("KEYWORDS:"), "the full catalogue keeps its keywords");

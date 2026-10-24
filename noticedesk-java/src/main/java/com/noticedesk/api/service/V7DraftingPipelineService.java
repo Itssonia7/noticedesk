@@ -122,10 +122,6 @@ public class V7DraftingPipelineService {
 
     /** Draft flag (info): the matching prompt carried a shortlist of the catalogue; details size, level, counts per source. */
     public static final String FLAG_SHORTLIST = "info:shortlist";
-    /** Draft flag (info): a substantive ground matched no shortlisted card, so matching ran once more on the stage pool. */
-    public static final String FLAG_SHORTLIST_WIDENED = "info:shortlist_widened";
-    /** Draft flag (info): the widening call was not made because the per-notice budget would refuse it. */
-    public static final String FLAG_SHORTLIST_WIDENING_SKIPPED = "info:shortlist_widening_skipped";
     /** Draft flag (warn): the shortlist's AI title pass failed or was refused; the shortlist used labels only. */
     public static final String FLAG_SHORTLIST_AI_SKIPPED = "warn:shortlist_ai_skipped";
     /** Draft flag (warn): the title pass answer was not readable JSON; its card ids were found in the text. */
@@ -344,9 +340,8 @@ public class V7DraftingPipelineService {
         List<String> notes = new ArrayList<>();
         Map<String, Map<String, Object>> stageFlagDetails = new LinkedHashMap<>();
 
-        // ---- Stage 1 widening: a substantive ground the shortlist could not place is matched once more on every card
-        matchingResult = widenOnShortlistMiss(matchingResult, fullOcrText, noticeType, tenantId, noticeId, budget, notes,
-                stageFlags, stageFlagDetails);
+        // the shortlist the matcher saw: flag and partner note (an unmatched ground goes to the writer path as it is)
+        recordShortlist(matchingResult, notes, stageFlags, stageFlagDetails);
 
         List<MatchedIssue> issues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
         log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
@@ -690,22 +685,14 @@ public class V7DraftingPipelineService {
     }
 
     /**
-     * Stage 1 widening. When the matcher saw a shortlist narrower than the notice's stage pool and an issue came back
-     * with status none on a substantive ground (one the new-issue writer would be called for:
-     * {@link #lacksSubstantiveGround} is false), matching runs ONCE more on the stage pool (never the full catalogue,
-     * unless the pool is the full catalogue) through the same budget and that result is used (flag
-     * {@link #FLAG_SHORTLIST_WIDENED}). When the budget refuses that call it is not made (flag
-     * {@link #FLAG_SHORTLIST_WIDENING_SKIPPED}); a second result that failed otherwise is not used either. In both cases
-     * the first result stays, with a partner note. Every shortlist gets {@link #FLAG_SHORTLIST} and one partner note
-     * line; a title pass that could not be used adds {@link #FLAG_SHORTLIST_AI_SKIPPED}, one whose ids were found in
-     * unreadable JSON {@link #FLAG_SHORTLIST_AI_PARSE_FALLBACK}. Returns {@code mr} itself when
-     * no second call was made or it was not used.
+     * The shortlist the matcher saw: flag {@link #FLAG_SHORTLIST} with its details and one partner note line; a title
+     * pass that could not be used adds {@link #FLAG_SHORTLIST_AI_SKIPPED}, one whose ids were found in unreadable JSON
+     * {@link #FLAG_SHORTLIST_AI_PARSE_FALLBACK}. No second matching call is made: an issue with status none goes to
+     * the writer path.
      */
-    MatchingResult widenOnShortlistMiss(MatchingResult mr, String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
-                                        NoticeCallBudget budget, List<String> notes, Set<String> flags,
-                                        Map<String, Map<String, Object>> flagDetails) {
+    void recordShortlist(MatchingResult mr, List<String> notes, Set<String> flags, Map<String, Map<String, Object>> flagDetails) {
         CardShortlister.Shortlist first = mr != null ? mr.shortlist() : null;
-        if (first == null) return mr;
+        if (first == null) return;
         flags.add(FLAG_SHORTLIST);
         flagDetails.put(FLAG_SHORTLIST, first.details());
         notes.add("Catalogue shortlist: " + first.size() + " of " + first.catalogueSize() + " cards shown to the matcher ("
@@ -718,54 +705,6 @@ public class V7DraftingPipelineService {
             flags.add(FLAG_SHORTLIST_AI_PARSE_FALLBACK);
             notes.add("The shortlist's AI title pass answer was not clean JSON; the card ids found in it were used.");
         }
-        if (first.isFull() || first.size() >= first.poolSize()) return mr;
-        List<Integer> misses = new ArrayList<>();
-        for (MatchedIssue issue : mr.issues() != null ? mr.issues() : List.<MatchedIssue>of()) {
-            if ("none".equalsIgnoreCase(issue.status()) && issue.primaryCardId() == null && !lacksSubstantiveGround(issue)) {
-                misses.add(issue.issueNo());
-            }
-        }
-        if (misses.isEmpty()) return mr;
-
-        log.info("Notice {}: issue(s) {} matched no shortlisted card on a substantive ground; matching again on the stage pool ({} cards)",
-                noticeId, misses, first.poolSize());
-        MatchingResult widened = issueMatchingAgent.matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, budget, true);
-        String failure = matchingFailure(widened);
-        if (failure != null) {
-            boolean refused = widened != null && widened.flags() != null && widened.flags().contains(IssueMatchingAgent.FLAG_COST_CAP);
-            if (refused) {
-                log.info("Notice {}: widening call not made (budget): {}", noticeId, failure);
-                flags.add(FLAG_SHORTLIST_WIDENING_SKIPPED);
-                Map<String, Object> details = new LinkedHashMap<>();
-                details.put("shortlist_size", first.size());
-                details.put("pool", first.poolSize());
-                details.put("unmatched_issues", List.copyOf(misses));
-                flagDetails.put(FLAG_SHORTLIST_WIDENING_SKIPPED, details);
-                notes.add("Issue(s) " + misses + " matched no shortlisted card; matching on the " + first.poolSize()
-                        + " cards of the stage pool was not run (per-notice budget), so the shortlist result is kept: partner to"
-                        + " check those grounds.");
-                return mr;
-            }
-            log.warn("Notice {}: widened matching gave no usable result ({}); the shortlist result is kept", noticeId, failure);
-            notes.add("Issue(s) " + misses + " matched no shortlisted card; matching on the stage pool gave no usable result ("
-                    + HtmlSanitizer.sanitize(failure) + "), so the shortlist result is kept: partner to check those grounds.");
-            return mr;
-        }
-        int widenedSize = widened.shortlist() != null ? widened.shortlist().size() : first.poolSize();
-        long stillNone = widened.issues() == null ? 0 : widened.issues().stream()
-                .filter(i -> "none".equalsIgnoreCase(i.status()) && i.primaryCardId() == null && !lacksSubstantiveGround(i)).count();
-        Map<String, Object> details = new LinkedHashMap<>();
-        details.put("shortlist_size", first.size());
-        details.put("shortlist_level", first.level());
-        details.put("widened_size", widenedSize);
-        details.put("unmatched_issues", List.copyOf(misses));
-        details.put("unmatched_after_widening", stillNone);
-        flags.add(FLAG_SHORTLIST_WIDENED);
-        flagDetails.put(FLAG_SHORTLIST_WIDENED, details);
-        notes.add("Matching widened: issue(s) " + misses + " matched no card among the " + first.size()
-                + " shortlisted, so matching ran again on the " + widenedSize + " cards of the stage pool and that result is used ("
-                + stillNone + " substantive ground(s) still without a card).");
-        return widened;
     }
 
     /** Minimum days between a DRC-01A and its reply date (drafting.defects.drc01a-min-days, DEFECT_DRC01A_MIN_DAYS). */
@@ -891,7 +830,8 @@ public class V7DraftingPipelineService {
      * that are of the right class. Exactly one candidate: it becomes the primary, the old primary the first
      * alternate, the status is kept and the issue gets the flag {@code "stage_corrected: <old> -> <new>"}. Several:
      * the candidates already the primary card of another issue of the notice are dropped, and exactly one left is
-     * swapped in the same way. None, or still several: the card is kept and the issue gets {@code "stage_mismatch: <input stage> vs <card stage>"}.
+     * swapped in the same way; when several are still left, the one candidate whose own NOT THIS IF rules name the
+     * current primary (a mutual sibling) is swapped in, if exactly one is. None, or still several: the card is kept and the issue gets {@code "stage_mismatch: <input stage> vs <card stage>"}.
      */
     static StageCorrection correctResponseStage(List<MatchedIssue> issues, ResponseStage stage, Map<String, IssueCard> cards) {
         List<StageCorrection.Swap> swaps = new ArrayList<>();
@@ -933,6 +873,11 @@ public class V7DraftingPipelineService {
                 List<String> free = candidates.stream().filter(id -> !primariesElsewhere.contains(id)).toList();
                 if (free.size() == 1) candidates = new LinkedHashSet<>(free);
             }
+            if (candidates.size() > 1) {
+                // tie-break: a mutual sibling, whose own NOT THIS IF rules name the current primary card
+                List<String> mutual = candidates.stream().filter(id -> namesInNotThisIf(cards.get(id), primary)).toList();
+                if (mutual.size() == 1) candidates = new LinkedHashSet<>(mutual);
+            }
 
             List<String> issueFlags = new ArrayList<>(issue.flags() != null ? issue.flags() : List.of());
             if (candidates.size() == 1) {
@@ -959,6 +904,15 @@ public class V7DraftingPipelineService {
             changed = true;
         }
         return new StageCorrection(changed ? out : issues, swaps, mismatches);
+    }
+
+    /** True when one of the card's NOT THIS IF rules names {@code cardId}. */
+    private static boolean namesInNotThisIf(IssueCard card, String cardId) {
+        if (card == null || card.notThisIf() == null || cardId == null) return false;
+        for (String rule : card.notThisIf()) {
+            if (rule != null && namesCard(rule, cardId)) return true;
+        }
+        return false;
     }
 
     /** True when {@code text} names the card id as a whole token (NDK-22 is not named by "NDK-224"). */

@@ -45,6 +45,10 @@ public class AppProperties {
     public static class Llm {
         private String providerPrimary = "stub";
         private String providerSecondary;
+        /** Provider of the new-issue writer (anthropic, gemini, ...); blank = the primary provider. */
+        private String providerNewIssue = "";
+        /** Provider of the high-stakes writer; blank = the primary provider. */
+        private String providerHighStakes = "";
         private Anthropic anthropic = new Anthropic();
         private OpenAi openai = new OpenAi();
         private Gemini gemini = new Gemini();
@@ -103,6 +107,19 @@ public class AppProperties {
         public static class HighStakesLimits {
             /** Maximum high-stakes model calls (retries included) for one notice. */
             private Integer maxCallsPerNotice = 6;
+        }
+
+        /**
+         * Provider for an agent key: {@code provider-new-issue} for new_issue, {@code provider-high-stakes} for
+         * high_stakes when set, else the primary provider.
+         */
+        public String providerForAgent(String agent) {
+            String override = switch (agent != null ? agent : "") {
+                case "new_issue" -> providerNewIssue;
+                case "high_stakes" -> providerHighStakes;
+                default -> null;
+            };
+            return override != null && !override.isBlank() ? override.trim().toLowerCase(java.util.Locale.ROOT) : providerPrimary;
         }
 
         /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes, template_variables, shortlist); "" when unset. */
@@ -204,7 +221,12 @@ public class AppProperties {
             /** Relative cut-off of the label scoring when the AI title pass returned at least one card. */
             private double relativeCutoffWithAi = 0.5;
             /** Min-cards top-up of the label scoring when the AI title pass returned at least one card. */
-            private int minCardsWithAi = 8;
+            private int minCardsWithAi = 12;
+            /**
+             * Title substrings (case-insensitive) of the cards added in full for a show cause notice / intimation that
+             * cites no section or rule (see {@code CardShortlister}).
+             */
+            private List<String> absenceTitlePatterns = new java.util.ArrayList<>(List.of("no section", "vague"));
             /** max_tokens of the AI title pass (thinking tokens count against it). */
             private Integer titleMaxTokens = 6000;
             /** max_tokens of the AI title pass retry after a max_tokens stop. */
@@ -372,11 +394,23 @@ public class AppProperties {
         return llm.maxTokensForAgent(agent, retry);
     }
 
+    /**
+     * Model a v7 writer sends for {@code agent}: on the gemini provider the one {@link #modelForAgent} resolves (the
+     * writer's own model, else {@code llm.gemini.model}), so the call, the budget and the provider agree; on any other
+     * provider {@code configured} (the writer's {@code model-*} setting).
+     */
+    public String writerModel(String agent, String configured) {
+        if (llm != null && "gemini".equals(llm.providerForAgent(agent))) return modelForAgent(agent, "gemini");
+        return configured;
+    }
+
     public String modelForAgent(String agent, String provider) {
         if ("openai".equals(provider)) {
             return llm.openai.model;
         } else if ("gemini".equals(provider)) {
-            return llm.gemini.model;
+            // the writers name their own model (LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES); else GEMINI_MODEL
+            String writerModel = "new_issue".equals(agent) ? llm.modelNewIssue : "high_stakes".equals(agent) ? llm.modelHighStakes : null;
+            return writerModel != null && !writerModel.isBlank() ? writerModel.trim() : llm.gemini.model;
         } else if (!"anthropic".equals(provider)) {
             return "";
         }

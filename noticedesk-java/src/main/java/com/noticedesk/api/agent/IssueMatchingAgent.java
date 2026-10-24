@@ -344,16 +344,6 @@ public class IssueMatchingAgent {
     /** Most alternates kept per issue; any beyond are dropped. */
     static final int MAX_ALTERNATES = 2;
 
-    /**
-     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID)}, checking every attempt (retry included)
-     * against {@code budget} before the call and recording each billed call in it. A refused attempt ends
-     * matching with a {@link #FLAG_COST_CAP} fallback result. A null budget checks nothing.
-     */
-    public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
-                                                 NoticeCallBudget budget) {
-        return matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, budget, false);
-    }
-
     /** {@code matching.shortlist.enabled} (env MATCHING_SHORTLIST, default true). */
     boolean shortlistEnabled() {
         return properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null
@@ -372,7 +362,8 @@ public class IssueMatchingAgent {
             return CardShortlister.Options.DEFAULT;
         }
         AppProperties.Matching.Shortlist s = properties.getMatching().getShortlist();
-        return new CardShortlister.Options(s.getRelativeCutoff(), s.getMinCards(), s.getRelativeCutoffWithAi(), s.getMinCardsWithAi());
+        return new CardShortlister.Options(s.getRelativeCutoff(), s.getMinCards(), s.getRelativeCutoffWithAi(), s.getMinCardsWithAi(),
+                s.getAbsenceTitlePatterns());
     }
 
     /**
@@ -400,16 +391,17 @@ public class IssueMatchingAgent {
     }
 
     /**
-     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID, NoticeCallBudget)}; {@code widen} true renders the
-     * notice's whole stage pool (the pipeline's widening call after a shortlist miss; the full catalogue only when the
-     * pool is the full catalogue) and makes no title pass. When a shortlist narrower than the catalogue is rendered,
-     * the system prompt is the rules alone (cached across notices) and the shortlisted cards (no KEYWORDS line, plus
-     * the titles-only block) go in the per-call user message before the notice; when every card is rendered (shortlist
-     * off, level full) the catalogue stays in the cached system prompt as before. The catalogue hash is always that of
-     * the FULL visible catalogue, so results stay comparable.
+     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID)}, checking every attempt (retry included)
+     * against {@code budget} before the call and recording each billed call in it. A refused attempt ends
+     * matching with a {@link #FLAG_COST_CAP} fallback result. A null budget checks nothing.
+     * When a shortlist narrower than the catalogue is rendered, the system prompt is the rules alone (cached across
+     * notices) and the shortlisted cards (no KEYWORDS line, plus the titles-only block) go in the per-call user message
+     * before the notice; when every card is rendered (shortlist off, level full) the catalogue stays in the cached
+     * system prompt as before. The catalogue hash is always that of the FULL visible catalogue, so results stay
+     * comparable.
      */
     public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
-                                                 NoticeCallBudget budget, boolean widen) {
+                                                 NoticeCallBudget budget) {
         List<IssueCard> cards = catalogueService.getActiveCards();
         String fullCatalogueText = catalogueService.renderCatalogueCompactText(cards);
         String catalogueHash = catalogueService.getCatalogueHash(fullCatalogueText);
@@ -420,8 +412,7 @@ public class IssueMatchingAgent {
         Set<String> titlesOnlyIds = Set.of();
         if (shortlistOn) {
             String text = fullOcrText != null ? fullOcrText : "";
-            shortlist = widen ? CardShortlister.widened(cards, noticeType, StageResolver.resolve(noticeType, text), text)
-                    : buildShortlist(cards, noticeType, text, noticeId, budget);
+            shortlist = buildShortlist(cards, noticeType, text, noticeId, budget);
             if (!shortlist.isFull()) {
                 compactCatalogueText = catalogueService.renderShortlistText(shortlist.cards(), shortlist.titlesOnly());
                 titlesOnlyIds = new HashSet<>(shortlist.titlesOnlyIds());

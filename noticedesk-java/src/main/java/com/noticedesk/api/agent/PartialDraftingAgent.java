@@ -102,14 +102,14 @@ public class PartialDraftingAgent {
         String agentKey = highStakes ? "high_stakes" : "partial_drafting";
         String label = (highStakes ? "HighStakesDraftingAgent (partial)" : "PartialDraftingAgent") + " issue #" + issue.issueNo();
         String model = properties.getLlm() != null
-                ? (highStakes ? properties.getLlm().getModelHighStakes() : properties.getLlm().getModelPartialDrafting())
+                ? properties.writerModel(agentKey, highStakes ? properties.getLlm().getModelHighStakes() : properties.getLlm().getModelPartialDrafting())
                 : null;
         if (model == null || model.isBlank()) {
             String env = highStakes ? "LLM_MODEL_HIGH_STAKES" : "LLM_MODEL_PARTIAL_DRAFTING";
             throw new IllegalStateException(env + " is not configured. Set environment variable " + env + ".");
         }
 
-        String provider = properties.getLlm().getProviderPrimary();
+        String provider = properties.getLlm().providerForAgent(agentKey);
         if ("stub".equalsIgnoreCase(provider) || llmFactory == null) {
             log.info("{} running in stub mode", label);
             return stubResult(issue);

@@ -85,4 +85,21 @@ class LiveRunGuardTest {
         assertEquals("config-model", g.model("LLM_MODEL_HIGH_STAKES", "config-model"));
         assertNull(g.model("LLM_MODEL_MATCHING", ""));
     }
+
+    @Test
+    void stopBeforeNotice_fullNoticeCapOrStop_neverAShrunkCap() {
+        // run cap 50, notice cap 30: a notice starts only when the full 30 is left of the run cap
+        LiveRunGuard g = guard(Map.of("LIVE_MAX_RUN_COST_INR", "50", "LIVE_MAX_NOTICE_COST_INR", "30"));
+        assertNull(g.stopBeforeNotice(BigDecimal.ZERO));
+        assertNull(g.stopBeforeNotice(new BigDecimal("20")), "exactly the notice cap left: the notice starts");
+        String stop = g.stopBeforeNotice(new BigDecimal("20.01"));
+        assertNotNull(stop, "29.99 left < 30: stop before the notice, not a notice with a 29.99 cap");
+        assertTrue(stop.contains("remaining run budget INR 29.99"), stop);
+        assertTrue(stop.contains("below the per-notice cap of INR 30"), stop);
+        assertNotNull(g.stopBeforeNotice(new BigDecimal("55")));
+        assertTrue(g.stopBeforeNotice(new BigDecimal("55")).contains("INR 0 "), "never a negative remainder");
+
+        // a run cap below the notice cap: no notice can start
+        assertNotNull(guard(Map.of("LIVE_MAX_RUN_COST_INR", "20", "LIVE_MAX_NOTICE_COST_INR", "30")).stopBeforeNotice(BigDecimal.ZERO));
+    }
 }

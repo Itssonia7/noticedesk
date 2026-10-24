@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 20-10-2026 (shortlist v2: rarity-weighted label scoring, AI title pre-pass, siblings by title, stage-pool widening; shortlist dry-run tool)
+Last updated: 24-10-2026 (b23: widening dropped; shortlist floor 12 and absence cards; mutual-sibling stage tie-break; per-agent writer provider; runner accepts real notices; per-notice cap not shrunk by the run budget)
 
 ---
 
@@ -799,7 +799,45 @@ cached catalogue. Measured causes and the fix for each are in open item 9. Match
   retry -> `AI FAILED after retry: labels only` and the run goes on; two failed notices in a row still stop it.
   Summary adds the median of AI picks. Offline AI-mode test with a mocked provider.
 
+## (b23) After live run pipe10g on `6f37ab5` (24-10-2026)
+
+- **Widening removed**: no second matching call on the stage pool; an issue with status none goes straight to the
+  writer path (new-issue writer, or the no-substantive-ground placeholder). Flags `info:shortlist_widened` /
+  `info:shortlist_widening_skipped`, the matcher's `widen` variant and `CardShortlister.widened` deleted; the shortlist,
+  its `info:shortlist` flag and partner note line stay. `V7ShortlistWideningTest` reduced to
+  `V7ShortlistInPipelineTest` (asserts one matching call only).
+- **Shortlist floor with AI picks**: `min-cards-with-ai` 12 (was 8); `relative-cutoff-with-ai` stays 0.5.
+- **Absence cards**: a show cause notice / intimation (notice key scn_73 / scn_74 / scn_74a / scn / generic_scn /
+  drc_01a / asmt_10, or a DRC-01 / DRC-01A / ASMT-10 heading) whose text cites no section and no rule gets, in full,
+  every catalogue card whose title contains a pattern of `matching.shortlist.absence-title-patterns`
+  (`MATCHING_SHORTLIST_ABSENCE_TITLE_PATTERNS`, default `no section,vague`, case-insensitive). Log / runner line adds
+  `absence N`; flag detail `absence`.
+- **Stage correction tie-break**: when several right-stage siblings are still left, the one whose own NOT THIS IF
+  rules name the current primary (mutual sibling) is swapped in when exactly one is (`stage_corrected`); otherwise
+  `stage_mismatch` as before.
+- **Writer provider per agent**: `LLM_PROVIDER_NEW_ISSUE` / `LLM_PROVIDER_HIGH_STAKES` (blank = primary provider),
+  resolved in `LlmFactory.getLlmForAgent`; with `gemini` the model is `LLM_MODEL_NEW_ISSUE` / `LLM_MODEL_HIGH_STAKES`,
+  else `GEMINI_MODEL`. `GeminiLlmProvider` implements the writer entry points (effort not sent: this SDK's thinking
+  config has no budget; no cache_control; max_tokens sent as max output tokens) and returns stop reason (STOP ->
+  end_turn, MAX_TOKENS -> max_tokens retry, safety -> refusal), prompt / output (+ thinking) tokens. Writer JSON goes
+  through the same tolerant parser (fences stripped). Every writer call logs `provider=... model=...`; the runner's
+  `models:` line shows `provider:model` for new_issue and high_stakes.
+- **Free-tier price**: the GEMINI_MODEL default is priced 0 in application.yml (key in `[..]` form: a dotted model id
+  without brackets is split by the binder and the price is lost, so the model looked unpriced). A zero-priced model
+  passes the cap (worst case 0); a model missing from the table is still refused.
+- **Live runner**: accepts a real notice without `answer_key` ("Expected Status (Answer Key): none (real notice)",
+  no scoring) and `text` for `full_ocr_text`; minimal JSON `{"notice_id", "document_type" ("unknown" allowed),
+  "full_ocr_text"}`. Prints the shortlist, `Matched issues: #1 full [NDK-...]; ...` (this run's issue_matches rows),
+  flags and the draft path.
+- **Run budget**: the pipeline runner no longer shrinks the per-notice cap to what is left of the run cap (that
+  starved the last notice's writers mid-way); it stops BEFORE a notice when the remaining run budget is below
+  `LIVE_MAX_NOTICE_COST_INR` (`LiveRunGuard.stopBeforeNotice`). Set `LIVE_MAX_RUN_COST_INR` to at least the notice cap
+  plus the expected spend of the earlier notices. The matching-only runners keep `noticeCapFor`.
+
 ## (c) Verification
+
+- Offline unit suite (`mvn -o test`): **508 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 24-10-2026 after (b23).
 
 - Offline unit suite (`mvn -o test`): **500 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
   on 20-10-2026 after (b22).

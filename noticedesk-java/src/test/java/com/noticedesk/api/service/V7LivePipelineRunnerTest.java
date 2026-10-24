@@ -40,6 +40,20 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
 
+/**
+ * Opt-in live run of the v7 pipeline ({@code ENABLE_E2E_TESTS=true}, {@code ANTHROPIC_API_KEY}); notices from
+ * {@code V7_LIVE_NOTICES} (classpath testbench/notices, {@code $PRIVATE_SEED_DIR/notices} or an absolute path).
+ *
+ * <p>A notice JSON is a bench notice (with {@code answer_key}) or a real notice without one. The minimal real notice:
+ * <pre>{"notice_id": "real_01", "document_type": "unknown", "full_ocr_text": "..."}</pre>
+ * ({@code text} is accepted for {@code full_ocr_text}; {@code document_type} may be "unknown"). A real notice prints
+ * "Expected Status (Answer Key): none (real notice)" and is not scored; the shortlist, the matched issues with card ids
+ * and statuses, the flags and the draft path are printed for every notice.
+ *
+ * <p>Writers on another provider: {@code LLM_PROVIDER_NEW_ISSUE=gemini} (and/or {@code LLM_PROVIDER_HIGH_STAKES}) with
+ * {@code GEMINI_API_KEY} and {@code LLM_MODEL_NEW_ISSUE} (empty = {@code GEMINI_MODEL}); the "models:" line shows
+ * provider:model for those writers.
+ */
 public class V7LivePipelineRunnerTest {
 
     /**
@@ -80,8 +94,9 @@ public class V7LivePipelineRunnerTest {
         // writers at the cheaper matching model for a plumbing test)
         String modelMatching = guard.model("LLM_MODEL_MATCHING", props.getLlm().getModelMatching());
         String modelPartial = guard.model("LLM_MODEL_PARTIAL_DRAFTING", props.getLlm().getModelPartialDrafting());
-        String modelNewIssue = guard.model("LLM_MODEL_NEW_ISSUE", props.getLlm().getModelNewIssue());
-        String modelHighStakes = guard.model("LLM_MODEL_HIGH_STAKES", props.getLlm().getModelHighStakes());
+        // a writer on the gemini provider falls back to GEMINI_MODEL when its own model is not set
+        String modelNewIssue = guard.model("LLM_MODEL_NEW_ISSUE", props.writerModel("new_issue", props.getLlm().getModelNewIssue()));
+        String modelHighStakes = guard.model("LLM_MODEL_HIGH_STAKES", props.writerModel("high_stakes", props.getLlm().getModelHighStakes()));
         List<String> unset = new ArrayList<>();
         if (modelMatching == null) unset.add("LLM_MODEL_MATCHING");
         if (modelPartial == null) unset.add("LLM_MODEL_PARTIAL_DRAFTING");
@@ -89,6 +104,12 @@ public class V7LivePipelineRunnerTest {
         if (modelHighStakes == null) unset.add("LLM_MODEL_HIGH_STAKES");
         if (!unset.isEmpty()) {
             fail("REFUSED: set " + String.join(", ", unset) + " (no model names are built into the runner)");
+        }
+        for (String agent : List.of("new_issue", "high_stakes")) {
+            String p = props.getLlm().providerForAgent(agent);
+            if ("gemini".equals(p) && (props.getLlm().getGemini().getApiKey() == null || props.getLlm().getGemini().getApiKey().isBlank())) {
+                fail("REFUSED: the " + agent + " writer runs on gemini but GEMINI_API_KEY is not set");
+            }
         }
         String ikToken = Optional.ofNullable(System.getenv("INDIANKANOON_API_TOKEN")).orElse("");
         String citationProvider = (!ikToken.isBlank()) ? "indiankanoon" : "stub";
@@ -119,8 +140,9 @@ public class V7LivePipelineRunnerTest {
         guard.printSettings(System.out);
         System.out.printf("per-notice caps: high-stakes calls=%s, cost INR=%s%n",
                 props.getLlm().getHighStakes().getMaxCallsPerNotice(), props.getLlm().getMaxCostInrPerNotice());
-        System.out.printf("models: matching=%s partial=%s new_issue=%s high_stakes=%s shortlist=%s (ai titles %s)%n",
-                modelMatching, modelPartial, modelNewIssue, modelHighStakes, modelShortlist,
+        System.out.printf("models: matching=%s partial=%s new_issue=%s:%s high_stakes=%s:%s shortlist=%s (ai titles %s)%n",
+                modelMatching, modelPartial, props.getLlm().providerForAgent("new_issue"), modelNewIssue,
+                props.getLlm().providerForAgent("high_stakes"), modelHighStakes, modelShortlist,
                 props.getMatching().getShortlist().isAiTitles());
 
         // an unpriced model would make every cost cap blind: refuse instead of warning
@@ -241,14 +263,15 @@ public class V7LivePipelineRunnerTest {
         System.out.println("=== RUN 2: V7 LIVE PIPELINE EXECUTION REPORT ===");
 
         for (String noticeFile : targetNotices) {
-            // a notice may spend at most the smaller of the notice cap and what is left of the run cap; the
-            // pipeline's budget refuses any call (matching or writer, retries included) whose worst case won't fit
-            BigDecimal thisNoticeCap = guard.noticeCapFor(totalRun2Inr);
-            if (thisNoticeCap.signum() <= 0) {
-                System.err.println("SAFETY CAP REACHED: run spend " + totalRun2Inr + " INR reached the run cap of INR " + runCap + ". Halting.");
+            // every notice gets the full notice cap (never shrunk to the remaining run budget, which starved the
+            // writers mid-notice); the run stops BEFORE a notice when what is left of the run cap is below it. The
+            // pipeline's budget refuses any call (matching or writer, retries included) whose worst case won't fit.
+            String stop = guard.stopBeforeNotice(totalRun2Inr);
+            if (stop != null) {
+                System.out.println("RUN STOPPED: " + stop + " (run spend INR " + totalRun2Inr + "); remaining notices not run.");
                 break;
             }
-            props.getLlm().setMaxCostInrPerNotice(thisNoticeCap.doubleValue());
+            props.getLlm().setMaxCostInrPerNotice(noticeCap.doubleValue());
 
             Resource resource = noticeFiles.get(noticeFile);
             String jsonText;
@@ -257,10 +280,11 @@ public class V7LivePipelineRunnerTest {
             }
             JsonNode root = om.readTree(jsonText);
 
-            String noticeId = root.path("notice_id").asText();
-            String docType = root.path("document_type").asText();
-            String ocr = root.path("full_ocr_text").asText();
-            JsonNode answerKey = root.path("answer_key");
+            // a bench notice (answer_key) or a real notice (none; text in full_ocr_text or text)
+            PrivateSetSupport.NoticeJson notice = PrivateSetSupport.readNotice(root);
+            String noticeId = notice.noticeId();
+            String docType = notice.documentType();
+            String ocr = notice.text();
 
             // header fields in either bench style; a form placeholder such as [____] is null, never a value
             BenchNoticeHeader.Header header = BenchNoticeHeader.parse(ocr);
@@ -294,6 +318,8 @@ public class V7LivePipelineRunnerTest {
 
             System.out.printf("%n--- Calls for %s ---%n", noticeId);
             int callCheckpoint = ledger.size();
+            // issue_matches rows written from here on are this run's (the notice id repeats across runs)
+            java.sql.Timestamp runStart = jdbc.getJdbcTemplate().queryForObject("SELECT clock_timestamp()", java.sql.Timestamp.class);
             DraftingPipelineResult result;
             try {
                 result = pipelineService.runPipeline(input, tenantUuid, noticeUuid);
@@ -333,7 +359,8 @@ public class V7LivePipelineRunnerTest {
             double noticeTotalInr = matchingInr + variablesInr + writerInr + ikInr;
             totalRun2Inr = totalRun2Inr.add(BigDecimal.valueOf(noticeTotalInr));
 
-            String expectedStatus = answerKey.path("issues").path(0).path("status").asText("none");
+            // a real notice has no answer key: nothing is scored
+            String expectedStatus = notice.expectedStatus();
 
             // Extract flags (issue-level flags come as "<FLAG>#<issue no>:<severity>", e.g. DEFECT_ADDED_BY_CODE#3:info)
             List<String> allFlags = flagList(result.checkResults());
@@ -365,6 +392,9 @@ public class V7LivePipelineRunnerTest {
             statusByNotice.put(noticeId, "DRAFTED (" + blocking + " blocking checks failed)");
             System.out.printf("Citation Statuses: %s%n", citStatuses.isEmpty() ? "None" : citStatuses);
             System.out.printf("Shortlist: %s%n", shortlistLine(result.checkResults()));
+            System.out.printf("Matched issues: %s%n", matchedIssuesLine(jdbc.getJdbcTemplate().queryForList(
+                    "SELECT issue_no, status, card_ids::text AS card_ids FROM issue_matches WHERE notice_id = CAST(? AS UUID)"
+                            + " AND created_at >= ? ORDER BY issue_no", noticeUuid.toString(), runStart)));
             System.out.printf("Flags: %s%n", allFlags);
             System.out.printf("Saved draft to: %s%n", draftFile.getAbsolutePath());
 
@@ -415,26 +445,29 @@ public class V7LivePipelineRunnerTest {
 
     /**
      * The "Shortlist:" line of a notice from the {@code info:shortlist} flag details, e.g. "27 cards (pool 128; labels
-     * 19, ai 14, siblings 6; titles-only 11)", plus the widening when it ran or was skipped; "none (full catalogue,
-     * shortlist off)" without the flag.
+     * 19, ai 14, siblings 6; titles-only 11)"; "none (full catalogue, shortlist off)" without the flag.
      */
     static String shortlistLine(List<DraftCheckResult> checkResults) {
         Map<String, Object> d = null;
-        Map<String, Object> widened = null;
-        Map<String, Object> skipped = null;
         if (checkResults != null) {
             for (DraftCheckResult c : checkResults) {
                 Object flag = c.details() != null ? c.details().get("flag") : null;
                 if (V7DraftingPipelineService.FLAG_SHORTLIST.equals(flag)) d = c.details();
-                if (V7DraftingPipelineService.FLAG_SHORTLIST_WIDENED.equals(flag)) widened = c.details();
-                if (V7DraftingPipelineService.FLAG_SHORTLIST_WIDENING_SKIPPED.equals(flag)) skipped = c.details();
             }
         }
         if (d == null) return "none (full catalogue, shortlist off)";
-        String line = CardShortlister.Shortlist.describe(d);
-        if (widened != null) line += "; widened to " + widened.get("widened_size") + " cards for issue(s) " + widened.get("unmatched_issues");
-        if (skipped != null) line += "; widening skipped (budget) for issue(s) " + skipped.get("unmatched_issues");
-        return line;
+        return CardShortlister.Shortlist.describe(d);
+    }
+
+    /** The "Matched issues:" line from issue_matches rows (issue_no, status, card_ids): "#1 full [NDK-001]; #2 none []". */
+    static String matchedIssuesLine(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) return "none";
+        List<String> parts = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Object cards = r.get("card_ids");
+            parts.add("#" + r.get("issue_no") + " " + r.get("status") + " " + (cards != null ? cards.toString().replace("\"", "") : "[]"));
+        }
+        return String.join("; ", parts);
     }
 
     /** The "Flags:" line of a notice: every failed check as "<check name>:<severity>". */

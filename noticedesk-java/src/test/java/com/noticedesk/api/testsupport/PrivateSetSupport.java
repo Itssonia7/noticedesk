@@ -79,6 +79,40 @@ public final class PrivateSetSupport {
         return privateNotice(privateSeedDir, n);
     }
 
+    /**
+     * One notice JSON of the live runners. {@code answerKey} is null for a real notice (no {@code answer_key});
+     * {@code text} is {@code full_ocr_text}, else {@code text}; a blank {@code document_type} is "unknown".
+     */
+    public record NoticeJson(String noticeId, String documentType, String text, JsonNode answerKey) {
+        public boolean realNotice() {
+            return answerKey == null;
+        }
+
+        /** The "Expected Status (Answer Key)" value: the first issue's status, or "none (real notice)". */
+        public String expectedStatus() {
+            return realNotice() ? "none (real notice)" : answerKey.path("issues").path(0).path("status").asText("none");
+        }
+    }
+
+    /**
+     * Reads a notice JSON: a bench notice (with {@code answer_key}) or a real notice without one. The minimal real
+     * notice is {@code {"notice_id": ..., "document_type": "unknown", "full_ocr_text": ...}} ({@code text} is
+     * accepted for {@code full_ocr_text}).
+     *
+     * @throws IllegalArgumentException when notice_id or the text is missing (the message names the field only)
+     */
+    public static NoticeJson readNotice(JsonNode root) {
+        String id = root != null ? text(root, "notice_id") : null;
+        if (id == null || id.isBlank()) throw new IllegalArgumentException("notice JSON has no notice_id");
+        String body = text(root, "full_ocr_text");
+        if (body == null || body.isBlank()) body = text(root, "text");
+        if (body == null || body.isBlank()) throw new IllegalArgumentException("notice " + id + " has no full_ocr_text or text");
+        String type = text(root, "document_type");
+        JsonNode key = root.get("answer_key");
+        return new NoticeJson(id.trim(), type == null || type.isBlank() ? "unknown" : type.trim(), body,
+                key == null || key.isNull() || key.isMissingNode() ? null : key);
+    }
+
     /** Optional file under {@code $PRIVATE_SEED_DIR} listing the defect card ids, one per line. */
     public static final String DEFECT_CARDS_FILE = "defect_cards.txt";
 

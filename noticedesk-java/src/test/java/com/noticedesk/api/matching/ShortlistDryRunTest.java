@@ -160,7 +160,7 @@ class ShortlistDryRunTest {
         if (cards.isEmpty() || notices.isEmpty()) fail("dry run: " + cards.size() + " visible card(s), " + notices.size() + " notice(s) found");
         AppProperties.Matching.Shortlist sp = props.getMatching().getShortlist();
         CardShortlister.Options options = new CardShortlister.Options(sp.getRelativeCutoff(), sp.getMinCards(),
-                sp.getRelativeCutoffWithAi(), sp.getMinCardsWithAi());
+                sp.getRelativeCutoffWithAi(), sp.getMinCardsWithAi(), sp.getAbsenceTitlePatterns());
         System.out.printf(Locale.ROOT, "Shortlist dry run: %d card(s) read, %d visible; %d notice(s); relative cutoff %.2f, min cards %d"
                         + " (with AI picks: %.2f, %d)%n", read.size(), cards.size(), notices.size(), options.relativeCutoff(),
                 options.minCards(), options.relativeCutoffWithAi(), options.minCardsWithAi());
@@ -375,7 +375,7 @@ class ShortlistDryRunTest {
             System.setOut(original);
         }
         String out = buf.toString(java.nio.charset.StandardCharsets.UTF_8);
-        assertTrue(out.contains("relative cutoff 0.35, min cards 15 (with AI picks: 0.50, 8)"), out);
+        assertTrue(out.contains("relative cutoff 0.35, min cards 15 (with AI picks: 0.50, 12)"), out);
         assertTrue(java.util.regex.Pattern.compile("N-1 \\[scn_73\\] pool 4 \\| labels 2 -> .* \\| ai 1 \\| labels with-AI cut-off 2 \\| union \\d+ cards").matcher(out).find(), out);
         assertTrue(out.contains("N-2 [scn_73]") && out.contains("| AI FAILED after retry: labels only | union"), out);
         assertTrue(java.util.regex.Pattern.compile("N-3 .* \\| ai 1 \\| labels with-AI cut-off 2").matcher(out).find(), out);

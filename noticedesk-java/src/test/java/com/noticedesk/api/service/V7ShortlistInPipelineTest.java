@@ -31,13 +31,13 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * The catalogue shortlist inside the v7 pipeline (every external call mocked): a substantive ground the shortlist
- * could not place triggers ONE more matching call on the notice's stage pool (never the full catalogue), whose result
- * is used; an unmatched ground without substance does not; a widening call the budget would refuse is skipped with a
- * flag; a title pass that could not be used raises a warn flag. Also: the stage correction runs only when a
- * CatalogueService is set (the live runner builds the pipeline by hand and must call the setter).
+ * The catalogue shortlist inside the v7 pipeline (every external call mocked): the shortlist gets its flag and partner
+ * note; an issue the shortlist could not place (status none on a substantive ground) goes straight to the new-issue
+ * writer, with NO second matching call; a title pass that could not be used raises a warn flag. Also: the stage
+ * correction runs only when a CatalogueService is set (the live runner builds the pipeline by hand and must call the
+ * setter).
  */
-class V7ShortlistWideningTest {
+class V7ShortlistInPipelineTest {
 
     private static final String TEXT = """
             OFFICE OF THE DEPUTY COMMISSIONER OF STATE TAX
@@ -80,12 +80,6 @@ class V7ShortlistWideningTest {
                 CardShortlister.AI_USED.equals(aiStatus) ? Set.of("T-3") : Set.of(), 0, aiStatus, List.of("scn_73"));
     }
 
-    /** The widening call's shortlist: the 7 cards of the stage pool. */
-    private static Shortlist stagePool() {
-        return new Shortlist(Collections.nCopies(7, card("T-9", List.of("scn_73"), List.of())), List.of(), CardShortlister.LEVEL_STAGE,
-                12, 7, Set.of(), Set.of(), 0, CardShortlister.AI_OFF, List.of("scn_73"));
-    }
-
     private V7DraftingPipelineService pipeline(IssueMatchingAgent matcher, NewIssueDraftingAgent newIssue) {
         TemplateFillService fill = new TemplateFillService(null, null, om);
         ReplyAssemblyService assembly = new ReplyAssemblyService(null, null, om);
@@ -111,28 +105,25 @@ class V7ShortlistWideningTest {
     }
 
     @Test
-    void substantiveMissWidensOnceToTheStagePoolAndUsesThatResult() {
+    void substantiveMissGoesToTheWriterWithoutASecondMatchingCall() {
         IssueMatchingAgent matcher = mock(IssueMatchingAgent.class);
         MatchedIssue unmatched = new MatchedIssue(1, "none", "demand", List.of(), List.of(), "no shown card fits", List.of(),
                 Map.of("period", "2022-23", "amount", 100000.0, "legal_section", "Section 16(2)(aa)"), List.of("1"), List.of(),
                 List.of(), null);
-        MatchedIssue matched = new MatchedIssue(1, "full", "demand", List.of("CARD-A"), List.of(), "fits", List.of(),
-                Map.of("period", "2022-23", "amount", 100000.0, "legal_section", "Section 16(2)(aa)"), List.of("1"), List.of(),
-                List.of(), null);
         when(matcher.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(result(unmatched, keywordShortlist()));
-        when(matcher.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any(), eq(true))).thenReturn(result(matched, stagePool()));
         NewIssueDraftingAgent newIssue = mock(NewIssueDraftingAgent.class);
+        when(newIssue.generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any()))
+                .thenReturn(new NewIssueDraftingResult(1, "<p>Original ground.</p>", "", "<p>Submissions.</p>", List.of(),
+                        "note", List.of(), "summary", "test-model", NewIssueDraftingAgent.PROMPT_VERSION));
 
         DraftingPipelineResult r = pipeline(matcher, newIssue).runPipeline(input());
 
         verify(matcher, times(1)).matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any());
-        verify(matcher, times(1)).matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any(), eq(true));
-        // the widened result is used: the ground is a full match filled from the template, no writer call
-        verify(newIssue, never()).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any());
+        verifyNoMoreInteractions(matcher);
+        verify(newIssue, times(1)).generateNewIssueDraft(any(), any(), anyString(), anyString(), any(), anyBoolean(), any());
         String s13 = r.draft().sections().stream().filter(s -> s.num() == 13).findFirst().orElseThrow().bodyHtml();
-        assertTrue(s13.contains("Issue #1: Match Status=full, Cards=[CARD-A]"), s13);
         assertTrue(s13.contains("Catalogue shortlist: 3 of 12 cards shown to the matcher (pool 7; labels 2, ai 1, siblings 0; titles-only 0)"), s13);
-        assertTrue(s13.contains("Matching widened: issue(s) [1] matched no card among the 3 shortlisted, so matching ran again on the 7 cards of the stage pool"), s13);
+        assertFalse(s13.contains("widen"), s13);
 
         DraftCheckResult shortlistFlag = flag(r, V7DraftingPipelineService.FLAG_SHORTLIST).orElseThrow();
         assertEquals("info", shortlistFlag.severity());
@@ -141,67 +132,10 @@ class V7ShortlistWideningTest {
         assertEquals(7, shortlistFlag.details().get("pool"));
         assertEquals(2, shortlistFlag.details().get("labels"));
         assertEquals(1, shortlistFlag.details().get("ai"));
-        DraftCheckResult widened = flag(r, V7DraftingPipelineService.FLAG_SHORTLIST_WIDENED).orElseThrow();
-        assertEquals(3, widened.details().get("shortlist_size"));
-        assertEquals(7, widened.details().get("widened_size"));
-        assertEquals(List.of(1), widened.details().get("unmatched_issues"));
+        assertTrue(r.checkResults().stream().noneMatch(c -> c.details() != null
+                && String.valueOf(c.details().get("flag")).contains("widen")), "no widening flag");
         assertTrue(flag(r, V7DraftingPipelineService.FLAG_SHORTLIST_AI_SKIPPED).isEmpty());
-        assertEquals("3 cards (pool 7; labels 2, ai 1, siblings 0; titles-only 0); widened to 7 cards for issue(s) [1]",
-                V7LivePipelineRunnerTest.shortlistLine(r.checkResults()));
-    }
-
-    @Test
-    void groundWithoutSubstanceDoesNotWiden() {
-        IssueMatchingAgent matcher = mock(IssueMatchingAgent.class);
-        MatchedIssue corrigendum = new MatchedIssue(1, "none", "demand", List.of(), List.of(), "corrigendum to the notice date",
-                List.of(), Map.of("period", "2022-23"), List.of("1"), List.of(), List.of(), null);
-        when(matcher.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(result(corrigendum, keywordShortlist()));
-        NewIssueDraftingAgent newIssue = mock(NewIssueDraftingAgent.class);
-
-        DraftingPipelineResult r = pipeline(matcher, newIssue).runPipeline(input());
-
-        verify(matcher, never()).matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any(), anyBoolean());
-        assertTrue(flag(r, V7DraftingPipelineService.FLAG_SHORTLIST).isPresent());
-        assertTrue(flag(r, V7DraftingPipelineService.FLAG_SHORTLIST_WIDENED).isEmpty());
         assertEquals("3 cards (pool 7; labels 2, ai 1, siblings 0; titles-only 0)", V7LivePipelineRunnerTest.shortlistLine(r.checkResults()));
-    }
-
-    @Test
-    void wideningTheBudgetWouldRefuseIsSkippedWithAFlag() {
-        IssueMatchingAgent matcher = mock(IssueMatchingAgent.class);
-        MatchedIssue unmatched = new MatchedIssue(1, "none", "demand", List.of(), List.of(), "no shown card fits", List.of(),
-                Map.of("period", "2022-23", "amount", 100000.0, "legal_section", "Section 16(2)(aa)"), List.of("1"), List.of(),
-                List.of(), null);
-        MatchingResult refused = new MatchingResult(INFO, List.of(), Map.of(), List.of("not called: cost cap"),
-                List.of(IssueMatchingAgent.FLAG_COST_CAP), "hash", 0, 0, 0, 0);
-        when(matcher.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any())).thenReturn(result(unmatched, keywordShortlist()));
-        when(matcher.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any(), eq(true))).thenReturn(refused);
-
-        DraftingPipelineResult r = pipeline(matcher, mock(NewIssueDraftingAgent.class)).runPipeline(input());
-
-        verify(matcher, times(1)).matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any(), eq(true));
-        DraftCheckResult skipped = flag(r, V7DraftingPipelineService.FLAG_SHORTLIST_WIDENING_SKIPPED).orElseThrow();
-        assertEquals("info", skipped.severity());
-        assertEquals(7, skipped.details().get("pool"));
-        assertEquals(List.of(1), skipped.details().get("unmatched_issues"));
-        assertTrue(flag(r, V7DraftingPipelineService.FLAG_SHORTLIST_WIDENED).isEmpty());
-        String s13 = r.draft().sections().stream().filter(s -> s.num() == 13).findFirst().orElseThrow().bodyHtml();
-        assertTrue(s13.contains("matching on the 7 cards of the stage pool was not run (per-notice budget)"), s13);
-        assertEquals("3 cards (pool 7; labels 2, ai 1, siblings 0; titles-only 0); widening skipped (budget) for issue(s) [1]",
-                V7LivePipelineRunnerTest.shortlistLine(r.checkResults()));
-    }
-
-    @Test
-    void noWideningWhenTheShortlistIsAlreadyTheStagePool() {
-        IssueMatchingAgent matcher = mock(IssueMatchingAgent.class);
-        MatchedIssue unmatched = new MatchedIssue(1, "none", "demand", List.of(), List.of(), "w", List.of(),
-                Map.of("amount", 1.0, "legal_section", "Section 16"), List.of(), List.of(), List.of(), null);
-        Set<String> flags = new LinkedHashSet<>();
-        MatchingResult mr = result(unmatched, stagePool());
-        assertSame(mr, pipeline(matcher, null).widenOnShortlistMiss(mr, TEXT, "scn_73", null, null, null, new ArrayList<>(), flags,
-                new LinkedHashMap<>()));
-        assertEquals(Set.of(V7DraftingPipelineService.FLAG_SHORTLIST), flags);
-        verifyNoInteractions(matcher);
     }
 
     @Test
@@ -220,38 +154,22 @@ class V7ShortlistWideningTest {
     }
 
     @Test
-    void failedWideningKeepsTheShortlistResult() {
-        IssueMatchingAgent matcher = mock(IssueMatchingAgent.class);
-        MatchedIssue unmatched = new MatchedIssue(1, "none", "demand", List.of(), List.of(), "no shown card fits", List.of(),
-                Map.of("period", "2022-23", "amount", 100000.0, "legal_section", "Section 16(2)(aa)"), List.of("1"), List.of(),
-                List.of(), null);
-        MatchingResult first = result(unmatched, keywordShortlist());
-        MatchingResult failed = new MatchingResult(INFO, List.of(), Map.of(), List.of("unusable output"),
-                List.of("matching_failed"), "hash", 10, 10, 0, 0);
-        when(matcher.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any(), eq(true))).thenReturn(failed);
-        List<String> notes = new ArrayList<>();
-        Set<String> flags = new LinkedHashSet<>();
-        Map<String, Map<String, Object>> details = new LinkedHashMap<>();
-
-        MatchingResult kept = pipeline(matcher, null).widenOnShortlistMiss(first, TEXT, "scn_73", UUID.randomUUID(), UUID.randomUUID(),
-                null, notes, flags, details);
-
-        assertSame(first, kept);
-        assertEquals(Set.of(V7DraftingPipelineService.FLAG_SHORTLIST), flags);
-        assertTrue(notes.stream().anyMatch(n -> n.contains("the shortlist result is kept")), notes.toString());
+    void runnerMatchedIssuesLine() {
+        assertEquals("none", V7LivePipelineRunnerTest.matchedIssuesLine(List.of()));
+        assertEquals("#1 full [CARD-A, CARD-B]; #2 none []", V7LivePipelineRunnerTest.matchedIssuesLine(List.of(
+                Map.of("issue_no", 1, "status", "full", "card_ids", "[\"CARD-A\", \"CARD-B\"]"),
+                Map.of("issue_no", 2, "status", "none", "card_ids", "[]"))));
     }
 
     @Test
-    void noShortlistNoFlagAndNoSecondCall() {
-        IssueMatchingAgent matcher = mock(IssueMatchingAgent.class);
+    void noShortlistNoFlag() {
         MatchedIssue unmatched = new MatchedIssue(1, "none", "demand", List.of(), List.of(), "w", List.of(),
                 Map.of("amount", 1.0, "legal_section", "Section 16"), List.of(), List.of(), List.of(), null);
-        MatchingResult mr = result(unmatched, null);
         Set<String> flags = new LinkedHashSet<>();
-        assertSame(mr, pipeline(matcher, null).widenOnShortlistMiss(mr, TEXT, "scn_73", null, null, null, new ArrayList<>(), flags,
-                new LinkedHashMap<>()));
+        List<String> notes = new ArrayList<>();
+        pipeline(mock(IssueMatchingAgent.class), null).recordShortlist(result(unmatched, null), notes, flags, new LinkedHashMap<>());
         assertTrue(flags.isEmpty());
-        verifyNoInteractions(matcher);
+        assertTrue(notes.isEmpty());
     }
 
     // ------------------------------------------------------------------ stage correction needs the catalogue

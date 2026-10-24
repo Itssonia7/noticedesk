@@ -103,15 +103,16 @@ public class NewIssueDraftingAgent {
         String agentKey = highStakes ? "high_stakes" : "new_issue";
         // high-stakes issues are written with this agent's prompt by the high-stakes model: log them as such
         String label = (highStakes ? "HighStakesDraftingAgent" : "NewIssueDraftingAgent") + " issue #" + issue.issueNo();
+        // the agent's own provider when set (LLM_PROVIDER_NEW_ISSUE / LLM_PROVIDER_HIGH_STAKES), else the primary
+        String provider = properties.getLlm() != null ? properties.getLlm().providerForAgent(agentKey) : null;
         String model = properties.getLlm() != null
-                ? (highStakes ? properties.getLlm().getModelHighStakes() : properties.getLlm().getModelNewIssue())
+                ? properties.writerModel(agentKey, highStakes ? properties.getLlm().getModelHighStakes() : properties.getLlm().getModelNewIssue())
                 : null;
         if (model == null || model.isBlank()) {
             String env = highStakes ? "LLM_MODEL_HIGH_STAKES" : "LLM_MODEL_NEW_ISSUE";
             throw new IllegalStateException(env + " is not configured. Set environment variable " + env + ".");
         }
 
-        String provider = properties.getLlm().getProviderPrimary();
         if ("stub".equalsIgnoreCase(provider) || llmFactory == null) {
             log.info("{} running in stub mode", label);
             return stubResult(issue);

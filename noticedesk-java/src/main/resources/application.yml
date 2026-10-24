@@ -78,6 +78,10 @@ noticedesk:
   llm:
     provider-primary: ${LLM_PROVIDER_PRIMARY:stub}
     provider-secondary: ${LLM_PROVIDER_SECONDARY:}
+    # Provider of the new-issue / high-stakes writers (anthropic | gemini); empty = provider-primary. With gemini the
+    # model is LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES (empty = GEMINI_MODEL) and the key GEMINI_API_KEY.
+    provider-new-issue: ${LLM_PROVIDER_NEW_ISSUE:}
+    provider-high-stakes: ${LLM_PROVIDER_HIGH_STAKES:}
     model-extraction: ${LLM_MODEL_EXTRACTION:claude-haiku-4-5-20251001}
     model-formatting: ${LLM_MODEL_FORMATTING:claude-haiku-4-5-20251001}
     model-opus: ${LLM_MODEL_OPUS:claude-opus-4-7}
@@ -143,7 +147,7 @@ noticedesk:
     allow-draft-cards: ${ALLOW_DRAFT_CARDS:false}
     shortlist:
       # true: the matching prompt carries only the cards a shortlist keeps for the notice (stage pool, rarity-
-      # weighted label scoring, AI title pass; widened once to the stage pool on a substantive miss)
+      # weighted label scoring, AI title pass; an issue matched to no card goes to the new-issue writer)
       enabled: ${MATCHING_SHORTLIST:true}
       # keep every card scoring at least this fraction of the best label score in the stage pool
       relative-cutoff: ${MATCHING_SHORTLIST_RELATIVE_CUTOFF:0.35}
@@ -154,7 +158,10 @@ noticedesk:
       # stricter label cut-off when the AI title pass returned at least one card (the values above apply when the
       # pass is off, failed, or returned no card)
       relative-cutoff-with-ai: ${MATCHING_SHORTLIST_RELATIVE_CUTOFF_WITH_AI:0.5}
-      min-cards-with-ai: ${MATCHING_SHORTLIST_MIN_CARDS_WITH_AI:8}
+      min-cards-with-ai: ${MATCHING_SHORTLIST_MIN_CARDS_WITH_AI:12}
+      # a show cause notice / intimation that cites no section or rule: every card whose title contains one of these
+      # (case-insensitive) is added in full (no label can point at a "missing provision" card)
+      absence-title-patterns: ${MATCHING_SHORTLIST_ABSENCE_TITLE_PATTERNS:no section,vague}
       # max_tokens of the AI title pass and of its one retry after a max_tokens stop; thinking tokens count against
       # it (measured: 1,500 truncated 11 of 14 notices, 3,000 still truncated one)
       title-max-tokens: ${MATCHING_SHORTLIST_TITLE_MAX_TOKENS:6000}
@@ -206,6 +213,13 @@ noticedesk:
         output-per-million: 0.50
         cache-read-per-million: 0.01
         cache-write-per-million: 0.125
+      # free tier: replace with paid rates if the key is moved to a paid project. The key is in brackets because it
+      # contains a dot (without them the binder reads "3" / "6-flash" as nested keys and the price is lost).
+      "[gemini-3.6-flash]":
+        input-per-million: 0.0
+        output-per-million: 0.0
+        cache-read-per-million: 0.0
+        cache-write-per-million: 0.0
       "claude-3-opus-20240229":
         input-per-million: 15.0
         output-per-million: 75.0

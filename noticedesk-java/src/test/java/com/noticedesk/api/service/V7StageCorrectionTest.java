@@ -30,6 +30,9 @@ class V7StageCorrectionTest {
     private static final IssueCard NDK_221 = card("NDK-221", "Refund time-bar: reply to RFD-08", List.of("scn_reply"), List.of());
     private static final IssueCard NDK_230 = card("NDK-230", "APL-01 appeal: refund interest", List.of(), List.of());
     private static final IssueCard NDK_231 = card("NDK-231", "Appeal: refund of accumulated ITC", List.of("order_appeal"), List.of());
+    /** NDK-231 naming NDK-225 back, like NDK-224 does: two mutual siblings. */
+    private static final IssueCard NDK_231_MUTUAL = card("NDK-231", "Appeal: refund of accumulated ITC", List.of("order_appeal"),
+            List.of("Input is a notice awaiting reply: use NDK-225."));
 
     private static Map<String, IssueCard> catalogue(IssueCard... cards) {
         return CatalogueService.byId(List.of(cards));
@@ -89,12 +92,44 @@ class V7StageCorrectionTest {
     }
 
     @Test
-    void twoCandidateSiblingsOnlyWarn() {
+    void twoCandidateSiblings_bothMutual_onlyWarn() {
         List<MatchedIssue> issues = List.of(issue(1, "NDK-225", List.of("NDK-231")));
         StageCorrection sc = V7DraftingPipelineService.correctResponseStage(issues, ResponseStage.APPEAL,
-                catalogue(NDK_224, NDK_225, NDK_231));
+                catalogue(NDK_224, NDK_225, NDK_231_MUTUAL));
         assertEquals("NDK-225", sc.issues().get(0).primaryCardId());
         assertEquals(List.of("NDK-224", "NDK-231"), sc.mismatches().get(0).candidates());
+        assertTrue(sc.swaps().isEmpty());
+    }
+
+    @Test
+    void twoAppealSiblings_onlyOneNamesTheReplyCardBack_swapsToTheMutualSibling() {
+        IssueCard reply = card("R-1", "Reply: ITC on cancelled supplier", List.of("scn_73"),
+                List.of("Input is an order: use A-1 or A-2 (appeal)."));
+        IssueCard mutual = card("A-1", "Appeal: ITC on cancelled supplier", List.of("order_appeal"),
+                List.of("Input is a show cause notice: use R-1."));
+        IssueCard oneWay = card("A-2", "Appeal: ITC on a fake invoice", List.of("order_appeal"),
+                List.of("Input is a show cause notice: use R-9."));
+        IssueCard other = card("R-9", "Reply: ITC on a fake invoice", List.of("scn_73"), List.of());
+        List<MatchedIssue> issues = List.of(issue(1, "R-1", List.of()));
+
+        StageCorrection sc = V7DraftingPipelineService.correctResponseStage(issues, ResponseStage.APPEAL,
+                catalogue(reply, mutual, oneWay, other));
+
+        MatchedIssue fixed = sc.issues().get(0);
+        assertEquals("A-1", fixed.primaryCardId());
+        assertEquals(List.of("R-1"), fixed.alternateCardIds());
+        assertTrue(fixed.flags().contains("stage_corrected: R-1 -> A-1"), fixed.flags().toString());
+        assertEquals(List.of(new StageCorrection.Swap(1, "R-1", "A-1")), sc.swaps());
+        assertTrue(sc.mismatches().isEmpty());
+
+        // both siblings name R-1 back: no single mutual sibling, the card is kept with the mismatch flag
+        IssueCard oneWayNowMutual = card("A-2", "Appeal: ITC on a fake invoice", List.of("order_appeal"),
+                List.of("Input is a show cause notice: use R-1 or R-9."));
+        StageCorrection both = V7DraftingPipelineService.correctResponseStage(issues, ResponseStage.APPEAL,
+                catalogue(reply, mutual, oneWayNowMutual, other));
+        assertEquals("R-1", both.issues().get(0).primaryCardId());
+        assertTrue(both.issues().get(0).flags().contains("stage_mismatch: appeal vs reply"));
+        assertEquals(List.of("A-1", "A-2"), both.mismatches().get(0).candidates());
     }
 
     @Test
@@ -113,10 +148,10 @@ class V7StageCorrectionTest {
 
     @Test
     void twoAppealSiblings_bothFree_stillOnlyWarn() {
-        // another issue's primary is a reply card: both appeal siblings stay candidates
+        // another issue's primary is a reply card: both appeal siblings stay candidates (both name NDK-225 back)
         List<MatchedIssue> issues = List.of(issue(1, "NDK-225", List.of("NDK-231")), issue(2, "NDK-221", List.of()));
         StageCorrection sc = V7DraftingPipelineService.correctResponseStage(issues, ResponseStage.APPEAL,
-                catalogue(NDK_221, NDK_224, NDK_225, NDK_231));
+                catalogue(NDK_221, NDK_224, NDK_225, NDK_231_MUTUAL));
         assertEquals("NDK-225", sc.issues().get(0).primaryCardId());
         assertEquals(List.of("NDK-224", "NDK-231"), sc.mismatches().get(0).candidates());
     }

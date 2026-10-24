@@ -103,12 +103,13 @@ public class HighStakesDraftingAgent {
             UUID noticeId,
             NoticeCallBudget budget
     ) {
-        String model = properties.getLlm() != null ? properties.getLlm().getModelHighStakes() : null;
+        String model = properties.getLlm() != null ? properties.writerModel("high_stakes", properties.getLlm().getModelHighStakes()) : null;
         if (model == null || model.isBlank()) {
             throw new IllegalStateException("LLM_MODEL_HIGH_STAKES is not configured. Set environment variable LLM_MODEL_HIGH_STAKES.");
         }
 
-        String provider = properties.getLlm().getProviderPrimary();
+        // LLM_PROVIDER_HIGH_STAKES when set, else the primary provider
+        String provider = properties.getLlm().providerForAgent("high_stakes");
         if ("stub".equalsIgnoreCase(provider) || llmFactory == null) {
             log.info("HighStakesDraftingAgent running in stub mode");
             return stubResult();
