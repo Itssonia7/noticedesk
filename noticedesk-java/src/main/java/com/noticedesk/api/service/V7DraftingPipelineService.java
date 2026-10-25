@@ -36,7 +36,9 @@ import com.noticedesk.api.service.matching.DefectChecker;
 import com.noticedesk.api.service.matching.DefectChecker.CodeDefect;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.DraftTextCleanup;
+import com.noticedesk.api.service.matching.GstStateCodes;
 import com.noticedesk.api.service.matching.IssueFlags;
+import com.noticedesk.api.service.matching.NoticeHeaderFacts;
 import com.noticedesk.api.service.matching.PrayerStripper;
 import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.ReplyAssemblyService.AiFragment;
@@ -126,6 +128,9 @@ public class V7DraftingPipelineService {
     public static final String FLAG_SHORTLIST_AI_SKIPPED = "warn:shortlist_ai_skipped";
     /** Draft flag (warn): the title pass answer was not readable JSON; its card ids were found in the text. */
     public static final String FLAG_SHORTLIST_AI_PARSE_FALLBACK = "warn:shortlist_ai_parse_fallback";
+
+    /** Draft flag (info): the taxpayer's GSTIN was chosen by code from the document text over the matcher's / intake value. */
+    public static final String FLAG_GSTIN_CORRECTED = "info:gstin_corrected";
 
     /** Card read access for the post-matching stage correction; null (tests) skips the correction. */
     private CatalogueService catalogueService;
@@ -342,6 +347,11 @@ public class V7DraftingPipelineService {
 
         // the shortlist the matcher saw: flag and partner note (an unmatched ground goes to the writer path as it is)
         recordShortlist(matchingResult, notes, stageFlags, stageFlagDetails);
+
+        // ---- Stage 1a-: header facts by code (taxpayer GSTIN, state, financial year, authority kind)
+        HeaderFacts headerFacts = applyHeaderFacts(matchingResult, input, fullOcrText, noticeId, notes, stageFlags, stageFlagDetails);
+        matchingResult = headerFacts.matching();
+        input = headerFacts.input();
 
         List<MatchedIssue> issues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
         log.info("Stage 1 Issue Matching complete: matched {} issues {} (catalogue_hash={})", issues.size(),
@@ -664,6 +674,12 @@ public class V7DraftingPipelineService {
             for (String name : request.variableNames()) {
                 String value = values.get(name);
                 if (value == null || value.isBlank()) continue;
+                if (isOtherPartyGstinForClient(name, value, input)) {
+                    // a supplier / recipient GSTIN never fills a client field
+                    notes.add("Issue #" + issue.issueNo() + ": template variable " + name + " not filled: the value is not the"
+                            + " taxpayer's GSTIN.");
+                    continue;
+                }
                 facts.put(TemplateFillService.factKeyForVariable(name), value);
                 filled.add(name + "=" + HtmlSanitizer.sanitize(value));
             }
@@ -682,6 +698,18 @@ public class V7DraftingPipelineService {
         log.info("Template variable step for notice {}: {} issue(s) asked, {} value(s) returned, {} not found",
                 noticeId, requests.size(), result.valueCount(), result.notFound().size());
         return changed ? merged : issues;
+    }
+
+    /** Names of a template variable that holds the taxpayer's own GSTIN ("client.gstin", "taxpayer_gstin", "gstin"). */
+    private static final Pattern CLIENT_GSTIN_VARIABLE = Pattern.compile("(?i)^(?:(?:client|taxpayer|noticee|registration)[._].*)?gstin$");
+
+    /** True when a client GSTIN variable got a GSTIN that is not the taxpayer's (the input's registration identifier). */
+    static boolean isOtherPartyGstinForClient(String variable, String value, DraftingInput input) {
+        if (variable == null || !CLIENT_GSTIN_VARIABLE.matcher(variable.trim()).matches()) return false;
+        String v = NoticeHeaderFacts.normalise(value);
+        if (v == null) return false;
+        String own = input != null ? NoticeHeaderFacts.normalise(input.registrationIdentifier()) : null;
+        return !v.equals(own);
     }
 
     /**
@@ -705,6 +733,123 @@ public class V7DraftingPipelineService {
             flags.add(FLAG_SHORTLIST_AI_PARSE_FALLBACK);
             notes.add("The shortlist's AI title pass answer was not clean JSON; the card ids found in it were used.");
         }
+    }
+
+    /** The matching result and drafting input after {@link #applyHeaderFacts} (same instances when nothing changed). */
+    record HeaderFacts(MatchingResult matching, DraftingInput input) {}
+
+    /**
+     * Header facts set by code after matching, from the document text:
+     * <ul>
+     *   <li>GSTIN: the taxpayer's GSTIN is chosen by {@link NoticeHeaderFacts#taxpayerGstin} (next to the party
+     *       designation in the head, else the first GSTIN of the text). The matcher's value is kept only when it is that
+     *       choice; the intake value ({@code registrationIdentifier}) is replaced when it differs from a GSTIN read next to
+     *       the party designation (it is kept against a mere first-GSTIN choice). Every other GSTIN of the text is another
+     *       party's and never fills a client field. An override is logged and flagged {@link #FLAG_GSTIN_CORRECTED};</li>
+     *   <li>state: from the chosen GSTIN's state code (the recorded name only when the code gives none);</li>
+     *   <li>financial year: when the matcher gives none, derived from its tax period (else the issues' periods), April
+     *       to March; it fills the notice block and, when the intake has none, the reply header;</li>
+     *   <li>authority: "State Tax" / "Central Tax" from the heading when the matcher gives no authority.</li>
+     * </ul>
+     */
+    HeaderFacts applyHeaderFacts(MatchingResult mr, DraftingInput input, String documentText, UUID noticeId, List<String> notes,
+                                 Set<String> flags, Map<String, Map<String, Object>> flagDetails) {
+        if (mr == null) return new HeaderFacts(mr, input);
+        String text = documentText != null ? documentText : "";
+        MatchedNoticeInfo n = mr.notice() != null ? mr.notice() : new MatchedNoticeInfo(null, null, null, null, null, null, null, null);
+
+        // GSTIN
+        NoticeHeaderFacts.TaxpayerGstin tg = NoticeHeaderFacts.taxpayerGstin(text);
+        String matcherGstin = n.gstin();
+        String intakeGstin = input != null && input.registrationIdentifier() != null && !input.registrationIdentifier().isBlank()
+                ? input.registrationIdentifier().trim() : null;
+        String gstin = intakeGstin;
+        Map<String, Object> gstinDetail = new LinkedHashMap<>();
+        if (tg.overrides(matcherGstin)) {
+            log.info("Notice {}: matcher GSTIN {} overridden by {} (taxpayer GSTIN read by code, source {})", noticeId, matcherGstin,
+                    tg.gstin() != null ? tg.gstin() : "none", tg.source());
+            gstinDetail.put("matcher", matcherGstin);
+        }
+        if (tg.gstin() != null) {
+            if (intakeGstin == null) {
+                gstin = tg.gstin();
+            } else if (!tg.gstin().equalsIgnoreCase(intakeGstin)) {
+                if (tg.fromParty()) {
+                    log.info("Notice {}: intake GSTIN {} replaced by {} (named next to the party designation)", noticeId, intakeGstin, tg.gstin());
+                    gstinDetail.put("intake", intakeGstin);
+                    gstin = tg.gstin();
+                } else {
+                    notes.add("GSTIN: the intake GSTIN " + intakeGstin + " is kept; the document names no GSTIN next to the party"
+                            + " and its first GSTIN is " + tg.gstin() + ": partner to check.");
+                }
+            }
+        }
+        if (!gstinDetail.isEmpty()) {
+            gstinDetail.put("chosen", gstin != null ? gstin : "none");
+            gstinDetail.put("source", tg.source());
+            flags.add(FLAG_GSTIN_CORRECTED);
+            flagDetails.put(FLAG_GSTIN_CORRECTED, gstinDetail);
+            notes.add("Taxpayer GSTIN chosen by code: " + (gstin != null ? gstin : "none in the document") + " ("
+                    + (tg.fromParty() ? "named next to the party" : tg.gstin() != null ? "first GSTIN of the document" : "no GSTIN in the text")
+                    + "); replaced " + (gstinDetail.containsKey("matcher") ? "the matcher's " + gstinDetail.get("matcher") : "")
+                    + (gstinDetail.containsKey("matcher") && gstinDetail.containsKey("intake") ? " and " : "")
+                    + (gstinDetail.containsKey("intake") ? "the intake " + gstinDetail.get("intake") : "") + ".");
+        }
+        if (!tg.otherParties().isEmpty()) {
+            notes.add("Other-party GSTINs in the document (suppliers / recipients; never used for client fields): "
+                    + tg.otherParties().size() + ".");
+        }
+
+        // state from the taxpayer GSTIN
+        String recordedState = input != null ? input.registrationStateName() : null;
+        String state = NoticeHeaderFacts.stateForGstin(gstin).orElse(GstStateCodes.isPlaceholderName(recordedState) ? null : recordedState.trim());
+
+        // financial year from the tax period
+        String fy = n.financialYear() != null && !n.financialYear().isBlank() ? n.financialYear() : null;
+        if (fy == null) {
+            List<String> periods = new ArrayList<>();
+            if (n.taxPeriod() != null && !n.taxPeriod().isBlank()) periods.add(n.taxPeriod());
+            if (periods.isEmpty() || NoticeHeaderFacts.financialYearLabel(periods) == null) {
+                periods.clear();
+                for (MatchedIssue i : mr.issues() != null ? mr.issues() : List.<MatchedIssue>of()) {
+                    Object period = i.facts() != null ? i.facts().get("period") : null;
+                    if (period != null && !period.toString().isBlank()) periods.add(period.toString());
+                }
+            }
+            fy = NoticeHeaderFacts.financialYearLabel(periods);
+            if (fy != null) {
+                log.info("Notice {}: financial year {} derived from the tax period {}", noticeId, fy, periods);
+                notes.add("Financial year " + fy + " derived by code from the tax period (" + HtmlSanitizer.sanitize(String.join("; ", periods)) + ").");
+            }
+        }
+
+        // authority kind from the heading
+        String authority = n.authority();
+        String kind = NoticeHeaderFacts.authorityKind(text);
+        if ((authority == null || authority.isBlank()) && kind != null) authority = kind + " authorities";
+
+        MatchingResult outMr = mr;
+        if (!Objects.equals(fy, n.financialYear()) || !Objects.equals(authority, n.authority()) || !Objects.equals(gstin, n.gstin())) {
+            outMr = mr.withNotice(n.withHeaderFacts(fy, authority, gstin));
+        }
+        DraftingInput outInput = input;
+        if (input != null) {
+            String inputFy = input.financialYear() != null && !input.financialYear().isBlank() ? input.financialYear() : fy;
+            if (!Objects.equals(gstin, input.registrationIdentifier()) || !Objects.equals(state, input.registrationStateName())
+                    || !Objects.equals(inputFy, input.financialYear())) {
+                outInput = withHeader(input, gstin, state, inputFy);
+            }
+        }
+        return new HeaderFacts(outMr, outInput);
+    }
+
+    /** The drafting input with the taxpayer GSTIN, state and financial year set by {@link #applyHeaderFacts}. */
+    private static DraftingInput withHeader(DraftingInput i, String gstin, String state, String fy) {
+        return new DraftingInput(i.matterId(), i.tone(), i.partnerInstructions(), i.clientLegalName(), i.clientPan(),
+                i.clientEntityType(), i.registrationType(), gstin, state, i.law(), fy, i.assessmentYear(), i.notice(),
+                i.rawExtractedJson(), i.noticeOcrExcerpt(), i.priorMatters(), i.siblingNotices(), i.documents(),
+                i.crossRegistrationContext(), i.supportingDocuments(), i.pendingRequirements(), i.ragContext(),
+                i.confidenceAssessment());
     }
 
     /** Minimum days between a DRC-01A and its reply date (drafting.defects.drc01a-min-days, DEFECT_DRC01A_MIN_DAYS). */

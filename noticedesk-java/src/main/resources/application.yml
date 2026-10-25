@@ -166,6 +166,8 @@ noticedesk:
       # it (measured: 1,500 truncated 11 of 14 notices, 3,000 still truncated one)
       title-max-tokens: ${MATCHING_SHORTLIST_TITLE_MAX_TOKENS:6000}
       title-retry-max-tokens: ${MATCHING_SHORTLIST_TITLE_RETRY_MAX_TOKENS:9000}
+      # true: the shortlisted card ids (full, titles-only, defect-check cards; ids only) are logged at INFO, else DEBUG
+      log-ids: ${MATCHING_SHORTLIST_LOG_IDS:false}
   catalogue:
     # Provisional content = 'draft' issue cards promoted from an approved AI issue section (card ids
     # NDK-AI-nnn or a new draft version of an existing card) and their 'provisional' reply templates.

@@ -72,10 +72,14 @@ public final class GstStateCodes {
         return nameForCode(g.substring(0, 2));
     }
 
-    /** True for a blank or placeholder state name ("Unknown State", "unknown", "N/A", "null"). */
+    /**
+     * True for a blank or placeholder state name ("Unknown State", "unknown", "N/A", "null"), and for the codes that are
+     * not a State / UT ("Centre Jurisdiction", "Other Territory"): a draft never says "State of Centre Jurisdiction".
+     */
     public static boolean isPlaceholderName(String name) {
         if (name == null || name.isBlank()) return true;
         String n = name.trim().toLowerCase(Locale.ROOT);
-        return n.startsWith("unknown") || n.equals("n/a") || n.equals("na") || n.equals("null") || n.equals("-");
+        return n.startsWith("unknown") || n.equals("n/a") || n.equals("na") || n.equals("null") || n.equals("-")
+                || n.matches("cent(?:re|er)\\s+jurisdiction|other\\s+territory");
     }
 }

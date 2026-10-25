@@ -128,6 +128,11 @@ public class V7LivePipelineRunnerTest {
         props.getLlm().setModelShortlist(guard.model("LLM_MODEL_SHORTLIST", props.getLlm().getModelShortlist()));
         String modelShortlist = props.getLlm().shortlistModel();
 
+        // MATCHING_SHORTLIST_LOG_IDS=true: the shortlisted card ids (ids only) are logged at INFO for each notice
+        String logIds = System.getenv("MATCHING_SHORTLIST_LOG_IDS");
+        if (logIds != null && !logIds.isBlank()) props.getMatching().getShortlist().setLogIds(Boolean.parseBoolean(logIds.trim()));
+        System.out.printf("shortlist card ids at INFO: %s%n", props.getMatching().getShortlist().isLogIds());
+
         props.getCitation().setProvider(citationProvider);
         props.getCitation().setIndiankanoonApiToken(ikToken);
         props.getMatching().setAllowDraftCards(true);

@@ -227,6 +227,8 @@ public class AppProperties {
              * cites no section or rule (see {@code CardShortlister}).
              */
             private List<String> absenceTitlePatterns = new java.util.ArrayList<>(List.of("no section", "vague"));
+            /** Log the shortlisted card ids (ids only) at INFO instead of DEBUG (env MATCHING_SHORTLIST_LOG_IDS). */
+            private boolean logIds = false;
             /** max_tokens of the AI title pass (thinking tokens count against it). */
             private Integer titleMaxTokens = 6000;
             /** max_tokens of the AI title pass retry after a max_tokens stop. */

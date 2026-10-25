@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 24-10-2026 (b23: widening dropped; shortlist floor 12 and absence cards; mutual-sibling stage tie-break; per-agent writer provider; runner accepts real notices; per-notice cap not shrunk by the run budget)
+Last updated: 25-10-2026 (b24: taxpayer GSTIN chosen by code; FY from the tax period; state from the GSTIN; duplicate documents merged; statutory paragraphs Noted; defect-check cards always shortlisted; refund prayer amount from the notice)
 
 ---
 
@@ -834,8 +834,38 @@ cached catalogue. Measured causes and the fix for each are in open item 9. Match
   `LIVE_MAX_NOTICE_COST_INR` (`LiveRunGuard.stopBeforeNotice`). Set `LIVE_MAX_RUN_COST_INR` to at least the notice cap
   plus the expected spend of the earlier notices. The matching-only runners keep `noticeCapFor`.
 
+## (b24) After the first real notice run (RFD-08 refund show cause, 25-10-2026)
+
+- **Taxpayer GSTIN by code** (`NoticeHeaderFacts.taxpayerGstin`, applied in the pipeline right after matching): the first
+  GSTIN within 120 characters after a party designation ("M/s", "noticee", "taxpayer", "RTP", "registered person", "To,")
+  in the first 1,500 characters, else the first GSTIN of the text. The matcher's notice block now has `gstin` (prompt
+  line added); its value is kept only when it is the code's choice. The intake GSTIN is replaced when it differs from a
+  GSTIN named next to the party (kept against a mere first-GSTIN choice, with a partner note). Override: log line and
+  flag `info:gstin_corrected` (details matcher / intake / chosen / source). Every other GSTIN is another party's; a
+  template variable for the client GSTIN that gets one is dropped.
+- **Financial year**: no `financial_year` from the matcher -> derived from its tax period (else the issues' periods),
+  April to March ("JAN-2026", "January 2026", "Jan-2026 to Mar-2026", "FY 2025-26", "2025-26"); a period crossing years
+  renders "FY 2025-26 and FY 2026-27". Fills the notice block and, when the intake has none, the reply header (02 / 03).
+- **State** from the chosen GSTIN's state code; "Centre Jurisdiction" / "Other Territory" are never a state (else
+  "State of [[MISSING: state]]" and `warn:missing_state`). Authority kind ("State Tax" / "Central Tax") from the heading
+  fills a blank matcher authority (notice_07 golden now reads "issued by the Central Tax authorities").
+- **Documents** (10 / 11 / 14): near-duplicates merged after the existing dedupe (normalised lines, containment or token
+  Jaccard >= 0.6, plurals folded, longer line kept; different form codes such as GSTR-1 / GSTR-3B never merged). The
+  run's 22-line list gives 12.
+- **Para-wise**: a statutory paragraph (heading "Contravention of the Law" / "Provisions" / "Statutory provisions", or
+  opening "(A) Section", "Section ... provides", "Rule ... provides", "(1) Every registered person shall") is "Noted. The
+  statutory provisions are reproduced; ..." over a matcher / writer denial; flag `info:statutory_para_noted`, partner note.
+- **Shortlist**: the reply- and appeal-stage cards of every code defect check that applies to the document
+  (`DefectChecker.applicableCardIds`) are always added in full (fourth source, `defects N` in the log / flag). Card ids
+  logged at DEBUG, at INFO with `MATCHING_SHORTLIST_LOG_IDS=true` (runner reads the env).
+- **Refund notices** (RFD-08): executive summary "Refund proposed to be rejected: Rs <sum of grounds>" (client summary
+  likewise); prayer `{{issue.amount_tax}}` / `{{notice.refund_amount}}` from the one ground's amount, else the amount
+  after "refund" / "Refund Application" / "for Rs." in the first 1,500 characters, else [[MISSING]].
+
 ## (c) Verification
 
+- Offline unit suite (`mvn -o test`): **534 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 25-10-2026 after (b24).
 - Offline unit suite (`mvn -o test`): **508 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
   on 24-10-2026 after (b23).
 

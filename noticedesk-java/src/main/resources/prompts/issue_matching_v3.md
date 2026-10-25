@@ -101,7 +101,7 @@ The catalogue cards describe the stage of the FIRM'S RESPONSE (an APL-01 appeal,
    - A notice whose tax period straddles two regimes covered by two sibling cards: the primary is the card for the larger part of the period or the larger amount; record the straddle in `why` with a boundary line for each regime.
 
 6. **Strict Fact Extraction & No Invention**:
-   - Extract notice details into the `notice` block: `notice_number`, `din`, `issue_date`, `reply_due_date`, `financial_year`, `tax_period`, `total_demand_amount`, `authority`.
+   - Extract notice details into the `notice` block: `notice_number`, `din`, `issue_date`, `reply_due_date`, `financial_year`, `tax_period`, `total_demand_amount`, `authority`, `gstin` (the noticee's own GSTIN, printed next to its name at the top; never a supplier's or recipient's GSTIN listed in the body; null when not printed). Code re-checks the GSTIN against the text.
    - Extract issue-specific facts: `period`, `amount`, `legal_section`.
    - **NEVER invent or fabricate values**. If a fact is not stated in the notice, set the field to `null` and list missing items under `missing_or_doubtful`.
    - A placeholder in the DIN field ("[____]", "XXXX", "not generated") is recorded as `"din": null` in the `notice` block AND as `defect_checks.din_rfn` = `"defect"` with its missing-DIN defect ground (Step 1b).
@@ -136,7 +136,8 @@ The catalogue cards describe the stage of the FIRM'S RESPONSE (an APL-01 appeal,
     "financial_year": "2019-20",
     "tax_period": "...",
     "total_demand_amount": 0.0,
-    "authority": "..."
+    "authority": "...",
+    "gstin": null
   },
   "defect_checks": {
     "din_rfn": {"result": "defect", "basis": "header: DIN field reads [____], central-tax SCN dated 02.05.2024"},

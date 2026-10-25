@@ -30,7 +30,11 @@ import java.util.regex.Pattern;
  *   <li><b>absence cards</b>: a show cause notice or intimation ({@link #ABSENCE_KEYS}, or a DRC-01 / DRC-01A /
  *       ASMT-10 heading) whose text cites no section and no rule at all also gets, in full, every catalogue card whose
  *       title contains one of {@code absenceTitlePatterns} (case-insensitive; "no section", "vague"): the defect of
- *       such a notice is the missing provision, so no label can point at its card.</li>
+ *       such a notice is the missing provision, so no label can point at its card;</li>
+ *   <li><b>defect-check cards</b>: the reply-stage and appeal-stage cards of every code defect check that applies to
+ *       the document ({@link DefectChecker#applicableCardIds}: limitation_73, premature_74, din, signature,
+ *       drc01a_reply_time) are always added in full, whatever their label score or stage, so a defect the code finds
+ *       after matching always had its card in front of the matcher.</li>
  * </ol>
  * The output keeps catalogue order, so the same inputs always give the same shortlist.
  */
@@ -213,24 +217,24 @@ public final class CardShortlister {
      * Shortlist and how it was built: the full cards (catalogue order), the cards listed by title only, the level,
      * the catalogue and stage-pool sizes, the label picks and AI picks (raw sets: they may overlap), the number of
      * siblings added in full, the AI pass status ({@link #AI_USED} / {@link #AI_OFF} / {@link #AI_SKIPPED}), the
-     * notice keys the stage filter read, whether the AI picks came from an answer whose JSON could not be read, and the
-     * absence cards added (raw set, see the class comment).
+     * notice keys the stage filter read, whether the AI picks came from an answer whose JSON could not be read, the
+     * absence cards added and the defect-check cards added (raw sets, see the class comment).
      */
     public record Shortlist(List<IssueCard> cards, List<IssueCard> titlesOnly, String level, int catalogueSize, int poolSize,
                             Set<String> labelPicks, Set<String> aiPicks, int siblingCount, String aiStatus,
-                            List<String> noticeKeys, boolean aiParseFallback, Set<String> absencePicks) {
+                            List<String> noticeKeys, boolean aiParseFallback, Set<String> absencePicks, Set<String> defectPicks) {
 
         public Shortlist(List<IssueCard> cards, List<IssueCard> titlesOnly, String level, int catalogueSize, int poolSize,
                          Set<String> labelPicks, Set<String> aiPicks, int siblingCount, String aiStatus,
                          List<String> noticeKeys) {
             this(cards, titlesOnly, level, catalogueSize, poolSize, labelPicks, aiPicks, siblingCount, aiStatus, noticeKeys, false,
-                    Set.of());
+                    Set.of(), Set.of());
         }
 
         /** This shortlist, marked as built from AI picks found in an unreadable answer (flag {@code warn:shortlist_ai_parse_fallback}). */
         public Shortlist withAiParseFallback(boolean fallback) {
             return new Shortlist(cards, titlesOnly, level, catalogueSize, poolSize, labelPicks, aiPicks, siblingCount, aiStatus,
-                    noticeKeys, fallback, absencePicks);
+                    noticeKeys, fallback, absencePicks, defectPicks);
         }
 
         public Shortlist {
@@ -239,6 +243,7 @@ public final class CardShortlister {
             labelPicks = labelPicks != null ? Collections.unmodifiableSet(new LinkedHashSet<>(labelPicks)) : Set.of();
             aiPicks = aiPicks != null ? Collections.unmodifiableSet(new LinkedHashSet<>(aiPicks)) : Set.of();
             absencePicks = absencePicks != null ? Collections.unmodifiableSet(new LinkedHashSet<>(absencePicks)) : Set.of();
+            defectPicks = defectPicks != null ? Collections.unmodifiableSet(new LinkedHashSet<>(defectPicks)) : Set.of();
             aiStatus = aiStatus != null ? aiStatus : AI_OFF;
             noticeKeys = noticeKeys != null ? List.copyOf(noticeKeys) : List.of();
         }
@@ -272,7 +277,7 @@ public final class CardShortlister {
 
         /**
          * "27 cards (pool 128; labels 19, ai 14, siblings 6; titles-only 11)" for logs, the runner and the partner note;
-         * ", absence 2" follows the siblings when absence cards were added.
+         * ", absence 2" follows the siblings when absence cards were added, then ", defects 3" when defect-check cards were.
          */
         public String describe() {
             return describe(details());
@@ -286,6 +291,7 @@ public final class CardShortlister {
             String prefix = LEVEL_STAGE.equals(level) || LEVEL_FULL.equals(level) ? "level " + level + "; " : "";
             return d.get("size") + " cards (" + prefix + "pool " + d.get("pool") + "; labels " + d.get("labels") + ", ai " + ai
                     + ", siblings " + d.get("siblings") + (d.get("absence") != null ? ", absence " + d.get("absence") : "")
+                    + (d.get("defects") != null ? ", defects " + d.get("defects") : "")
                     + "; titles-only " + d.get("titles_only") + ")";
         }
 
@@ -302,6 +308,7 @@ public final class CardShortlister {
             d.put("siblings", siblingCount);
             d.put("titles_only", titlesOnly.size());
             if (!absencePicks.isEmpty()) d.put("absence", absencePicks.size());
+            if (!defectPicks.isEmpty()) d.put("defects", defectPicks.size());
             if (aiParseFallback) d.put("ai_parse_fallback", true);
             return d;
         }
@@ -363,16 +370,23 @@ public final class CardShortlister {
         // step 5 (read first so the floor counts them): absence cards of a section-less show cause notice / intimation
         Set<String> absence = absencePicks(all, pool.noticeKeys(), text, opt.absenceTitlePatterns());
         fullIds.addAll(absence);
+        // step 6 (also read first): the cards of every code defect check that applies to the document, always in full
+        Set<String> defects = new LinkedHashSet<>();
+        for (String id : DefectChecker.applicableCardIds(noticeType, noticeType, responseStage, text)) {
+            if (byId.containsKey(id)) defects.add(id);
+        }
+        fullIds.addAll(defects);
 
         String level = ai.isEmpty() && !AI_USED.equals(aiStatus) ? LEVEL_LABELS : LEVEL_HYBRID;
         if (fullIds.size() < MIN_CARDS) {
             // step 4: floor
             if (pool.size() >= all.size()) {
                 return new Shortlist(all, List.of(), LEVEL_FULL, all.size(), pool.size(), labelPicks, ai, 0, aiStatus,
-                        pool.noticeKeys(), false, absence);
+                        pool.noticeKeys(), false, absence, defects);
             }
             fullIds = new HashSet<>(poolIds);
             fullIds.addAll(absence);
+            fullIds.addAll(defects);
             level = LEVEL_STAGE;
         }
 
@@ -385,7 +399,7 @@ public final class CardShortlister {
         for (IssueCard c : byId.values()) if (named.contains(c.cardId())) titlesOnly.add(c);
         int siblingsAdded = LEVEL_STAGE.equals(level) ? 0 : siblings.size();
         return new Shortlist(chosen, titlesOnly, level, all.size(), pool.size(), labelPicks, ai, siblingsAdded, aiStatus,
-                pool.noticeKeys(), false, absence);
+                pool.noticeKeys(), false, absence, defects);
     }
 
     /**

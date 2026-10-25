@@ -130,6 +130,20 @@ public final class DefectChecker {
                 drc01aReplyTime(in.documentType(), text, date));
     }
 
+    /**
+     * The reply-stage and appeal-stage card ids of every check that applies to the document (a result other than a
+     * "not applicable" ok), in check order without repeats: the cards the shortlist always shows in full, so a defect
+     * the code finds always has its card in front of the matcher. Read from the text alone (no matcher fields).
+     */
+    public static List<String> applicableCardIds(String documentType, String stage, ResponseStage responseStage, String text) {
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (CodeDefect d : new DefectChecker().check(new Input(text, null, null, null, null, documentType, stage, responseStage))) {
+            if (d.basis().startsWith(NOT_APPLICABLE)) continue;
+            out.addAll(d.cards());
+        }
+        return List.copyOf(out);
+    }
+
     // ------------------------------------------------------------------ checks
 
     static CodeDefect limitation73(DocumentKind kind, String section, LocalDate date, Integer fy) {

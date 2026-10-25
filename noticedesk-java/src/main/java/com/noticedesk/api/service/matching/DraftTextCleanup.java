@@ -82,6 +82,101 @@ public final class DraftTextCleanup {
         return out;
     }
 
+    /** Token Jaccard at or above which two document lines are the same document ({@link #mergeNearDuplicateDocuments}). */
+    static final double DOC_JACCARD_THRESHOLD = 0.6;
+    /** Words dropped before the near-duplicate test: "copy of", "copies of", "form", "the". */
+    private static final Pattern DOC_NEAR_DUP_FILLER = Pattern.compile("\\b(?:copy of|copies of|form|the)\\b");
+
+    /**
+     * Merges near-duplicate document lines (Sections 10 / 11 / 14), after {@link #dedupeDocuments}. Each line is
+     * normalised (lower case, punctuation stripped, the words "copy of", "copies of", "form", "the" removed); two lines
+     * are the same document when one normalised line contains the other (whole words) or their token Jaccard (plain
+     * plurals folded) is at least {@value #DOC_JACCARD_THRESHOLD}; two lines naming different form / return codes
+     * ("GSTR-1" / "GSTR-3B") are never merged. The longer line is kept, in the earlier line's position; merging repeats
+     * until no pair is left.
+     */
+    public static List<String> mergeNearDuplicateDocuments(List<String> documents) {
+        List<String> kept = new ArrayList<>();
+        if (documents == null) return kept;
+        for (String raw : documents) {
+            if (raw == null || raw.isBlank()) continue;
+            String text = raw.trim().replaceAll("\\s+", " ");
+            int dup = -1;
+            for (int i = 0; i < kept.size() && dup < 0; i++) {
+                if (sameDocument(kept.get(i), text)) dup = i;
+            }
+            if (dup < 0) {
+                kept.add(text);
+            } else if (text.length() > kept.get(dup).length()) {
+                kept.set(dup, text);
+            }
+        }
+        // a widened line may now match a later one
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            outer:
+            for (int i = 0; i < kept.size(); i++) {
+                for (int j = i + 1; j < kept.size(); j++) {
+                    if (sameDocument(kept.get(i), kept.get(j))) {
+                        if (kept.get(j).length() > kept.get(i).length()) kept.set(i, kept.get(j));
+                        kept.remove(j);
+                        changed = true;
+                        break outer;
+                    }
+                }
+            }
+        }
+        return kept;
+    }
+
+    /** True when two document lines are near-duplicates (see {@link #mergeNearDuplicateDocuments}). */
+    static boolean sameDocument(String a, String b) {
+        String na = nearDupNorm(a);
+        String nb = nearDupNorm(b);
+        if (na.isEmpty() || nb.isEmpty()) return false;
+        // different forms / returns ("GSTR-1" vs "GSTR-3B", "RFD-01" vs "RFD-02") are never the same document
+        Set<String> ca = formCodes(na);
+        Set<String> cb = formCodes(nb);
+        if (!ca.isEmpty() && !cb.isEmpty() && Collections.disjoint(ca, cb)) return false;
+        if ((" " + na + " ").contains(" " + nb + " ") || (" " + nb + " ").contains(" " + na + " ")) return true;
+        Set<String> ta = singularTokens(na);
+        Set<String> tb = singularTokens(nb);
+        Set<String> union = new HashSet<>(ta);
+        union.addAll(tb);
+        ta.retainAll(tb);
+        return (double) ta.size() / union.size() >= DOC_JACCARD_THRESHOLD;
+    }
+
+    /** Tokens with a plain plural folded to its singular ("statements" / "statement"); numbers and codes unchanged. */
+    private static Set<String> singularTokens(String normalised) {
+        Set<String> out = new HashSet<>();
+        for (String t : normalised.split(" ")) {
+            if (t.length() > 3 && t.endsWith("s") && !t.endsWith("ss") && t.chars().allMatch(Character::isLetter)) {
+                t = t.substring(0, t.length() - 1);
+            }
+            out.add(t);
+        }
+        return out;
+    }
+
+    private static final Pattern FORM_CODE = Pattern.compile("^[a-z]{2,5}\\d{1,2}[a-z]?$");
+
+    /** The form / return codes of a normalised line ("gstr3b", "rfd01"). */
+    private static Set<String> formCodes(String normalised) {
+        Set<String> out = new HashSet<>();
+        for (String t : normalised.split(" ")) if (FORM_CODE.matcher(t).matches()) out.add(t);
+        return out;
+    }
+
+    private static String nearDupNorm(String s) {
+        // codes joined first ("GSTR-3B" -> "gstr3b"), as in normaliseDoc
+        String n = s.toLowerCase(Locale.ROOT).replaceAll("<[^>]+>", " ")
+                .replaceAll("(?<=\\d)[-/.](?=\\w)|(?<=\\w)[-/.](?=\\d)", "")
+                .replaceAll("[^\\p{L}\\p{N}\\s]+", " ");
+        return DOC_NEAR_DUP_FILLER.matcher(n.replaceAll("\\s+", " ")).replaceAll(" ").replaceAll("\\s+", " ").trim();
+    }
+
     /** Lower case, punctuation removed (codes joined: "GSTR-3B" -> "gstr3b", "show-cause" -> "show cause"), single spaces. */
     static String normaliseDoc(String s) {
         return s.toLowerCase(Locale.ROOT)

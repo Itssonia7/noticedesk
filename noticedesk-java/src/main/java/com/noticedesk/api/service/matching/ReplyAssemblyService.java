@@ -55,6 +55,9 @@ public class ReplyAssemblyService {
     static final int EXEC_SUMMARY_MAX_WORDS = 150;
     /** An issue bullet in Section 01 longer than this keeps only its first sentence. */
     static final int SUMMARY_BULLET_MAX_WORDS = 40;
+    /** Section 05 reply to a notice paragraph that reproduces statutory text ({@link NoticeParagraphs#statutoryParagraphs}). */
+    public static final String STATUTORY_PARA_REPLY =
+            "Noted. The statutory provisions are reproduced; the noticee's submissions on their application are in Sections 4 and 6.";
 
     private final JdbcTemplate jdbcTemplate;
     private final AppProperties properties;
@@ -166,10 +169,17 @@ public class ReplyAssemblyService {
         String noticeDate = noticeInfo != null && noticeInfo.issueDate() != null ? formatDateStr(noticeInfo.issueDate()) : "[[MISSING: issue_date]]";
         String clientName = formatClientName(input != null ? input.clientLegalName() : null);
         String gstin = input != null && input.registrationIdentifier() != null ? input.registrationIdentifier() : "[[MISSING: client_gstin]]";
-        String fy = input != null && input.financialYear() != null ? input.financialYear() : "[[MISSING: financial_year]]";
+        // the registration / intake FY, else the notice block's (the matcher's, or derived by code from the tax period)
+        String fy = input != null && input.financialYear() != null && !input.financialYear().isBlank() ? input.financialYear()
+                : noticeInfo != null && noticeInfo.financialYear() != null && !noticeInfo.financialYear().isBlank()
+                ? noticeInfo.financialYear() : null;
+        String fyPhrase = fy != null ? NoticeHeaderFacts.financialYearPhrase(fy) : "Financial Year [[MISSING: financial_year]]";
         String totalDemand = noticeInfo != null && noticeInfo.totalDemandAmount() != null
                 ? TemplateFillService.formatIndianCurrency(BigDecimal.valueOf(noticeInfo.totalDemandAmount()))
                 : "[[MISSING: total_demand]]";
+        // a refund notice proposes to reject a refund: the amount is the sum of its grounds, never a "demand"
+        boolean refundNotice = NoticeHeaderFacts.isRefundDocument(documentType(input), input != null ? input.noticeOcrExcerpt() : null);
+        String refundRejected = refundNotice ? refundProposedToBeRejected(matchedIssues, noticeInfo) : null;
 
         // Anchored template blocks per AI issue (partial matches render only the blocks the writer anchored to)
         Map<Integer, Set<String>> anchoredBlocks = new HashMap<>();
@@ -208,7 +218,8 @@ public class ReplyAssemblyService {
              .append(" dated ").append(noticeDate)
              .append(" issued under ").append(noticeSec)
              .append(" for GSTIN ").append(gstin)
-             .append(". Total Demand Amount: ").append(totalDemand).append(".</p>");
+             .append(refundNotice ? ". Refund proposed to be rejected: " + refundRejected : ". Total Demand Amount: " + totalDemand)
+             .append(".</p>");
         String sec01Overflow = "";
         if (highStakes != null && highStakes.section01Html() != null && !highStakes.section01Html().isBlank()) {
             DraftTextCleanup.WordSplit split = DraftTextCleanup.limitWords(highStakes.section01Html(), EXEC_SUMMARY_MAX_WORDS);
@@ -259,7 +270,7 @@ public class ReplyAssemblyService {
             sec02.append(", issued by the ").append(noticeInfo.authority()).append(",");
         }
         sec02.append(isNonScn(docKind) ? " issued under " : " under ").append(noticeSec).append(" of the ").append(lawName(input))
-             .append(", for Financial Year ").append(fy).append(".</p>");
+             .append(", for ").append(fyPhrase).append(".</p>");
         sec02.append("<p>The notice raises ").append(matchedIssues.size()).append(matchedIssues.size() == 1 ? " issue" : " issues")
              .append(", each answered in Section 04")
              .append(defectIssues.isEmpty() ? "" : " (procedural objections in Section 07)")
@@ -277,7 +288,7 @@ public class ReplyAssemblyService {
         sec03.append("<p>").append(clientName).append(" (GSTIN: ").append(gstin)
              .append(") is registered under the GST law in the State of ").append(state).append(".</p>");
         sec03.append("<p>Notice reference ").append(noticeRef).append(" dated ").append(noticeDate)
-             .append(" pertains to Financial Year ").append(fy).append(".</p>");
+             .append(" pertains to ").append(fyPhrase).append(".</p>");
         String taxPeriod = taxPeriod(noticeInfo, input, matchedIssues);
         String receiptDate = dateOfReceipt(input, matchedIssues);
         sec03.append("<p>The notice covers the tax period ").append(orMissing(taxPeriod, "tax_period", missingMarkers, assemblyFlags))
@@ -374,6 +385,14 @@ public class ReplyAssemblyService {
         stageVars.put("client.legal_name", clientName);
         stageVars.put("notice.tax_period", taxPeriod);
         stageVars.put("notice.date_of_receipt", receiptDate);
+        if (refundNotice) {
+            // the prayer's refund amount: the issue amount when one ground carries it, else the amount the notice names
+            String refundAmount = prayerRefundAmount(matchedIssues, input != null ? input.noticeOcrExcerpt() : null);
+            if (refundAmount != null) {
+                stageVars.put("issue.amount_tax", refundAmount);
+                stageVars.put("notice.refund_amount", refundAmount);
+            }
+        }
         String sec12Body = fillStagePlaceholders(
                 getStageSectionOrMissing(stageTpl, "12", normalizedStage, missingMarkers, assemblyFlags), stageVars, missingMarkers);
         rawSections.add(new AssembledSection(12, "12 Prayer", sec12Body));
@@ -483,7 +502,8 @@ public class ReplyAssemblyService {
         sec14.append("<h3>Client Summary</h3>");
         sec14.append("<p><strong>Notice Type:</strong> ").append(formatFullNoticeType(noticeSec, docKind)).append("</p>");
         sec14.append("<p><strong>Notice Reference:</strong> ").append(noticeRef).append(" dated ").append(noticeDate).append("</p>");
-        sec14.append("<p><strong>Total Amount Demanded:</strong> ").append(totalDemand).append("</p>");
+        sec14.append(refundNotice ? "<p><strong>Refund Proposed to be Rejected:</strong> " + refundRejected + "</p>"
+                : "<p><strong>Total Amount Demanded:</strong> " + totalDemand + "</p>");
         sec14.append("<p><strong>Reply Due Date:</strong> ").append(formattedDueDate).append("</p>");
         sec14.append("<p><strong>Documents Required from Client:</strong></p>");
         if (documents.isEmpty()) {
@@ -814,12 +834,21 @@ public class ReplyAssemblyService {
         Set<Integer> directionParas = categories.getOrDefault("directions", Set.of());
         // matching prompt v3.5: the taxpayer's stance per paragraph; empty for earlier output (today's wording stays)
         Map<Integer, String> stanceByPara = stanceByPara(matchingResult != null ? matchingResult.paraStance() : null);
+        // a paragraph that reproduces the law is noted, never denied (whatever the matcher or a writer said)
+        Set<Integer> statutoryParas = NoticeParagraphs.statutoryParagraphs(input != null ? input.noticeOcrExcerpt() : null);
+        List<Integer> overridden = new ArrayList<>();
 
         StringBuilder sb = new StringBuilder();
         sb.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
         for (int p = 1; p <= paraCount; p++) {
             sb.append("<li><strong>Para ").append(p).append(":</strong> ");
-            if (aiParaReplies.containsKey(p)) {
+            if (statutoryParas.contains(p)) {
+                sb.append(STATUTORY_PARA_REPLY);
+                if (aiParaReplies.containsKey(p) || IssueMatchingAgent.STANCE_DENIED.equals(stanceByPara.get(p))
+                        || (!stanceByPara.containsKey(p) && (paraToIssues.containsKey(p) || issueParas.contains(p) || demandParas.contains(p)))) {
+                    overridden.add(p);
+                }
+            } else if (aiParaReplies.containsKey(p)) {
                 sb.append(mergeParaReplies(aiParaReplies.get(p)));
             } else if (stanceByPara.containsKey(p)) {
                 sb.append(stanceReply(stanceByPara.get(p), p, paraToIssues, issues));
@@ -839,6 +868,11 @@ public class ReplyAssemblyService {
             sb.append("</li>");
         }
         sb.append("</ol>");
+        if (!statutoryParas.isEmpty()) {
+            addOnce(flags, "info:statutory_para_noted");
+            notes.add("Para-wise reply: notice para(s) " + statutoryParas + " reproduce statutory provisions and are Noted by code"
+                    + (overridden.isEmpty() ? "." : " (a denial / AI reply replaced on para(s) " + overridden + ")."));
+        }
         return sb.toString();
     }
 
@@ -1025,7 +1059,7 @@ public class ReplyAssemblyService {
             }
         }
         // the same document listed by several issues (or worded slightly differently) is listed once
-        return DraftTextCleanup.dedupeDocuments(new ArrayList<>(docs.values()));
+        return DraftTextCleanup.mergeNearDuplicateDocuments(DraftTextCleanup.dedupeDocuments(new ArrayList<>(docs.values())));
     }
 
     // ------------------------------------------------------------------ Helpers
@@ -1174,7 +1208,50 @@ public class ReplyAssemblyService {
         if (input == null) return null;
         String recorded = input.registrationStateName();
         if (!GstStateCodes.isPlaceholderName(recorded)) return recorded.trim();
-        return GstStateCodes.nameForGstin(input.registrationIdentifier()).orElse(null);
+        return NoticeHeaderFacts.stateForGstin(input.registrationIdentifier()).orElse(null);
+    }
+
+    private static String documentType(DraftingAgent.DraftingInput input) {
+        Object type = input != null && input.notice() != null ? input.notice().get("document_type") : null;
+        return type != null ? type.toString() : null;
+    }
+
+    /**
+     * "Rs 1,78,63,659" for the executive summary of a refund notice: the sum of the amounts of its grounds (demand and
+     * consequential issues), else the notice block's total, else a [[MISSING]] marker.
+     */
+    static String refundProposedToBeRejected(List<MatchedIssue> issues, MatchedNoticeInfo noticeInfo) {
+        BigDecimal sum = BigDecimal.ZERO;
+        boolean any = false;
+        for (MatchedIssue issue : issues) {
+            if (issue.isDefect() || issue.facts() == null) continue;
+            BigDecimal a = NoticeHeaderFacts.parseAmount(issue.facts().get("amount"));
+            if (a != null && a.signum() > 0) {
+                sum = sum.add(a);
+                any = true;
+            }
+        }
+        if (any) return TemplateFillService.formatIndianCurrency(sum);
+        if (noticeInfo != null && noticeInfo.totalDemandAmount() != null) {
+            return TemplateFillService.formatIndianCurrency(BigDecimal.valueOf(noticeInfo.totalDemandAmount()));
+        }
+        return "[[MISSING: refund_amount]]";
+    }
+
+    /**
+     * The refund amount of a refund notice's prayer: the issue amount when exactly one ground carries one, else the
+     * amount the notice names after "refund" / "Refund Application" / "for Rs." in its head; null when neither.
+     */
+    public static String prayerRefundAmount(List<MatchedIssue> issues, String noticeText) {
+        List<BigDecimal> amounts = new ArrayList<>();
+        for (MatchedIssue issue : issues) {
+            if (issue.isDefect() || issue.facts() == null) continue;
+            BigDecimal a = NoticeHeaderFacts.parseAmount(issue.facts().get("amount"));
+            if (a != null && a.signum() > 0) amounts.add(a);
+        }
+        if (amounts.size() == 1) return TemplateFillService.formatIndianCurrency(amounts.get(0));
+        BigDecimal fromText = NoticeHeaderFacts.refundAmountFromText(noticeText);
+        return fromText != null ? TemplateFillService.formatIndianCurrency(fromText) : null;
     }
 
     private static String orMissing(String value, String field, List<String> missingMarkers, List<String> flags) {

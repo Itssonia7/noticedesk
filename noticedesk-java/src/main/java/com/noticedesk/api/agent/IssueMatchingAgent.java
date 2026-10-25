@@ -52,8 +52,21 @@ public class IssueMatchingAgent {
             String financialYear,
             String taxPeriod,
             Double totalDemandAmount,
-            String authority
-    ) {}
+            String authority,
+            String gstin
+    ) {
+        /** A notice block without the noticee's GSTIN (output before the {@code gstin} field). */
+        public MatchedNoticeInfo(String noticeNumber, String din, String issueDate, String replyDueDate, String financialYear,
+                                 String taxPeriod, Double totalDemandAmount, String authority) {
+            this(noticeNumber, din, issueDate, replyDueDate, financialYear, taxPeriod, totalDemandAmount, authority, null);
+        }
+
+        /** The same block with the financial year, authority and GSTIN set by code after matching. */
+        public MatchedNoticeInfo withHeaderFacts(String newFinancialYear, String newAuthority, String newGstin) {
+            return new MatchedNoticeInfo(noticeNumber, din, issueDate, replyDueDate, newFinancialYear, taxPeriod,
+                    totalDemandAmount, newAuthority, newGstin);
+        }
+    }
 
     /** Issue kind (v3): a ground of demand or action stated by the department. */
     public static final String KIND_DEMAND = "demand";
@@ -247,6 +260,12 @@ public class IssueMatchingAgent {
                     outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, shortlist);
         }
 
+        /** The same result with another notice block (header facts set by code after matching). */
+        public MatchingResult withNotice(MatchedNoticeInfo newNotice) {
+            return new MatchingResult(newNotice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, shortlist);
+        }
+
         /** The same result with other issues and paragraph map (the code defect merge renumbers the issues). */
         public MatchingResult withIssues(List<MatchedIssue> newIssues, Map<String, List<Integer>> newParaMap) {
             return new MatchingResult(notice, newIssues, newParaMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
@@ -356,6 +375,12 @@ public class IssueMatchingAgent {
                 || properties.getMatching().getShortlist().isAiTitles();
     }
 
+    /** {@code matching.shortlist.log-ids} (env MATCHING_SHORTLIST_LOG_IDS, default false): shortlisted card ids at INFO, else DEBUG. */
+    boolean shortlistLogIds() {
+        return properties != null && properties.getMatching() != null && properties.getMatching().getShortlist() != null
+                && properties.getMatching().getShortlist().isLogIds();
+    }
+
     /** {@code matching.shortlist.relative-cutoff} / {@code min-cards} and their {@code -with-ai} variants. */
     CardShortlister.Options shortlistOptions() {
         if (properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null) {
@@ -420,6 +445,13 @@ public class IssueMatchingAgent {
             log.info("matching_shortlist noticeId={} Shortlist: {} of {} catalogue cards, notice keys {}, rendered {} chars (full catalogue {} chars)",
                     noticeId, shortlist.describe(), shortlist.catalogueSize(), shortlist.noticeKeys(),
                     compactCatalogueText.length(), fullCatalogueText.length());
+            if (shortlistLogIds()) {
+                log.info("matching_shortlist_ids noticeId={} full={} titles_only={} defects={}", noticeId, shortlist.cardIds(),
+                        shortlist.titlesOnlyIds(), shortlist.defectPicks());
+            } else {
+                log.debug("matching_shortlist_ids noticeId={} full={} titles_only={} defects={}", noticeId, shortlist.cardIds(),
+                        shortlist.titlesOnlyIds(), shortlist.defectPicks());
+            }
         }
 
         Set<String> validCardIds = new HashSet<>();
@@ -851,7 +883,8 @@ public class IssueMatchingAgent {
                 n.path("financial_year").asText(null),
                 n.path("tax_period").asText(null),
                 demand,
-                n.path("authority").asText(null)
+                n.path("authority").asText(null),
+                n.path("gstin").asText(null)
         );
     }
 
