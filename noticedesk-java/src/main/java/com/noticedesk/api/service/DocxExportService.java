@@ -132,10 +132,16 @@ public class DocxExportService {
             // Handle list items
             if (el.tagName().equals("ul") || el.tagName().equals("ol")) {
                 for (Element li : el.select("li")) {
+                    // a nested list's items are their own lines: the item's text without them, indented by depth
+                    Element own = li.clone();
+                    own.select("ul, ol").remove();
+                    String itemText = own.text().strip();
+                    if (itemText.isBlank()) continue;
                     XWPFParagraph lp = doc.createParagraph();
-                    lp.setIndentationLeft(720);
+                    long depth = li.parents().stream().filter(a -> a.tagName().equals("ul") || a.tagName().equals("ol")).count();
+                    lp.setIndentationLeft((int) (720 * Math.max(1, depth)));
                     XWPFRun lr = lp.createRun();
-                    lr.setText("• " + li.text().strip());
+                    lr.setText("• " + itemText);
                     lr.setFontFamily("Times New Roman");
                     lr.setFontSize(11);
                 }
@@ -143,6 +149,7 @@ public class DocxExportService {
             }
             XWPFRun run = p.createRun();
             run.setText(text);
+            run.setBold(el.tagName().matches("h[1-6]"));   // issue headings and sub-headings
             run.setFontFamily("Times New Roman");
             run.setFontSize(11);
         }

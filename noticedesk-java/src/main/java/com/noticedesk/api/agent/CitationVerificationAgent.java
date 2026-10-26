@@ -558,7 +558,7 @@ public class CitationVerificationAgent {
             "(?i)^\\s*(section|sec\\.?|rule|notification|circular|instruction|order)\\s*(?:no\\.?|number)?\\s*([0-9][0-9A-Za-z()/.\\-]*)");
     private static final Pattern REPORTER = Pattern.compile(
             "(?i)[,;]?\\s*(?:[\\[(]\\s*(?:19|20)\\d{2}\\s*[\\])]|\\b(?:19|20)\\d{2}\\s*\\(|\\bAIR\\b|\\(?\\d+\\)?\\s*(?:SCC|GSTL|G\\.S\\.T\\.L|STR|ELT|E\\.L\\.T|taxmann|Centax|TMI)\\b).*$");
-    private static final Pattern VERSUS = Pattern.compile("(?i)\\s+(?:vs?\\.?|versus)\\s+");
+    private static final Pattern VERSUS = Pattern.compile("(?i)\\s+(?:vs?\\.?|v/s\\.?|versus)\\s+");
     private static final Set<String> NAME_NOISE = Set.of("m", "s", "ms", "the", "ltd", "limited", "pvt", "private", "p",
             "co", "company", "corp", "corporation", "inc", "and", "anr", "ors", "others", "another");
 
@@ -579,14 +579,26 @@ public class CitationVerificationAgent {
         }
         s = REPORTER.matcher(s).replaceFirst("");
         s = VERSUS.matcher(s).replaceAll(" v ");
+        s = TRAILING_PLACE.matcher(s).replaceFirst("$1");
         StringBuilder out = new StringBuilder();
-        for (String tok : s.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9 ]", " ").trim().split("\\s+")) {
+        for (String tok : s.toLowerCase(Locale.ROOT).replace("&", " and ").replaceAll("[^a-z0-9 ]", " ").trim().split("\\s+")) {
             if (tok.isEmpty() || NAME_NOISE.contains(tok)) continue;
+            tok = NAME_ABBREVIATIONS.getOrDefault(tok, tok);
             if (out.length() > 0) out.append(' ');
             out.append(tok);
         }
         return out.toString();
     }
+
+    /**
+     * ", Delhi" / ", New Delhi" / ", Mumbai" after the respondent: a place (one to three words, no digits) after the
+     * last comma of the respondent's side is not part of the case's identity.
+     */
+    private static final Pattern TRAILING_PLACE = Pattern.compile("(?i)(\\sv\\s[^,]+?)\\s*,\\s*[A-Za-z][A-Za-z.]*(?:\\s+[A-Za-z][A-Za-z.]*){0,2}\\s*\\.?\\s*$");
+    /** Abbreviations folded to one spelling ("Commr." / "Commissioner", "Govt." / "Government"). */
+    private static final Map<String, String> NAME_ABBREVIATIONS = Map.of(
+            "commr", "commissioner", "comm", "commissioner", "govt", "government", "asst", "assistant", "dy", "deputy",
+            "addl", "additional", "jt", "joint");
 
     /**
      * Drops repeated citations (same {@link #citationIdentity}), keeping the first and filling its missing

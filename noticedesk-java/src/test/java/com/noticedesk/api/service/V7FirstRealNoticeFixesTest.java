@@ -189,8 +189,24 @@ class V7FirstRealNoticeFixesTest {
         String s01 = section(r, 1);
         assertTrue(s01.contains("Refund proposed to be rejected: Rs 1,78,63,659"), s01);
         assertFalse(s01.contains("Total Demand Amount"), s01);
-        assertTrue(section(r, 12).contains("Sanction the refund of Rs 1,78,63,659 claimed"), section(r, 12));
+        // the refund prayer is built by code: each ground with its amount, the refund as claimed, a hearing
+        assertTrue(section(r, 12).contains("sanction the refund of Rs 1,78,63,659 as claimed"), section(r, 12));
+        assertTrue(section(r, 12).contains("the ground at Issue #3 (Rs 28,63,659)"), section(r, 12));
         assertTrue(section(r, 14).contains("Refund Proposed to be Rejected:</strong> Rs 1,78,63,659"), section(r, 14));
+    }
+
+    @Test
+    void clientLegalNameFromTheNoticeWhenTheClientRecordHasNone() {
+        DraftingInput in = input(null, null);
+        DraftingInput noName = new DraftingInput(in.matterId(), in.tone(), null, null, null, null, in.registrationType(), null, null,
+                in.law(), null, null, in.notice(), Map.of(), TEXT, List.of(), List.of(), List.of(), List.of(), List.of(), List.of(), null, null);
+        DraftingPipelineResult r = run(noName);
+        for (DraftSection s : r.draft().sections()) {
+            assertFalse(s.bodyHtml().contains("[[MISSING: client_legal_name]]"), "section " + s.num() + ": " + s.bodyHtml());
+        }
+        assertTrue(section(r, 2).contains("The taxpayer M/s Noticedesk Technologies Private Limited has received"), section(r, 2));
+        assertFalse(section(r, 2).contains("Alpha Traders") || section(r, 3).contains("Beta Industries"), "never a supplier's name");
+        assertTrue(flag(r, V7DraftingPipelineService.FLAG_CLIENT_NAME_FROM_NOTICE).isPresent());
     }
 
     @Test

@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 25-10-2026 (b24: taxpayer GSTIN chosen by code; FY from the tax period; state from the GSTIN; duplicate documents merged; statutory paragraphs Noted; defect-check cards always shortlisted; refund prayer amount from the notice)
+Last updated: 26-10-2026 (b26: six mechanical draft fixes from the RFD-08 run: client name from the notice, marker prefixes, writer enumerators, para-wise sub-entries, duplicate citations, refund prayer)
 
 ---
 
@@ -910,8 +910,48 @@ cached catalogue. Measured causes and the fix for each are in open item 9. Match
 - **Runners**: both print `Learned: saved LRN-xxxx for issue #N` per saved entry and the library counts at start and
   end (`NOTICEDESK_SOURCE_RUN` sets source_run in the app; the runners use the commit sha).
 
+## (b26) Mechanical draft fixes from the RFD-08 run (26-10-2026)
+
+Code-side only; no prompt change, no live run. Proved offline by `V7DraftMechanicsFixesTest` (14 tests, synthetic text)
+and `V7FirstRealNoticeFixesTest.clientLegalNameFromTheNoticeWhenTheClientRecordHasNone`.
+
+- **A. Client name from the notice**: `NoticeHeaderFacts.taxpayerLegalName(text, taxpayerGstin)` reads the name in the
+  first 1,500 characters next to the taxpayer GSTIN: a labelled name ("Name of the RTP:", "Legal Name:", "Name of the
+  taxpayer / registered person / noticee / applicant") or an "M/s ..." name whose nearest GSTIN (within 160 characters,
+  before or after) is the taxpayer's. A name nearest another GSTIN (a supplier's) is never used; two different names,
+  a sentence ("M/s the supplier has availed ...") or no taxpayer GSTIN give null and the MISSING marker stays. Applied
+  in `applyHeaderFacts` only when the client record has no name (flag `info:client_name_from_notice`, partner note), so
+  templates, Sections 02 / 03 / 12 and the learned library all get it; `ReplyAssemblyService.clientLegalName` falls back
+  the same way for direct callers.
+- **B. Markers**: a visible `[[MISSING: x]]` never shows the variable prefix (`DraftTextCleanup.markerName`: issue. /
+  facts. / notice. dropped, client. -> client_ so it merges with the code's client_legal_name / client_gstin); applied in
+  template fill, stage placeholders and over every assembled section (AI text included). `normaliseMarkerKey` strips the
+  prefix, so CHECK_MARKERS_LIST and the partner note's marker list show "supplier_gstr1_filing_date" once.
+  `missingVariables` keeps the full variable name. notice_06 golden updated accordingly.
+- **C. Writer enumerators**: before 4.n / 6.n / 7.n numbering, an AI paragraph's own leading "5." / "5)" / "(5)" / "(a)" /
+  "A." / "(iv)" / "4.1" (also inside `<strong>`) is removed; "1.5 lakh ..." is never cut. A lettered line (A. / (B) / IV.)
+  under 15 words with no closing full stop is an unnumbered `<h4>` sub-heading (letter kept), not a numbered paragraph.
+- **D. Para-wise**: several issues answering one notice paragraph are one sub-entry each (`<ul>` under the paragraph),
+  labelled "As to Para 2(a):" (or "As to Issue #k:" when the sub-para is unknown); a single sub-para reply reads "As to
+  Para 2(c): ...". A sentence of 6+ words repeating (exactly or with word overlap >= 0.85) one already used for another
+  paragraph is dropped ("See also the reply to Para N above."; a reply left empty becomes "Please refer to the reply to
+  Para N above."); exact repeats within the same paragraph are dropped as before; a bare "Denied." / "Noted." is never a
+  repeat. Inline "* item" lists become real bullets. The DOCX export now prints nested list items once, indented.
+- **E. Citations**: `citationIdentity` also folds "&" to "and", "v/s", "Commr." / "Govt." / "Asst." etc., and drops a
+  trailing place (one to three words after the respondent's last comma: ", Delhi", ", New Delhi"). The pipeline list, the
+  IndianKanoon check (one call per case) and CHECK_AI_CITATIONS_VERIFIED (now also counts by identity) see one case.
+- **F. Refund prayer**: for a refund notice Section 12 is built by code (`ReplyAssemblyService.refundPrayer`): drop the
+  proposed rejection of Rs <sum of grounds> in notice <ref> dated <date>, listing each ground (matcher label, else "the
+  ground at Issue #n") with its amount; sanction the refund of Rs <amount named in the notice> as claimed; personal
+  hearing before any adverse order; other orders. "Not a ground for rejection under Section 54 ... and the Rules" is added
+  only to a ground whose own template / AI text (sections 04 / 06) argues that point. The stage template's Section 12
+  is not used for refund notices (partner note says so); Section 15 still comes from the stage template.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn -o test`): **570 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 26-10-2026 after (b26), the Spring context test included (local Postgres 16).
+  Before the change the suite on `a004bdf` was 555 tests, 0 failures, 2 skipped.
 - Offline unit suite (`mvn -o test`): **555 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 26-10-2026 after (b25), the Spring context test included (local Postgres 16);
   V1 to V29 applied on Postgres 16.

@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
  *   <li>{@link #taxpayerGstin}: the noticee's GSTIN (the first GSTIN within {@link #PARTY_WINDOW} characters after a
  *       party designation in the first {@link #HEAD_CHARS} characters, else the first GSTIN in the document); every
  *       other GSTIN of the text is another party's;</li>
+ *   <li>{@link #taxpayerLegalName}: the noticee's legal name, read next to the taxpayer GSTIN (never a supplier's);</li>
  *   <li>{@link #financialYearsOf} / {@link #financialYearLabel}: the financial year(s) (April to March) of a tax period;</li>
  *   <li>{@link #stateForGstin}: the State / UT of a GSTIN's state code (never "Centre Jurisdiction");</li>
  *   <li>{@link #authorityKind}: "State Tax" or "Central Tax" from the heading;</li>
@@ -94,6 +95,93 @@ public final class NoticeHeaderFacts {
         List<String> others = new ArrayList<>(all);
         others.remove(chosen);
         return new TaxpayerGstin(chosen, source, others);
+    }
+
+    // ------------------------------------------------------------------ taxpayer legal name
+
+    /** "Name of the RTP / taxpayer / registered person / noticee / applicant", "Legal name (of business)". */
+    private static final Pattern NAME_LABEL = Pattern.compile(
+            "(?i)\\b(?:legal\\s+name(?:\\s+of\\s+(?:the\\s+)?business)?|name\\s+of\\s+(?:the\\s+)?"
+            + "(?:RTP|tax\\s*payer|registered\\s+person|noticee|applicant|assessee|claimant|dealer))\\s*[:\\-–]?\\s*");
+    private static final Pattern MS = Pattern.compile("(?i)\\bM/s\\b\\.?\\s*");
+    /** Where a name ends: a GSTIN label or value, an opening bracket, a comma / semicolon, a line break, "having", "bearing". */
+    private static final Pattern NAME_END = Pattern.compile(
+            "(?i)[\\n\\r(\\[,;|]|\\s[-–]\\s|\\bGSTIN\\b|\\bGST\\s*(?:No|Registration)\\b|\\bhaving\\b|\\bbearing\\b|\\bregistered\\b"
+            + "|\\bAddress\\b|\\bwith\\b|\\d{2}[A-Z]{5}\\d{4}");
+    /** Words that mark a sentence rather than a name ("the supplier has availed ..."). */
+    private static final Set<String> NOT_IN_A_NAME = Set.of("has", "have", "is", "was", "were", "are", "availed", "supplier",
+            "suppliers", "cancelled", "that", "which", "whose", "from", "dated", "refund", "notice");
+    private static final int NAME_MAX_WORDS = 15;
+    /** Characters between a candidate name and the taxpayer's GSTIN for the two to be read together. */
+    private static final int NAME_WINDOW = 160;
+
+    /**
+     * The taxpayer's legal name from the document head (the first {@link #HEAD_CHARS} characters), read next to the
+     * taxpayer's GSTIN: a labelled name ("Name of the RTP: ...", "Legal Name: ...") or an "M/s ..." name whose nearest
+     * GSTIN (within {@value #NAME_WINDOW} characters, before or after it, with no other GSTIN in between) is
+     * {@code taxpayerGstin}. A name next to any other GSTIN is a supplier's and never used. Null when there is no such
+     * name, when two different names qualify, or when {@code taxpayerGstin} is null: the caller keeps its MISSING marker.
+     * Returned without "M/s".
+     */
+    public static String taxpayerLegalName(String text, String taxpayerGstin) {
+        String gstin = normalise(taxpayerGstin);
+        if (text == null || text.isBlank() || gstin == null) return null;
+        String head = text.substring(0, Math.min(HEAD_CHARS, text.length()));
+        List<int[]> gstins = new ArrayList<>();   // {start, end, isTaxpayer}
+        Matcher g = GSTIN.matcher(head);
+        while (g.find()) gstins.add(new int[]{g.start(), g.end(), g.group(1).equalsIgnoreCase(gstin) ? 1 : 0});
+        if (gstins.stream().noneMatch(x -> x[2] == 1)) return null;
+
+        Set<String> names = new LinkedHashSet<>();
+        for (Pattern p : List.of(NAME_LABEL, MS)) {
+            Matcher m = p.matcher(head);
+            while (m.find()) {
+                String name = cleanName(head.substring(m.end()));
+                if (name == null) continue;
+                int nameStart = m.start();
+                int nameEnd = m.end() + name.length();
+                if (nearestGstinIsTaxpayer(gstins, nameStart, nameEnd)) names.add(name.toUpperCase(Locale.ROOT));
+            }
+        }
+        return names.size() == 1 ? displayName(names.iterator().next(), head) : null;
+    }
+
+    /** True when the GSTIN closest to [start, end) within {@link #NAME_WINDOW} characters is the taxpayer's. */
+    private static boolean nearestGstinIsTaxpayer(List<int[]> gstins, int start, int end) {
+        int best = Integer.MAX_VALUE;
+        boolean taxpayer = false;
+        for (int[] x : gstins) {
+            int dist = x[0] >= end ? x[0] - end : x[1] <= start ? start - x[1] : 0;
+            if (dist > NAME_WINDOW) continue;
+            if (dist < best) {
+                best = dist;
+                taxpayer = x[2] == 1;
+            }
+        }
+        return taxpayer;
+    }
+
+    /** The name at the start of {@code s} up to {@link #NAME_END}; null when it does not read as a name. */
+    private static String cleanName(String s) {
+        Matcher e = NAME_END.matcher(s);
+        String name = (e.find() ? s.substring(0, e.start()) : s.substring(0, Math.min(s.length(), 200)))
+                .replaceAll("\\s+", " ").replaceAll("^[\\s:.\\-–]+|[\\s:.\\-–]+$", "").trim();
+        name = name.replaceFirst("(?i)^M/s\\b\\.?\\s*", "");
+        if (name.length() < 3 || name.length() > 150) return null;
+        String[] words = name.split(" ");
+        if (words.length > NAME_MAX_WORDS) return null;
+        int letters = 0;
+        for (String w : words) {
+            if (NOT_IN_A_NAME.contains(w.toLowerCase(Locale.ROOT).replaceAll("[^a-z]", ""))) return null;
+            if (w.chars().anyMatch(Character::isLetter)) letters++;
+        }
+        return letters * 2 >= words.length && Character.isLetter(name.charAt(0)) ? name : null;
+    }
+
+    /** The name in the spelling the head uses first (case kept), else as given. */
+    private static String displayName(String upper, String head) {
+        int at = head.toUpperCase(Locale.ROOT).indexOf(upper);
+        return at >= 0 ? head.substring(at, at + upper.length()) : upper;
     }
 
     /** Upper case, trimmed, null when blank or not a GSTIN. */

@@ -1,5 +1,6 @@
 package com.noticedesk.api.service.matching;
 
+import com.noticedesk.api.agent.CitationVerificationAgent;
 import com.noticedesk.api.agent.CitationVerificationAgent.VerifiedCitation;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
@@ -260,7 +261,12 @@ public class DraftCheckService {
      * CHECK_AI_CITATIONS_REMOVED (warn) fails when NOT_FOUND citations were removed from the text.
      */
     public List<DraftCheckResult> citationChecks(List<VerifiedCitation> citations) {
-        List<VerifiedCitation> list = citations != null ? citations : List.of();
+        // one case is counted once, whatever spelling each writer used (CitationVerificationAgent.citationIdentity)
+        Map<String, VerifiedCitation> byCase = new LinkedHashMap<>();
+        for (VerifiedCitation c : citations != null ? citations : List.<VerifiedCitation>of()) {
+            if (c != null) byCase.putIfAbsent(CitationVerificationAgent.citationIdentity(c.caseName()), c);
+        }
+        List<VerifiedCitation> list = new ArrayList<>(byCase.values());
         List<String> unverified = new ArrayList<>();
         List<String> removed = new ArrayList<>();
         for (VerifiedCitation c : list) {

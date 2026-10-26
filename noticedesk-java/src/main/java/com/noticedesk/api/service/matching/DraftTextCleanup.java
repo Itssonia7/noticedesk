@@ -204,15 +204,40 @@ public final class DraftTextCleanup {
     private static final Pattern DATE_OF_SERVICE = Pattern.compile(
             "^date_(?:and_mode_)?of_service(?:_of_(?:the_)?notice)?$|^service_date$|^date_of_notice_service$");
 
+    /** A template variable prefix ("issue.", "facts.", "notice.", "client."); never shown in a marker. */
+    private static final Pattern VARIABLE_PREFIX = Pattern.compile("(?i)^\\s*(issue|facts|notice|client)\\.(?=\\S)");
+    /** "[[MISSING: issue.x]]" in draft text: the prefix is removed from the visible marker. */
+    private static final Pattern PREFIXED_MARKER = Pattern.compile("(?i)(\\[\\[\\s*MISSING:\\s*)(issue|facts|notice|client)\\.(?=[^\\]\\s])");
+
     /**
-     * The canonical key of a [[MISSING: x]] marker: lower case, spaces / hyphens to underscores, and the
+     * The name a [[MISSING: x]] marker shows: the variable name without its issue. / facts. / notice. prefix;
+     * "client." becomes "client_" (as the code's own client_legal_name / client_gstin markers).
+     */
+    public static String markerName(String variable) {
+        if (variable == null) return "";
+        Matcher m = VARIABLE_PREFIX.matcher(variable);
+        return m.find() ? prefixReplacement(m.group(1)) + variable.substring(m.end()) : variable;
+    }
+
+    /** Draft HTML with every "[[MISSING: issue.x]]" (any variable prefix) shown as "[[MISSING: x]]" ({@link #markerName}). */
+    public static String stripMarkerPrefixes(String html) {
+        if (html == null) return null;
+        return PREFIXED_MARKER.matcher(html).replaceAll(r -> Matcher.quoteReplacement(r.group(1) + prefixReplacement(r.group(2))));
+    }
+
+    private static String prefixReplacement(String prefix) {
+        return "client".equalsIgnoreCase(prefix) ? "client_" : "";
+    }
+
+    /**
+     * The canonical key of a [[MISSING: x]] marker: variable prefix removed ({@link #markerName}, so
+     * "issue.supplier_gstr1_filing_date" and "supplier_gstr1_filing_date" are one item), lower case, spaces / hyphens to underscores, and the
      * synonyms of the date of service ("date of service of notice", "date and mode of service") mapped to
      * {@code date_of_service}. {@code date_of_receipt} stays a separate key.
      */
     public static String normaliseMarkerKey(String key) {
         if (key == null) return "";
-        String k = key.trim()
-                .replaceAll("^\\[\\[\\s*MISSING:\\s*|\\s*\\]\\]$", "")
+        String k = markerName(key.trim().replaceAll("^\\[\\[\\s*MISSING:\\s*|\\s*\\]\\]$", ""))
                 .toLowerCase(Locale.ROOT)
                 .replaceAll("[\\s\\-]+", "_")
                 .replaceAll("_+", "_")
@@ -232,7 +257,7 @@ public final class DraftTextCleanup {
             for (String m : markers) {
                 String key = normaliseMarkerKey(m);
                 if (key.isEmpty() || firstText.containsKey(key)) continue;
-                String text = m.trim().replaceAll("^\\[\\[\\s*MISSING:\\s*|\\s*\\]\\]$", "").replaceAll("\\s+", " ").trim();
+                String text = markerName(m.trim().replaceAll("^\\[\\[\\s*MISSING:\\s*|\\s*\\]\\]$", "")).replaceAll("\\s+", " ").trim();
                 firstText.put(key, text);
             }
         }
@@ -257,7 +282,7 @@ public final class DraftTextCleanup {
     public record WordSplit(String kept, String overflow) {}
 
     private static final Pattern TOP_LEVEL_BLOCK = Pattern.compile(
-            "(?is)<(p|ul|ol|table|h3|blockquote)\\b[^>]*>.*?</\\1>");
+            "(?is)<(p|ul|ol|table|h3|h4|blockquote)\\b[^>]*>.*?</\\1>");
     private static final Pattern SENTENCE_END = Pattern.compile("(?<=[.;!?])\\s+(?=[A-Z(\\[])");
 
     /**

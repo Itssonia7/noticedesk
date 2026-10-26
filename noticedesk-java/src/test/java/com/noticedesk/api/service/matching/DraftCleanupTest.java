@@ -188,13 +188,14 @@ class DraftCleanupTest {
     // ---------------------------------------------------------------- B3 para-wise reply
 
     @Test
-    void paraReplies_fromTwoIssues_mergedInSubParaOrder_withoutRepeats() {
-        String merged = ReplyAssemblyService.mergeParaReplies(List.of(
-                new ParaReply("(c)", "Denied. No penalty is imposable under Section 74(1)."),
-                new ParaReply("", "Denied. The allegations are rebutted in Section 04."),
-                new ParaReply("(a)", "Denied. The demand of tax is not sustainable")));
-        assertEquals("Denied. The allegations are rebutted in Section 04. Sub-para (a): The demand of tax is not sustainable."
-                + " Sub-para (c): No penalty is imposable under Section 74(1).", merged);
+    void paraReplies_fromSeveralIssues_oneSubEntryEach_inSubParaOrder() {
+        String merged = ReplyAssemblyService.paraReplyHtml(5, List.of(
+                new ParaReply("(c)", "Denied. No penalty is imposable under Section 74(1).", 1),
+                new ParaReply("", "Denied. The allegations are rebutted in Section 04.", 2),
+                new ParaReply("(a)", "Denied. The demand of tax is not sustainable", 3)), new ReplyAssemblyService.UsedSentences());
+        assertEquals("<ul><li><strong>As to Issue #2:</strong> Denied. The allegations are rebutted in Section 04.</li>"
+                + "<li><strong>As to Para 5(a):</strong> Denied. The demand of tax is not sustainable.</li>"
+                + "<li><strong>As to Para 5(c):</strong> Denied. No penalty is imposable under Section 74(1).</li></ul>", merged);
     }
 
     @Test
@@ -207,12 +208,14 @@ class DraftCleanupTest {
         Map<String, List<Integer>> paraMap = Map.of("3", List.of(1, 2), "5", List.of(1, 2), "1", List.of(1));
         AssembledReplyResult r = assembly.assembleReply(result(paraMap, issue(1, "3", "5"), issue(2, "3", "5")),
                 List.of(), input("Section 74"), "scn_74", aiContent, null, List.of());
-        String s05 = section(r, 5);
+        String s05 = section(r, 5).replaceAll("<!--.*?-->", "");
 
-        assertTrue(s05.contains("<strong>Para 3:</strong> Denied. Turnover was fully declared. Bank credits include loans.</li>"), s05);
-        assertTrue(s05.contains("<strong>Para 5:</strong> Sub-para (a): Denied. The demand is time-barred. Sub-para (c): No penalty is imposable.</li>"), s05);
-        assertFalse(s05.contains("Denied. Turnover was fully declared. Denied."), "the same point is not repeated");
-        assertFalse(Pattern.compile("(?<!Sub-para )\\([a-z]\\):").matcher(s05).find(), "no '(c):' fragment glued mid-sentence: " + s05);
+        assertTrue(s05.contains("<strong>Para 3:</strong> <ul><li><strong>As to Issue #1:</strong> Denied. Turnover was fully declared.</li>"
+                + "<li><strong>As to Issue #2:</strong> Denied. Bank credits include loans.</li></ul></li>"), s05);
+        assertTrue(s05.contains("<strong>Para 5:</strong> <ul><li><strong>As to Para 5(a):</strong> Denied. The demand is time-barred.</li>"
+                + "<li><strong>As to Para 5(c):</strong> Denied. No penalty is imposable.</li></ul></li>"), s05);
+        assertEquals(1, s05.split("Turnover was fully declared", -1).length - 1, "the same point is not repeated: " + s05);
+        assertFalse(Pattern.compile("(?<!Para \\d)\\([a-z]\\):").matcher(s05).find(), "no '(c):' fragment glued mid-sentence: " + s05);
         assertTrue(s05.contains("<strong>Para 2:</strong> [[PARTNER: reply to Para 2"), "unmapped paragraphs keep the placeholder");
     }
 

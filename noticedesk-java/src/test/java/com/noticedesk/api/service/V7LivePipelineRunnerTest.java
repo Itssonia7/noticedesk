@@ -152,6 +152,7 @@ public class V7LivePipelineRunnerTest {
         return html.replaceAll("<!--[^>]*-->", "")
                 .replace("<p>", "").replace("</p>", "\n")
                 .replace("<h3>", "\n--- ").replace("</h3>", " ---\n")
+                .replace("<h4>", "\n").replace("</h4>", "\n")
                 .replaceAll("<ul>|</ul>|<ol>|</ol>", "")
                 .replace("<li>", "  * ").replace("</li>", "\n")
                 .replaceAll("<table>|clusters", "")

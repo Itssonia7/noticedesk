@@ -12,6 +12,7 @@ import com.noticedesk.api.model.matching.SourceMapEntry;
 import com.noticedesk.api.model.matching.StageTemplate;
 import com.noticedesk.api.service.matching.TemplateFillService.FilledBlock;
 import com.noticedesk.api.service.matching.TemplateFillService.FilledTemplateResult;
+import com.noticedesk.api.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -167,8 +168,8 @@ public class ReplyAssemblyService {
         }
         String noticeRef = noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "[[MISSING: notice_number]]";
         String noticeDate = noticeInfo != null && noticeInfo.issueDate() != null ? formatDateStr(noticeInfo.issueDate()) : "[[MISSING: issue_date]]";
-        String clientName = formatClientName(input != null ? input.clientLegalName() : null);
         String gstin = input != null && input.registrationIdentifier() != null ? input.registrationIdentifier() : "[[MISSING: client_gstin]]";
+        String clientName = formatClientName(clientLegalName(input));
         // the registration / intake FY, else the notice block's (the matcher's, or derived by code from the tax period)
         String fy = input != null && input.financialYear() != null && !input.financialYear().isBlank() ? input.financialYear()
                 : noticeInfo != null && noticeInfo.financialYear() != null && !noticeInfo.financialYear().isBlank()
@@ -393,8 +394,17 @@ public class ReplyAssemblyService {
                 stageVars.put("notice.refund_amount", refundAmount);
             }
         }
-        String sec12Body = fillStagePlaceholders(
-                getStageSectionOrMissing(stageTpl, "12", normalizedStage, missingMarkers, assemblyFlags), stageVars, missingMarkers);
+        String sec12Body;
+        if (refundNotice) {
+            // a refund notice's prayer names its grounds and amounts; the stage template's generic prayer is not used
+            sec12Body = refundPrayer(substantiveIssues, templateMap, ai, noticeRef, noticeDate, refundRejected,
+                    stageVars.get("notice.refund_amount"), lawName(input), missingMarkers);
+            notes.add("Section 12: refund prayer built by code (drop the proposed rejection ground by ground, sanction the refund"
+                    + " as claimed, personal hearing); the stage template's prayer is not used.");
+        } else {
+            sec12Body = fillStagePlaceholders(
+                    getStageSectionOrMissing(stageTpl, "12", normalizedStage, missingMarkers, assemblyFlags), stageVars, missingMarkers);
+        }
         rawSections.add(new AssembledSection(12, "12 Prayer", sec12Body));
 
         // ---------------------------------------------------------------- Section 13 (internal)
@@ -524,7 +534,9 @@ public class ReplyAssemblyService {
         List<AssembledSection> finalSections = new ArrayList<>();
         int pNumber = 1;
         for (AssembledSection sec : rawSections) {
-            String resolvedHtml = resolveCrossReferences(sec.bodyHtml(), blockIdToRefTag, issueNoToRefTag);
+            // a marker an AI writer or template wrote as "[[MISSING: issue.x]]" shows "[[MISSING: x]]"
+            String resolvedHtml = DraftTextCleanup.stripMarkerPrefixes(
+                    resolveCrossReferences(sec.bodyHtml(), blockIdToRefTag, issueNoToRefTag));
             StringBuilder numHtml = new StringBuilder();
             for (String part : resolvedHtml.split("(?=<p>|<li>|<h3>|<ol>|<ul>|<table>)")) {
                 if (part.startsWith("<p>") || part.startsWith("<li>")) {
@@ -735,23 +747,71 @@ public class ReplyAssemblyService {
         sourceMap.add(new SourceMapEntry(globalParaNo[0]++, secNum, ft.templateId(), ft.templateVersion(), fb.blockId()));
     }
 
-    /** Numbers every top-level &lt;p&gt; of the AI fragment (4.n / 6.n) and records it in the source map. */
+    private static final Pattern AI_PARAGRAPH = Pattern.compile("(?s)<p>(.*?)</p>");
+    /** Opening inline tags a writer may put before its own enumerator ("<strong>5. ..."). */
+    private static final String OPENING_TAGS = "((?:\\s*<(?:strong|b|em|i)>)*)\\s*";
+    /**
+     * A leading enumerator the writer added: "5." / "5)" / "(5)" / "(a)" / "a)" / "A." / "(iv)" / "IV." / "4.1" (a
+     * multi-level number only before a capital letter or a bracket, so "1.5 lakh" is never cut). Group 2 = the token.
+     */
+    static final Pattern LEADING_ENUMERATOR = Pattern.compile("^" + OPENING_TAGS
+            + "(\\(\\s*(?:\\d{1,2}|[a-zA-Z]|[ivxIVX]{2,5})\\s*\\)|(?:\\d{1,2}|[a-zA-Z]|[ivxIVX]{2,5})[.)]"
+            + "|\\d{1,2}(?:\\.\\d{1,2})+\\.?(?=\\s+[A-Z(]))((?:\\s*</(?:strong|b|em|i)>)*)\\s+");
+    /** A letter or upper-case roman enumerator ("A.", "(B)", "IV.") that may open a sub-heading. */
+    private static final Pattern LETTER_TOKEN = Pattern.compile("^\\(?\\s*(?:[A-Z]|[IVX]{2,5})\\s*[.)]?\\)?$");
+    /** A lettered line shorter than this, with no full stop at the end, is a sub-heading. */
+    static final int SUBHEADING_MAX_WORDS = 15;
+
+    /**
+     * Numbers every top-level &lt;p&gt; of the AI fragment (4.n / 6.n) and records it in the source map. The writer's
+     * own enumerator ("5. ...", "(a) ...", "A. ...") is removed first so a paragraph never reads "6.12 5. ...". A short
+     * lettered line with no full stop ("A. The nature of the present proceedings") is an unnumbered sub-heading
+     * (&lt;h4&gt;, letter kept), not a numbered paragraph.
+     */
     private void appendAiHtml(StringBuilder sb, int secNum, String html, int issueNo, String writer, int[] sub,
                               int[] globalParaNo, List<SourceMapEntry> sourceMap) {
         String body = html.trim();
         if (!body.contains("<p>")) {
             body = "<p>" + body + "</p>";
         }
-        Matcher m = Pattern.compile("<p>").matcher(body);
+        Matcher m = AI_PARAGRAPH.matcher(body);
         StringBuilder out = new StringBuilder();
+        int last = 0;
         while (m.find()) {
+            out.append(body, last, m.start());
+            last = m.end();
+            AiParagraph para = aiParagraph(m.group(1));
+            if (para.text().isBlank()) continue;
+            if (para.heading()) {
+                out.append("<h4>").append(para.text()).append("</h4>");
+                continue;
+            }
             int k = sub[0]++;
-            m.appendReplacement(out, "<p>" + secNum + "." + k + " ");
+            out.append("<p>").append(secNum).append('.').append(k).append(' ').append(para.text()).append("</p>");
             sourceMap.add(new SourceMapEntry(globalParaNo[0]++, secNum, "AI:" + writer, 0,
                     "AI-ISSUE-" + issueNo + "-S" + secNum + "-P" + k));
         }
-        m.appendTail(out);
+        out.append(body.substring(last));
         sb.append(out);
+    }
+
+    /** One AI paragraph's text (enumerator removed) and whether it is a lettered sub-heading. */
+    record AiParagraph(String text, boolean heading) {}
+
+    /** See {@link #appendAiHtml}: the paragraph's inner HTML without the writer's enumerator, or as a sub-heading. */
+    static AiParagraph aiParagraph(String inner) {
+        String s = inner.trim();
+        Matcher e = LEADING_ENUMERATOR.matcher(s);
+        if (!e.find()) return new AiParagraph(s, false);
+        String token = e.group(2).trim();
+        // "<strong>5.</strong> Text": the tags wrapped only the enumerator and go with it
+        String rest = (e.group(3).isBlank() ? e.group(1) : "") + s.substring(e.end());
+        String plain = rest.replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim();
+        if (LETTER_TOKEN.matcher(token).matches() && !plain.isEmpty() && !plain.matches("(?s).*[.;]$")
+                && plain.split(" ").length < SUBHEADING_MAX_WORDS) {
+            return new AiParagraph(token + " " + plain, true);
+        }
+        return new AiParagraph(rest.trim(), false);
     }
 
     // ------------------------------------------------------------------ Section 05
@@ -806,7 +866,8 @@ public class ReplyAssemblyService {
                     int p = Integer.parseInt(m.group(1));
                     String text = m.group(3).trim();
                     if (p >= 1 && !text.isEmpty()) {
-                        aiParaReplies.computeIfAbsent(p, k -> new ArrayList<>()).add(new ParaReply(subParaLabel(m.group(2)), text));
+                        aiParaReplies.computeIfAbsent(p, k -> new ArrayList<>())
+                                .add(new ParaReply(subParaLabel(m.group(2)), text, issue.issueNo()));
                     }
                 }
                 if (!any) {
@@ -837,6 +898,7 @@ public class ReplyAssemblyService {
         // a paragraph that reproduces the law is noted, never denied (whatever the matcher or a writer said)
         Set<Integer> statutoryParas = NoticeParagraphs.statutoryParagraphs(input != null ? input.noticeOcrExcerpt() : null);
         List<Integer> overridden = new ArrayList<>();
+        UsedSentences used = new UsedSentences();   // a point made for one paragraph is not repeated for the next
 
         StringBuilder sb = new StringBuilder();
         sb.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
@@ -849,7 +911,8 @@ public class ReplyAssemblyService {
                     overridden.add(p);
                 }
             } else if (aiParaReplies.containsKey(p)) {
-                sb.append(mergeParaReplies(aiParaReplies.get(p)));
+                String reply = paraReplyHtml(p, aiParaReplies.get(p), used);
+                sb.append(!reply.isEmpty() ? reply : replyWithRefs("Denied", linkedIssues(p, paraToIssues, issues)));
             } else if (stanceByPara.containsKey(p)) {
                 sb.append(stanceReply(stanceByPara.get(p), p, paraToIssues, issues));
             } else if (paraToIssues.containsKey(p)) {
@@ -931,19 +994,77 @@ public class ReplyAssemblyService {
         return issuesForPara(p, issues);   // also the category form ("issue": [p]) and paragraphs with no map entry
     }
 
-    /** One AI reply to a notice paragraph; {@code subPara} is "(c)" / ".1", or "" for the whole paragraph. */
-    record ParaReply(String subPara, String text) {}
+    /**
+     * One AI reply to a notice paragraph; {@code subPara} is "(c)" / ".1", or "" for the whole paragraph;
+     * {@code issueNo} is the issue whose writer gave it (0 when unknown).
+     */
+    record ParaReply(String subPara, String text, int issueNo) {
+        ParaReply(String subPara, String text) {
+            this(subPara, text, 0);
+        }
+    }
 
     private static String subParaLabel(String raw) {
         return raw == null ? "" : raw.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
     }
 
+    /** A sentence of this many words or more is dropped when it repeats (or nearly repeats) one used for another paragraph. */
+    static final int REPEAT_MIN_WORDS = 6;
+    /** Word-set overlap (Jaccard) at which two long sentences are the same point. */
+    static final double NEAR_REPEAT_JACCARD = 0.85;
+    private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=[.;!?])\\s+(?=[A-Z(\\[<])");
+    /** A bare stance sentence ("Denied.") opens many replies and is never treated as a repeat. */
+    private static final Pattern STANCE_ONLY = Pattern.compile("^(?:denied|admitted|noted|explained|not admitted|partly admitted)$");
+    /** "* item" / "• item" list items written inline in a paragraph. */
+    private static final Pattern INLINE_BULLET = Pattern.compile("\\s+[*•]\\s+");
+
     /**
-     * Merges the replies of several issues to one notice paragraph: whole-paragraph replies first, then
-     * sub-paragraph replies in sub-para order ((a), (b), (c) / .1, .2), each starting as its own sentence
-     * ("Sub-para (c): ..."). A sentence already given for this paragraph is not repeated.
+     * Sentences already used in Section 05 and the notice paragraph each was first used for. A sentence is a repeat
+     * when its normalised text was used before in the same paragraph, or, for a sentence of {@link #REPEAT_MIN_WORDS}
+     * words or more, used (exactly or with {@link #NEAR_REPEAT_JACCARD} word overlap) for any paragraph.
      */
-    static String mergeParaReplies(List<ParaReply> replies) {
+    static final class UsedSentences {
+        private final Map<String, Integer> exact = new HashMap<>();
+        private final List<Map.Entry<Set<String>, Integer>> longOnes = new ArrayList<>();
+
+        /** The paragraph the sentence repeats (its first use), or null when it is new here. */
+        Integer repeatOf(String key, int para) {
+            if (STANCE_ONLY.matcher(key).matches()) return null;
+            Set<String> words = new HashSet<>(Arrays.asList(key.split(" ")));
+            boolean isLong = key.split(" ").length >= REPEAT_MIN_WORDS;
+            Integer first = exact.get(key);
+            if (first != null && (first == para || isLong)) return first;
+            if (isLong) {
+                for (Map.Entry<Set<String>, Integer> e : longOnes) {
+                    if (jaccard(words, e.getKey()) >= NEAR_REPEAT_JACCARD) return e.getValue();
+                }
+            }
+            return null;
+        }
+
+        void add(String key, int para) {
+            exact.putIfAbsent(key, para);
+            if (key.split(" ").length >= REPEAT_MIN_WORDS) longOnes.add(Map.entry(new HashSet<>(Arrays.asList(key.split(" "))), para));
+        }
+
+        private static double jaccard(Set<String> a, Set<String> b) {
+            Set<String> union = new HashSet<>(a);
+            union.addAll(b);
+            Set<String> both = new HashSet<>(a);
+            both.retainAll(b);
+            return union.isEmpty() ? 0 : (double) both.size() / union.size();
+        }
+    }
+
+    /**
+     * The Section 05 reply to notice paragraph {@code para} from the AI replies of one or more issues: whole-paragraph
+     * replies first, then sub-paragraph replies in sub-para order ((a), (b), (c) / .1, .2). One reply is printed as it
+     * is ("As to Para 2(c): ..." when it answers a sub-para); several are one sub-entry each, labelled "As to Para 2(a):"
+     * (or "As to Issue #k:" when the sub-para is not known). A sentence that repeats one already used in this section
+     * ({@link UsedSentences}) is dropped; a reply left empty by that refers to the paragraph answered first. Inline
+     * "* item" lists become real bullets.
+     */
+    static String paraReplyHtml(int para, List<ParaReply> replies, UsedSentences used) {
         List<ParaReply> ordered = new ArrayList<>();
         for (ParaReply r : replies) if (r.subPara().isEmpty()) ordered.add(r);
         List<ParaReply> labelled = new ArrayList<>();
@@ -951,30 +1072,69 @@ public class ReplyAssemblyService {
         labelled.sort(Comparator.comparing(ParaReply::subPara, ReplyAssemblyService::compareSubPara));   // stable
         ordered.addAll(labelled);
 
-        Set<String> seen = new HashSet<>();
-        List<String> parts = new ArrayList<>();
-        Map<String, Integer> labelPart = new HashMap<>();
+        List<String[]> entries = new ArrayList<>();   // {label, body}
+        Set<String> labels = new HashSet<>();
         for (ParaReply r : ordered) {
             StringBuilder kept = new StringBuilder();
-            for (String sentence : r.text().split("(?<=[.;!?])\\s+(?=[A-Z(\\[<])")) {
+            Integer repeatsPara = null;
+            for (String sentence : SENTENCE_SPLIT.split(r.text())) {
                 String key = sentence.replaceAll("<[^>]+>", " ").toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
-                if (key.isEmpty() || !seen.add(key)) continue;
+                if (key.isEmpty()) continue;
+                Integer first = used.repeatOf(key, para);
+                if (first != null) {
+                    if (first != para && repeatsPara == null) repeatsPara = first;
+                    continue;
+                }
+                used.add(key, para);
                 if (kept.length() > 0) kept.append(' ');
                 kept.append(sentence.trim());
             }
-            if (kept.length() == 0) continue;
-            String body = endSentence(kept.toString());
-            if (r.subPara().isEmpty()) {
-                parts.add(body);
-            } else if (labelPart.containsKey(r.subPara())) {      // two issues on the same sub-para: one entry
-                int i = labelPart.get(r.subPara());
-                parts.set(i, parts.get(i) + " " + body);
+            String body;
+            if (kept.length() > 0) {
+                body = endSentence(kept.toString());
+                if (repeatsPara != null) body += " See also the reply to Para " + repeatsPara + " above.";
+            } else if (repeatsPara != null) {
+                body = "Please refer to the reply to Para " + repeatsPara + " above.";
             } else {
-                labelPart.put(r.subPara(), parts.size());
-                parts.add("Sub-para " + r.subPara() + ": " + body);
+                continue;   // only repeats of this paragraph's own sentences
             }
+            String label = !r.subPara().isEmpty() ? "As to Para " + para + r.subPara()
+                    : r.issueNo() > 0 ? "As to Issue #" + r.issueNo() : "";
+            if (!label.isEmpty() && !labels.add(label) && r.issueNo() > 0) label += " (Issue #" + r.issueNo() + ")";
+            entries.add(new String[]{label, inlineBulletsToList(body)});
         }
-        return String.join(" ", parts);
+        if (entries.isEmpty()) return "";
+        if (entries.size() == 1) {
+            String[] e = entries.get(0);
+            return e[0].startsWith("As to Para ") ? e[0] + ": " + e[1] : e[1];
+        }
+        StringBuilder sb = new StringBuilder("<ul>");
+        for (String[] e : entries) {
+            sb.append("<li>");
+            if (!e[0].isEmpty()) sb.append("<strong>").append(e[0]).append(":</strong> ");
+            sb.append(e[1]).append("</li>");
+        }
+        return sb.append("</ul>").toString();
+    }
+
+    /**
+     * Text with "* item" / "• item" list items written inline ("... inconsistent: * the CGST entries ... * the SGST
+     * entries ...") as a lead-in followed by a real &lt;ul&gt; list; text without such items is returned unchanged.
+     */
+    static String inlineBulletsToList(String text) {
+        if (text == null) return null;
+        String[] parts = INLINE_BULLET.split(" " + text.trim(), -1);
+        if (parts.length < 2) return text;
+        StringBuilder sb = new StringBuilder(parts[0].trim());
+        sb.append("<ul>");
+        int items = 0;
+        for (int i = 1; i < parts.length; i++) {
+            String item = parts[i].trim();
+            if (item.isEmpty()) continue;
+            sb.append("<li>").append(item).append("</li>");
+            items++;
+        }
+        return items == 0 ? text : sb.append("</ul>").toString();
     }
 
     private static int compareSubPara(String a, String b) {
@@ -1254,6 +1414,93 @@ public class ReplyAssemblyService {
         return fromText != null ? TemplateFillService.formatIndianCurrency(fromText) : null;
     }
 
+    /** An issue's own text arguing that its ground is not one Section 54 (or its Rules) allows. */
+    static final Pattern ARGUES_OUTSIDE_SECTION_54 = Pattern.compile(
+            "(?i)\\b(?:outside|beyond)\\s+(?:the\\s+)?(?:(?:scope|ambit|purview|four\\s+corners)\\s+of\\s+)?(?:the\\s+)?Section\\s+54\\b"
+            + "|\\bnot\\s+(?:a\\s+)?(?:valid\\s+|lawful\\s+|permissible\\s+)?(?:ground|basis)\\b[^.]{0,60}?\\bSection\\s+54\\b"
+            + "|\\bSection\\s+54\\b[^.]{0,60}?\\b(?:does\\s+not\\s+(?:provide|permit|contemplate|authori[sz]e)|not\\s+(?:contemplated|provided))");
+    /** Matcher facts that name a ground, in order of preference. */
+    private static final List<String> GROUND_LABEL_KEYS = List.of("label", "ground", "title", "allegation", "issue");
+    private static final int GROUND_LABEL_MAX_WORDS = 25;
+
+    /**
+     * Section 12 of a refund notice (RFD-08): the proper officer is prayed to (a) drop the proposed rejection of the
+     * refund named in the notice, ground by ground with each ground's amount when the issues carry one; (b) sanction
+     * the refund as claimed; (c) grant a personal hearing before any adverse order; (d) pass any other order. A ground
+     * is called outside Section 54 only when its own text (template blocks or AI sections 04 / 06) argues that point.
+     */
+    static String refundPrayer(List<MatchedIssue> grounds, Map<Integer, FilledTemplateResult> templateMap,
+                               Map<Integer, AiIssueContent> ai, String noticeRef, String noticeDate, String rejected,
+                               String claimed, String law, List<String> missingMarkers) {
+        String rejectedAmount = rejected != null ? rejected : "[[MISSING: refund_amount]]";
+        String claimedAmount = claimed != null ? claimed : !rejectedAmount.startsWith("[[") ? rejectedAmount : "[[MISSING: refund_amount]]";
+        if (rejectedAmount.startsWith("[[") || claimedAmount.startsWith("[[")) addOnce(missingMarkers, "refund_amount");
+
+        List<String> lines = new ArrayList<>();
+        for (MatchedIssue issue : grounds) {
+            StringBuilder line = new StringBuilder(groundLabel(issue));
+            BigDecimal amount = issue.facts() != null ? NoticeHeaderFacts.parseAmount(issue.facts().get("amount")) : null;
+            if (amount != null && amount.signum() > 0) line.append(" (").append(TemplateFillService.formatIndianCurrency(amount)).append(")");
+            if (arguesOutsideSection54(issue, templateMap.get(issue.issueNo()), ai.get(issue.issueNo()))) {
+                line.append(", which is not a ground for rejection under Section 54 of the ").append(law).append(" and the Rules made thereunder");
+            }
+            lines.add(line.toString());
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<p>In view of the submissions above, it is most respectfully prayed that the proper officer may be pleased to:</p><ol>");
+        sb.append("<li>drop the proposed rejection of the refund of ").append(rejectedAmount).append(" proposed in notice reference ")
+          .append(noticeRef).append(" dated ").append(noticeDate);
+        if (lines.isEmpty()) {
+            sb.append(", on each of the grounds stated therein;");
+        } else if (lines.size() == 1) {
+            sb.append(", on the ground stated therein, namely ").append(lines.get(0)).append(";");
+        } else {
+            sb.append(", on each of the grounds stated therein, namely:<ul>");
+            for (int i = 0; i < lines.size(); i++) {
+                sb.append("<li>").append(lines.get(i)).append(i < lines.size() - 1 ? ";" : ".").append("</li>");
+            }
+            sb.append("</ul>");
+        }
+        sb.append("</li>");
+        sb.append("<li>sanction the refund of ").append(claimedAmount).append(" as claimed in the refund application;</li>");
+        sb.append("<li>grant the noticee an opportunity of personal hearing before any order adverse to the noticee is passed; and</li>");
+        sb.append("<li>pass such other order as may be deemed fit in the interest of justice.</li></ol>");
+        return sb.toString();
+    }
+
+    /** The ground as the matcher names it (its first sentence, at most {@value #GROUND_LABEL_MAX_WORDS} words), else "the ground at Issue #n". */
+    static String groundLabel(MatchedIssue issue) {
+        Map<String, Object> facts = issue.facts() != null ? issue.facts() : Map.of();
+        for (String key : GROUND_LABEL_KEYS) {
+            Object v = facts.get(key);
+            if (v == null) continue;
+            String s = HtmlSanitizer.sanitize(v.toString()).replaceAll("<[^>]+>", " ").replaceAll("\\s+", " ").trim();
+            if (s.isEmpty() || "null".equalsIgnoreCase(s)) continue;
+            s = s.split("(?<=[.;])\\s+(?=[A-Z(])")[0].replaceAll("[.;:]+$", "");
+            String[] words = s.split(" ");
+            if (words.length > GROUND_LABEL_MAX_WORDS) s = String.join(" ", Arrays.copyOf(words, GROUND_LABEL_MAX_WORDS)) + " ...";
+            // "Excess ITC ..." reads "excess ITC ..." mid-sentence; an acronym ("ITC from ...") keeps its case
+            boolean acronym = s.length() > 1 && Character.isUpperCase(s.charAt(1));
+            return (acronym ? s : Character.toLowerCase(s.charAt(0)) + s.substring(1)) + " (Issue #" + issue.issueNo() + ")";
+        }
+        return "the ground at Issue #" + issue.issueNo();
+    }
+
+    /** True when the issue's template blocks or AI text (sections 04 / 06) argue the ground is outside Section 54. */
+    static boolean arguesOutsideSection54(MatchedIssue issue, FilledTemplateResult ft, AiIssueContent c) {
+        StringBuilder text = new StringBuilder();
+        if (ft != null && ft.blocks() != null && modeFor(issue, ft) != IssueMode.MISSING_PERIOD) {
+            for (FilledBlock b : ft.blocks()) if (b.filledHtml() != null) text.append(b.filledHtml()).append(' ');
+        }
+        if (c != null && c.fragments() != null) {
+            for (AiFragment f : c.fragments()) {
+                if ((f.section() == 4 || f.section() == 6) && f.html() != null) text.append(f.html()).append(' ');
+            }
+        }
+        return ARGUES_OUTSIDE_SECTION_54.matcher(text.toString().replaceAll("<[^>]+>", " ")).find();
+    }
+
     private static String orMissing(String value, String field, List<String> missingMarkers, List<String> flags) {
         if (value != null && !value.isBlank()) return value;
         addOnce(missingMarkers, field);
@@ -1291,8 +1538,9 @@ public class ReplyAssemblyService {
             String key = m.group(1);
             String val = vars.get(key);
             if (val == null || val.isBlank()) {
-                addOnce(missingMarkers, key);
-                val = "[[MISSING: " + key + "]]";
+                String name = DraftTextCleanup.markerName(key);
+                addOnce(missingMarkers, name);
+                val = "[[MISSING: " + name + "]]";
             }
             m.appendReplacement(sb, Matcher.quoteReplacement(val));
         }
@@ -1438,6 +1686,16 @@ public class ReplyAssemblyService {
         }
         addOnce(missingMarkers, "reply_due_date");
         return "[[MISSING: reply_due_date]]";
+    }
+
+    /**
+     * The client record's legal name, else the name the notice gives next to the taxpayer GSTIN
+     * ({@link NoticeHeaderFacts#taxpayerLegalName}); null when neither (the MISSING marker stays).
+     */
+    static String clientLegalName(DraftingAgent.DraftingInput input) {
+        if (input == null) return null;
+        if (input.clientLegalName() != null && !input.clientLegalName().isBlank()) return input.clientLegalName();
+        return NoticeHeaderFacts.taxpayerLegalName(input.noticeOcrExcerpt(), input.registrationIdentifier());
     }
 
     private static String formatClientName(String name) {

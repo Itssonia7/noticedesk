@@ -94,7 +94,7 @@ class TemplateFillServiceTest {
 
         FilledTemplateResult result = fillerService.fillTemplateForIssue(issue, noticeInfo, input);
 
-        assertTrue(result.blocks().get(0).filledHtml().contains("[[MISSING: client.trade_name]]"));
+        assertTrue(result.blocks().get(0).filledHtml().contains("[[MISSING: client_trade_name]]"), "visible marker has no 'client.' prefix");
         assertTrue(result.flags().contains("missing_client.trade_name"));
     }
 
@@ -320,10 +320,10 @@ class TemplateFillServiceTest {
         MatchedIssue bare = new MatchedIssue(1, "full", List.of("CARD-037"), "Why", List.of(), Map.of("period", "2022-23"), List.of(), List.of());
         FilledTemplateResult before = fillerService.fillTemplateForIssue(bare, noticeInfo, input);
         String html = before.blocks().get(0).filledHtml();
-        assertTrue(html.contains("order dated [[MISSING: issue.order_date]]"), html);
+        assertTrue(html.contains("order dated [[MISSING: order_date]]"), html);
         assertTrue(html.contains("letter dated 01.01.2024"), html);
-        assertTrue(html.contains("[[MISSING: issue.return_filing_date]]"), html);
-        assertTrue(html.contains("[[MISSING: notice.date_of_service]]"), html);
+        assertTrue(html.contains("[[MISSING: return_filing_date]]"), html);
+        assertTrue(html.contains("[[MISSING: date_of_service]]"), html);
         assertEquals(List.of("issue.order_date", "issue.return_filing_date", "notice.date_of_service"),
                 TemplateFillService.unknownVariables(template, fillerService.buildContextMap(bare, noticeInfo, input)),
                 "notice.issue_date is known; the three card-specific variables are asked of the model");

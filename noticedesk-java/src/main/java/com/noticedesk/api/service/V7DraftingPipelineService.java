@@ -133,6 +133,8 @@ public class V7DraftingPipelineService {
 
     /** Draft flag (info): the taxpayer's GSTIN was chosen by code from the document text over the matcher's / intake value. */
     public static final String FLAG_GSTIN_CORRECTED = "info:gstin_corrected";
+    /** The client record has no legal name; the one named next to the taxpayer GSTIN in the notice is used. */
+    public static final String FLAG_CLIENT_NAME_FROM_NOTICE = "info:client_name_from_notice";
 
     /** Card read access for the post-matching stage correction; null (tests) skips the correction. */
     private CatalogueService catalogueService;
@@ -765,6 +767,8 @@ public class V7DraftingPipelineService {
      *       choice; the intake value ({@code registrationIdentifier}) is replaced when it differs from a GSTIN read next to
      *       the party designation (it is kept against a mere first-GSTIN choice). Every other GSTIN of the text is another
      *       party's and never fills a client field. An override is logged and flagged {@link #FLAG_GSTIN_CORRECTED};</li>
+     *   <li>legal name: when the client record has none, the name the notice gives next to the taxpayer GSTIN
+     *       ({@link NoticeHeaderFacts#taxpayerLegalName}; never a supplier's), flagged {@link #FLAG_CLIENT_NAME_FROM_NOTICE};</li>
      *   <li>state: from the chosen GSTIN's state code (the recorded name only when the code gives none);</li>
      *   <li>financial year: when the matcher gives none, derived from its tax period (else the issues' periods), April
      *       to March; it fills the notice block and, when the intake has none, the reply header;</li>
@@ -819,6 +823,19 @@ public class V7DraftingPipelineService {
                     + tg.otherParties().size() + ".");
         }
 
+        // legal name: the client record's, else the name the notice gives next to the taxpayer GSTIN
+        String clientName = input != null && input.clientLegalName() != null && !input.clientLegalName().isBlank()
+                ? input.clientLegalName() : null;
+        if (clientName == null && input != null) {
+            clientName = NoticeHeaderFacts.taxpayerLegalName(text, gstin);
+            if (clientName != null) {
+                log.info("Notice {}: client legal name read from the notice next to the taxpayer GSTIN", noticeId);
+                flags.add(FLAG_CLIENT_NAME_FROM_NOTICE);
+                notes.add("Client legal name taken from the notice (named next to the taxpayer GSTIN): "
+                        + HtmlSanitizer.sanitize(clientName) + "; the client record has none: partner to confirm.");
+            }
+        }
+
         // state from the taxpayer GSTIN
         String recordedState = input != null ? input.registrationStateName() : null;
         String state = NoticeHeaderFacts.stateForGstin(gstin).orElse(GstStateCodes.isPlaceholderName(recordedState) ? null : recordedState.trim());
@@ -854,17 +871,18 @@ public class V7DraftingPipelineService {
         DraftingInput outInput = input;
         if (input != null) {
             String inputFy = input.financialYear() != null && !input.financialYear().isBlank() ? input.financialYear() : fy;
+            String name = clientName != null ? clientName : input.clientLegalName();
             if (!Objects.equals(gstin, input.registrationIdentifier()) || !Objects.equals(state, input.registrationStateName())
-                    || !Objects.equals(inputFy, input.financialYear())) {
-                outInput = withHeader(input, gstin, state, inputFy);
+                    || !Objects.equals(inputFy, input.financialYear()) || !Objects.equals(name, input.clientLegalName())) {
+                outInput = withHeader(input, name, gstin, state, inputFy);
             }
         }
         return new HeaderFacts(outMr, outInput);
     }
 
-    /** The drafting input with the taxpayer GSTIN, state and financial year set by {@link #applyHeaderFacts}. */
-    private static DraftingInput withHeader(DraftingInput i, String gstin, String state, String fy) {
-        return new DraftingInput(i.matterId(), i.tone(), i.partnerInstructions(), i.clientLegalName(), i.clientPan(),
+    /** The drafting input with the legal name, taxpayer GSTIN, state and financial year set by {@link #applyHeaderFacts}. */
+    private static DraftingInput withHeader(DraftingInput i, String name, String gstin, String state, String fy) {
+        return new DraftingInput(i.matterId(), i.tone(), i.partnerInstructions(), name, i.clientPan(),
                 i.clientEntityType(), i.registrationType(), gstin, state, i.law(), fy, i.assessmentYear(), i.notice(),
                 i.rawExtractedJson(), i.noticeOcrExcerpt(), i.priorMatters(), i.siblingNotices(), i.documents(),
                 i.crossRegistrationContext(), i.supportingDocuments(), i.pendingRequirements(), i.ragContext(),

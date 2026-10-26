@@ -645,8 +645,8 @@ class V7Stage3PipelineTest {
         // the values filled the template; the issue's own facts and the notice values are untouched
         String s04 = section(r, 4);
         assertTrue(s04.contains("The order dated 16.08.2023 was answered by a return filed on 20.08.2023 by Test Client Pvt Ltd for Rs 1,00,000."), s04);
-        assertFalse(allHtml(r).contains("[[MISSING: issue.order_date]]"));
-        assertFalse(allHtml(r).contains("[[MISSING: issue.return_filing_date]]"));
+        assertFalse(allHtml(r).contains("[[MISSING: order_date]]"));
+        assertFalse(allHtml(r).contains("[[MISSING: return_filing_date]]"));
         assertTrue(s04.contains("Template ground for Test Client Pvt Ltd on Rs 50,000."), "issue 2 (no unknown variable) is filled as before");
         // the partner note records what was read; no skipped / failed flag
         String s13 = section(r, 13);
@@ -679,7 +679,7 @@ class V7Stage3PipelineTest {
         when(variableAgent.extractVariables(anyString(), anyList(), any(), any())).thenReturn(null);
         DraftingPipelineResult failed = pipelineWithVariableAgent(variableAgent).runPipeline(input("Section 73"));
         assertEquals("warn", check(failed, "FLAG_VARIABLE_AGENT_FAILED").severity());
-        assertTrue(section(failed, 4).contains("[[MISSING: issue.order_date]]"), section(failed, 4));
+        assertTrue(section(failed, 4).contains("[[MISSING: order_date]]"), section(failed, 4));
         assertTrue(section(failed, 13).contains("Template variable step returned no usable output"));
 
         when(variableAgent.extractVariables(anyString(), anyList(), any(), any()))
@@ -688,7 +688,7 @@ class V7Stage3PipelineTest {
         DraftingPipelineResult partly = pipelineWithVariableAgent(variableAgent).runPipeline(input("Section 73"));
         String s04 = section(partly, 4);
         assertTrue(s04.contains("order dated 16.08.2023"), s04);
-        assertTrue(s04.contains("[[MISSING: issue.return_filing_date]]"), "a value the document does not state stays a marker: " + s04);
+        assertTrue(s04.contains("[[MISSING: return_filing_date]]"), "a value the document does not state stays a marker: " + s04);
         assertTrue(section(partly, 13).contains("Template variables the document does not state (left as [[MISSING]]): issue.return_filing_date."));
         assertTrue(partly.checkResults().stream().noneMatch(c -> c.checkName().startsWith("FLAG_VARIABLE_AGENT")));
     }

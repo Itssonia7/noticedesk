@@ -28,7 +28,7 @@ SECTION 4: 04 Issue-wise Response
 ================================================================================
 
 --- Issue #1 Grounds of Defence ---
-4.1 [DEV - not CA reviewed] It is submitted that the discrepancy of Rs 1,50,000 in GSTR-2B was due to [[MISSING: issue.reason_for_difference]], and [[MISSING: issue.section16_conditions_statement]] by M/s Vantage Logistics Pvt Ltd.
+4.1 [DEV - not CA reviewed] It is submitted that the discrepancy of Rs 1,50,000 in GSTR-2B was due to [[MISSING: reason_for_difference]], and [[MISSING: section16_conditions_statement]] by M/s Vantage Logistics Pvt Ltd.
 
 --- Issue #2 Grounds of Defence ---
 4.2 [DEV - not CA reviewed] The interest demand of Rs 5,918 under Section 50 has been computed on gross tax liability instead of net cash liability. As per proviso to Section 50(1), interest is payable only on cash ledger debit.
@@ -114,14 +114,14 @@ CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=2, unanswered_issues=[
 CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
 CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
 CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
-CHECK_MARKERS_LIST | FAIL | block | {missing_count=3, missing_markers=[date_of_receipt, issue.reason_for_difference, issue.section16_conditions_statement], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_MARKERS_LIST | FAIL | block | {missing_count=3, missing_markers=[date_of_receipt, reason_for_difference, section16_conditions_statement], pending_ai_count=0, pending_ai_markers=[]}
 CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=4, unique_rendered_blocks=4}
 CHECK_PROCEEDING_CONSISTENT | PASS | block | {notice_section=Section 73, problems=[], stage=scn_73}
 FLAG_MISSING_DATE_OF_RECEIPT | FAIL | warn | {flag=warn:missing_date_of_receipt}
 Missing Data Markers:
   * date_of_receipt (severity: block)
-  * issue.reason_for_difference (severity: block)
-  * issue.section16_conditions_statement (severity: block)
+  * reason_for_difference (severity: block)
+  * section16_conditions_statement (severity: block)
 Pending AI Markers: None
 
 

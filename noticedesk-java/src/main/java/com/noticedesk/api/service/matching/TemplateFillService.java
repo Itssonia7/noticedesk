@@ -495,7 +495,8 @@ public class TemplateFillService {
             if (val == null || val.toString().isBlank()) {
                 missingVars.add(placeholderKey);
                 flags.add("missing_" + placeholderKey);
-                matcher.appendReplacement(sb, Matcher.quoteReplacement("[[MISSING: " + placeholderKey + "]]"));
+                // the visible marker never shows the variable prefix ("issue.x" -> "x"); missingVars keeps the full name
+                matcher.appendReplacement(sb, Matcher.quoteReplacement("[[MISSING: " + DraftTextCleanup.markerName(placeholderKey) + "]]"));
             } else {
                 String formatted = formatValue(placeholderKey, val);
                 matcher.appendReplacement(sb, Matcher.quoteReplacement(formatted));
