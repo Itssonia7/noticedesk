@@ -4,8 +4,10 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.IssueCard;
+import com.noticedesk.api.service.learned.LearnedLibrary;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +25,30 @@ public class CatalogueService {
     private final JdbcTemplate jdbcTemplate;
     private final AppProperties properties;
     private final ObjectMapper objectMapper;
+
+    /** The learned library (separate from the catalogue); null when not wired (tests, hand-built runners). */
+    private LearnedLibrary learnedLibrary;
+
+    @Autowired(required = false)
+    public void setLearnedLibrary(LearnedLibrary learnedLibrary) {
+        this.learnedLibrary = learnedLibrary;
+    }
+
+    /**
+     * The approved learned-library entries as extra matcher cards (ids LRN-...) when {@code catalogue.include-learned}
+     * is true; empty otherwise. Never part of {@link #getActiveCards()}; provisional entries are never returned.
+     */
+    public List<IssueCard> learnedCardsForMatching() {
+        return learnedLibrary != null ? learnedLibrary.cardsForMatching() : List.of();
+    }
+
+    /** {@code cards} followed by {@link #learnedCardsForMatching()} (the same list when there are none). */
+    public static List<IssueCard> withLearned(List<IssueCard> cards, List<IssueCard> learned) {
+        if (learned == null || learned.isEmpty()) return cards;
+        List<IssueCard> out = new ArrayList<>(cards != null ? cards : List.of());
+        out.addAll(learned);
+        return out;
+    }
 
     /**
      * Loads the cards matching may see, deterministically sorted by card_id ASC, version DESC (prompt
@@ -73,10 +99,11 @@ public class CatalogueService {
 
     /**
      * The visible cards keyed by card id, latest version of each (read access to a card's stages and NOT THIS IF
-     * rules for the post-matching stage correction). Empty without a database.
+     * rules for the post-matching stage correction), approved learned cards included when the matcher sees them.
+     * Empty without a database.
      */
     public Map<String, IssueCard> cardsById() {
-        return byId(getActiveCards());
+        return byId(withLearned(getActiveCards(), learnedCardsForMatching()));
     }
 
     /** {@code cards} keyed by card id; the first (latest, per the load order) version of each id wins. */

@@ -174,6 +174,12 @@ noticedesk:
     # true (default): matching sees them, so a promoted template is reused on the next similar notice,
     # with the info flag FLAG_PROVISIONAL_TEMPLATE in the partner note. false: CA-approved cards only.
     include-provisional: ${CATALOGUE_INCLUDE_PROVISIONAL:true}
+    # Learned library ($PRIVATE_SEED_DIR/learned, separate from the catalogue): issues the new-issue writer drafted with
+    # no catalogue card. true: APPROVED entries are shown to the matcher as extra LRN-... cards and reused as templates;
+    # provisional entries never are. false (default): the matcher sees the catalogue only.
+    include-learned: ${CATALOGUE_INCLUDE_LEARNED:false}
+    # source_run of new learned entries (e.g. the deployed commit); blank = "unknown"
+    learned-source-run: ${NOTICEDESK_SOURCE_RUN:}
   pricing:
     inr-per-usd: 88.0
     models:
@@ -230,6 +236,12 @@ noticedesk:
   ocr:
     provider-primary: ${OCR_PROVIDER_PRIMARY:stub}
     provider-fallback: ${OCR_PROVIDER_FALLBACK:}
+    # OCR_PROVIDER_PRIMARY=gemini: the PDF / image is sent inline to this model (GEMINI_API_KEY). The default model is
+    # the GEMINI_MODEL default, priced under noticedesk.pricing.models.
+    gemini:
+      model: ${OCR_GEMINI_MODEL:${GEMINI_MODEL:gemini-3.6-flash}}
+      max-output-tokens: ${OCR_GEMINI_MAX_OUTPUT_TOKENS:65536}
+      timeout-seconds: ${OCR_GEMINI_TIMEOUT_SECONDS:300.0}
     google-doc-ai:
       project-id: ${GOOGLE_DOC_AI_PROJECT_ID:}
       location: ${GOOGLE_DOC_AI_LOCATION:}

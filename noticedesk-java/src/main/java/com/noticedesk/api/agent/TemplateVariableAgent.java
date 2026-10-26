@@ -187,7 +187,7 @@ public class TemplateVariableAgent {
     private String cardTitle(String cardId) {
         if (cardId == null || catalogueService == null) return cardId;
         try {
-            for (IssueCard c : catalogueService.getActiveCards()) {
+            for (IssueCard c : CatalogueService.withLearned(catalogueService.getActiveCards(), catalogueService.learnedCardsForMatching())) {
                 if (cardId.equals(c.cardId())) return c.title() != null && !c.title().isBlank() ? c.title() : cardId;
             }
         } catch (Exception e) {

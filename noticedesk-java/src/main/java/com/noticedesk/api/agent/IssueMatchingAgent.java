@@ -427,7 +427,8 @@ public class IssueMatchingAgent {
      */
     public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
                                                  NoticeCallBudget budget) {
-        List<IssueCard> cards = catalogueService.getActiveCards();
+        // approved learned-library entries are appended only with catalogue.include-learned=true
+        List<IssueCard> cards = CatalogueService.withLearned(catalogueService.getActiveCards(), catalogueService.learnedCardsForMatching());
         String fullCatalogueText = catalogueService.renderCatalogueCompactText(cards);
         String catalogueHash = catalogueService.getCatalogueHash(fullCatalogueText);
 

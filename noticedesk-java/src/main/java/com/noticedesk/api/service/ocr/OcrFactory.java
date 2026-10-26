@@ -37,6 +37,11 @@ public class OcrFactory {
     private OcrProvider buildProvider(String name) {
         return switch (name != null ? name : "stub") {
             case "stub" -> new StubOcrProvider();
+            case "gemini" -> {
+                AppProperties.Ocr.Gemini g = properties.getOcr().getGemini();
+                String model = g.getModel() != null && !g.getModel().isBlank() ? g.getModel() : properties.getLlm().getGemini().getModel();
+                yield new GeminiOcrProvider(properties.getLlm().getGemini().getApiKey(), model, g.getMaxOutputTokens(), g.getTimeoutSeconds());
+            }
             case "google_doc_ai" -> {
                 // TODO: wire GoogleDocumentAiOcrProvider with credentials from
                 //   noticedesk.ocr.google-doc-ai.* when that SDK is added.

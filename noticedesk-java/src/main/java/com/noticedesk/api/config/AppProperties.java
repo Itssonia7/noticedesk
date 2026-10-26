@@ -244,6 +244,14 @@ public class AppProperties {
          * template is reused on the next similar notice; set false to match against CA-approved cards only.
          */
         private boolean includeProvisional = true;
+        /**
+         * Whether matching sees the approved entries of the learned library ({@code $PRIVATE_SEED_DIR/learned}):
+         * issues the new-issue writer drafted with no catalogue card, approved by a named person. Default false;
+         * provisional learned entries never reach the matcher.
+         */
+        private boolean includeLearned = false;
+        /** Run id written on new learned entries ({@code source_run}, e.g. the deployed commit); blank = "unknown". */
+        private String learnedSourceRun = "";
     }
 
     @Data
@@ -266,6 +274,15 @@ public class AppProperties {
         private String providerFallback;
         private GoogleDocAi googleDocAi = new GoogleDocAi();
         private AzureDocIntel azureDocIntel = new AzureDocIntel();
+        private Gemini gemini = new Gemini();
+
+        /** OCR on the gemini provider (key: {@code llm.gemini.api-key}). */
+        @Data
+        public static class Gemini {
+            private String model = "";
+            private int maxOutputTokens = 65536;
+            private double timeoutSeconds = 300.0;
+        }
 
         @Data
         public static class GoogleDocAi {

@@ -59,6 +59,8 @@ output/*.docx
 output/*.txt
 scratch/generate_change_audit_pdf.py
 testbench/results/
+# learned library entries (notice text) belong in $PRIVATE_SEED_DIR/learned only
+learned/*.json
 
 # Private data protection
 private/

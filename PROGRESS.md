@@ -862,8 +862,59 @@ cached catalogue. Measured causes and the fix for each are in open item 9. Match
   likewise); prayer `{{issue.amount_tax}}` / `{{notice.refund_amount}}` from the one ground's amount, else the amount
   after "refund" / "Refund Application" / "for Rs." in the first 1,500 characters, else [[MISSING]].
 
+## (b25) PDF end-to-end runner; learned library (26-10-2026)
+
+- **Gemini OCR provider** (`GeminiOcrProvider`, `OCR_PROVIDER_PRIMARY=gemini`): the repo had no Gemini OCR provider
+  (OcrFactory built only the stub), so the upload path's `OcrFactory.getPrimaryProvider()` now builds one. The PDF /
+  image is sent inline with a transcription instruction (`=== PAGE n ===` per page; page count = markers). Model
+  `OCR_GEMINI_MODEL`, else `GEMINI_MODEL` (default = the zero-priced `GEMINI_MODEL` default, so the OCR model is
+  priced; same bracket-key rule as b23), `OCR_GEMINI_MAX_OUTPUT_TOKENS` 65536, `OCR_GEMINI_TIMEOUT_SECONDS` 300, key
+  `GEMINI_API_KEY`. `OcrResult` gains `usage` (provider, model, input / output tokens with thinking, `tierInfo`). Tier:
+  this SDK (google-genai 0.3.0) exposes no response headers; the response JSON is scanned for a tier / traffic /
+  project / billing / quota field, none expected ("tier: not reported by API").
+- **PDF runner** (`V7PdfPipelineRunnerTest`, skipped unless `ENABLE_E2E_TESTS=true` and `V7_PDF_NOTICES`): names under
+  `$PRIVATE_SEED_DIR/pdf/` or absolute paths, all resolved before any call. Per PDF, under the live-run guard (commit
+  check, run cap checked before each PDF, per-notice cap = notice cap minus the OCR + triage spend, fail-fast counts
+  OCR and triage outcomes): (1) OCR via `OcrFactory.getPrimaryProvider().process(bytes, filename, contentType)` (stub
+  provider refused), usage logged as step `ocr`; (2) `DocumentParsingAgent` document_type as ParseAndRouteWorkflow
+  (`LLM_MODEL_PARSING`, step `triage`); (3) the v7 pipeline with the OCR text and that label. Report = the live
+  runner's lines plus `OCR: provider=.. model=.. pages=.. chars=.. elapsed=.. tokens in/out cost INR` and
+  `Triage: document_type=..`; the tier line once. Files: `testbench/results/<notice-id>_ocr.txt` and
+  `<notice-id>_v7_draft.txt` (git-ignored). Notice id = file name without extension, lower-cased, non-alphanumerics
+  to '-'. No answer key, no scoring.
+- **Shared rig**: the live runner's set-up and per-notice report moved to `V7LiveRig` (no behaviour change);
+  `PdfNoticeSteps` holds the OCR / triage steps (offline test with a stub OCR provider and the stub LLM).
+- **Learned library** (`service/learned`): every issue the new-issue writer (plain or high-stakes tier) drafts with
+  status none, no card and a substantive ground is saved as `$PRIVATE_SEED_DIR/learned/<yyyy-mm-dd>_<notice-id>_issue<N>.json`
+  (entry_id `LRN-<8 hex>`, notice_id, issue_no, created_at, document_type, stage (response stage), stage_template,
+  ground, legal_section, amount, period, grounds_of_defence / legal_submissions (sections 04 / 06 as stored in
+  ai_issue_sections), documents, summary_line, citations with check_status, writer provider:model, prompt_version,
+  notice_facts (client name / GSTIN / reference, for scrubbing on reuse), status "provisional", approved_by null,
+  source_run = commit sha). Skipped when `PRIVATE_SEED_DIR` is unset; refused inside a git working tree; a re-run the
+  same day replaces a provisional file (same id), never an approved one (`_2`, `_3` ...). Never in the catalogue files.
+- **DB mirror**: V29 adds `ai_issue_sections.entry_id` / `source_run` (status existed and keeps its V26 meaning); the
+  entry's other fields go into the existing `output` JSONB (`learned_entry_id`, `learned_source_run`, `learned_status`,
+  ground, legal_section, amount, period, stage, document_type).
+- **Loader**: `LearnedLibraryLoader` (profile `private-seed`) reads `learned/*.json` into memory and logs
+  `learned library: N entries (M provisional, K approved)`. Not part of `CatalogueService.getActiveCards()`.
+- **Use**: `CATALOGUE_INCLUDE_LEARNED=true` (`catalogue.include-learned`, default false): APPROVED entries are appended
+  to the matcher's cards (id LRN-..., title from the ground, summary from the first two sentences of the grounds of
+  defence, stages from the response stage / stage template, sections and keywords = the provisions cited) and are a
+  provisional reply template of their own (sections 04 / 06 split into blocks, notice values replaced by placeholders
+  via `ProvisionalTemplateService.build`; `info:provisional_template` names it). Provisional entries never reach the
+  matcher. `LearnedLibraryTool` (`LEARNED_TOOL=true`, `-Dtest=LearnedLibraryTool`) lists entries;
+  `LEARNED_APPROVE=<entry_id> LEARNED_APPROVED_BY=<name>` approves one and writes the file back.
+- **Privacy**: `.gitignore` adds `learned/*.json`; the commit hook (it checked file types only) now also rejects an added
+  `.json` in a `learned/` folder and any file under `testbench/results/` (the Java package `service/learned` is not
+  matched; hook tests 22 passed).
+- **Runners**: both print `Learned: saved LRN-xxxx for issue #N` per saved entry and the library counts at start and
+  end (`NOTICEDESK_SOURCE_RUN` sets source_run in the app; the runners use the commit sha).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn -o test`): **555 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 26-10-2026 after (b25), the Spring context test included (local Postgres 16);
+  V1 to V29 applied on Postgres 16.
 - Offline unit suite (`mvn -o test`): **534 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
   on 25-10-2026 after (b24).
 - Offline unit suite (`mvn -o test`): **508 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
@@ -883,7 +934,7 @@ cached catalogue. Measured causes and the fix for each are in open item 9. Match
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
   - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.
-- Privacy hook tests: 16 passed, 0 failed.
+- Privacy hook tests: 22 passed, 0 failed (after (b25); 16 before).
 
 ## (d) Open items
 

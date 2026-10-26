@@ -94,6 +94,21 @@ try_commit "clean commit accepted" accept
 out="$(bash scripts/check_sensitive_data.sh --commits HEAD~4..HEAD 2>&1)"; rc=$?
 if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "legacy.txt:1: possible GSTIN"; then ok "--commits mode reports bypassed commit"; else bad "--commits mode"; echo "$out"; fi
 
+# 11. a learned library entry (any extension) rejected, also when nested; a runner result rejected
+mkdir -p learned; printf '{}' > learned/2026-10-26_n1_issue1.json; git add -f learned/2026-10-26_n1_issue1.json
+try_commit "learned library entry rejected" reject
+if printf '%s' "$LAST_OUT" | grep -Fq "learned/2026-10-26_n1_issue1.json: private path"; then ok "learned entry reported as a private path"; else bad "learned path finding"; echo "$LAST_OUT"; fi
+mkdir -p seeds/learned; printf '{}' > seeds/learned/e.json; git add -f seeds/learned/e.json
+try_commit "nested learned folder rejected" reject
+mkdir -p testbench/results; printf 'ocr' > testbench/results/n1_ocr.txt; git add -f testbench/results/n1_ocr.txt
+try_commit "runner result rejected" reject
+
+# 12. a file merely named like the folder, and source code in a package named learned, are fine
+printf 'notes\n' > learned_notes.txt; git add learned_notes.txt
+try_commit "file named learned_notes accepted" accept
+mkdir -p src/service/learned; printf 'class LearnedLibrary {}\n' > src/service/learned/LearnedLibrary.java; git add src/service/learned/LearnedLibrary.java
+try_commit "source file in a learned package accepted" accept
+
 echo ""
 echo "check_sensitive_data tests: $pass passed, $fail failed"
 [ $fail -eq 0 ]

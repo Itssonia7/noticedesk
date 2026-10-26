@@ -48,6 +48,8 @@ import com.noticedesk.api.service.matching.ReplyAssemblyService.AssembledSection
 import com.noticedesk.api.service.matching.ReplyAssemblyService.HighStakesContent;
 import com.noticedesk.api.service.matching.CardShortlister;
 import com.noticedesk.api.service.matching.StageDetector;
+import com.noticedesk.api.service.learned.LearnedEntry;
+import com.noticedesk.api.service.learned.LearnedLibrary;
 import com.noticedesk.api.service.matching.StageResolver;
 import com.noticedesk.api.service.matching.StageResolver.ResponseStage;
 import com.noticedesk.api.service.matching.TemplateFillService;
@@ -139,6 +141,18 @@ public class V7DraftingPipelineService {
     public void setCatalogueService(CatalogueService catalogueService) {
         this.catalogueService = catalogueService;
     }
+
+    /** The learned library: every new-issue writer output for an issue with no card is saved there; null skips it. */
+    private LearnedLibrary learnedLibrary;
+
+    @Autowired(required = false)
+    public void setLearnedLibrary(LearnedLibrary learnedLibrary) {
+        this.learnedLibrary = learnedLibrary;
+    }
+
+    /** ai_issue_sections output keys of a section also saved as a learned entry (mirrored in the entry_id / source_run columns). */
+    public static final String OUTPUT_LEARNED_ENTRY_ID = "learned_entry_id";
+    public static final String OUTPUT_LEARNED_SOURCE_RUN = "learned_source_run";
 
     @Autowired
     public V7DraftingPipelineService(
@@ -502,10 +516,15 @@ public class V7DraftingPipelineService {
             aiContent.put(o.issue().issueNo(), new AiIssueContent(o.issue().issueNo(), o.writer(), cleaned, o.documents(),
                     o.summaryLine() != null ? HtmlSanitizer.sanitize(stripCitations(o.summaryLine(), removedNames)) : null));
             if (o.placeholder()) continue;
+            Map<String, Object> outputJson = aiOutputJson(o, cleaned, verified);
+            if (learnedLibrary != null && LearnedLibrary.qualifies(o.issue(), o.writer(), false)) {
+                outputJson = recordLearned(o, outputJson, input, triageType != null ? triageType.toString() : null, noticeType,
+                        fullOcrText, noticeId, matchingResult, notes);
+            }
             aiRecords.add(new AiIssueSectionRecord(o.issue().issueNo(),
                     o.model() != null ? o.model() : "unknown",
                     o.promptVersion() != null ? o.promptVersion() : "unknown",
-                    aiOutputJson(o, cleaned, verified), "pending_review"));
+                    outputJson, "pending_review"));
             if (o.strengthNote() != null && !o.strengthNote().isBlank()) {
                 notes.add("Issue #" + o.issue().issueNo() + " strength note: " + HtmlSanitizer.sanitize(o.strengthNote()));
             }
@@ -1187,6 +1206,50 @@ public class V7DraftingPipelineService {
         return out;
     }
 
+    /**
+     * Saves a new-issue writer output (issue with no card) to the learned library as a provisional entry and returns
+     * the ai_issue_sections output with the entry's fields added (entry id, run, ground, section, amount, period,
+     * stage, document type). Unchanged when nothing was saved (PRIVATE_SEED_DIR unset) or the save failed: the
+     * library never affects the draft.
+     */
+    private Map<String, Object> recordLearned(IssueAiOutput o, Map<String, Object> outputJson, DraftingInput input, String documentType,
+                                              String noticeType, String fullOcrText, UUID noticeId, MatchingResult mr,
+                                              List<String> notes) {
+        try {
+            ResponseStage rs = StageResolver.resolve(documentType, fullOcrText);
+            Object rawId = input != null && input.notice() != null ? input.notice().get("notice_id") : null;
+            Map<String, Object> noticeFacts = new LinkedHashMap<>();
+            if (input != null && input.clientLegalName() != null) noticeFacts.put("client_name", input.clientLegalName());
+            if (input != null && input.registrationIdentifier() != null) noticeFacts.put("gstin", input.registrationIdentifier());
+            if (mr != null && mr.notice() != null && mr.notice().noticeNumber() != null) noticeFacts.put("notice_number", mr.notice().noticeNumber());
+            LearnedLibrary.RunContext run = new LearnedLibrary.RunContext(
+                    rawId != null ? rawId.toString() : String.valueOf(noticeId),
+                    documentType != null && !documentType.isBlank() ? documentType : "unknown",
+                    rs != null ? rs.label() : noticeType, noticeType, noticeFacts);
+            String provider = properties != null && properties.getLlm() != null ? properties.getLlm().providerForAgent(o.writer()) : null;
+            String writer = (provider != null ? provider : "unknown") + ":" + (o.model() != null ? o.model() : "unknown");
+            Optional<LearnedEntry> saved = learnedLibrary.record(run, o.issue(), outputJson, writer, o.promptVersion());
+            if (saved.isEmpty()) return outputJson;
+            LearnedEntry e = saved.get();
+            Map<String, Object> out = new LinkedHashMap<>(outputJson);
+            out.put(OUTPUT_LEARNED_ENTRY_ID, e.entryId());
+            out.put(OUTPUT_LEARNED_SOURCE_RUN, e.sourceRun());
+            out.put("learned_status", e.status());
+            out.put("ground", e.ground());
+            out.put("legal_section", e.legalSection());
+            out.put("amount", e.amount());
+            out.put("period", e.period());
+            out.put("stage", e.stage());
+            out.put("document_type", e.documentType());
+            notes.add("Issue #" + o.issue().issueNo() + ": saved to the learned library as " + e.entryId()
+                    + " (provisional; not shown to the matcher until approved).");
+            return out;
+        } catch (RuntimeException ex) {
+            log.warn("learned library: issue #{} not saved ({})", o.issue().issueNo(), ex.getClass().getSimpleName());
+            return outputJson;
+        }
+    }
+
     private static Map<String, Object> aiOutputJson(IssueAiOutput o, List<AiFragment> cleaned, List<VerifiedCitation> verified) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("writer", o.writer());
@@ -1291,8 +1354,9 @@ public class V7DraftingPipelineService {
     public void persistAiIssueSections(UUID tenantId, UUID noticeId, UUID draftId, List<AiIssueSectionRecord> records) {
         if (jdbc == null || records == null || records.isEmpty()) return;
         String sql = """
-                INSERT INTO ai_issue_sections (tenant_id, notice_id, draft_id, issue_no, model, prompt_version, output, status)
-                VALUES (:tenantId, :noticeId, :draftId, :issueNo, :model, :pv, CAST(:output AS JSONB), :status)
+                INSERT INTO ai_issue_sections (tenant_id, notice_id, draft_id, issue_no, model, prompt_version, output, status,
+                                               entry_id, source_run)
+                VALUES (:tenantId, :noticeId, :draftId, :issueNo, :model, :pv, CAST(:output AS JSONB), :status, :entryId, :sourceRun)
                 """;
         for (AiIssueSectionRecord r : records) {
             try {
@@ -1304,11 +1368,18 @@ public class V7DraftingPipelineService {
                         .addValue("model", r.model())
                         .addValue("pv", r.promptVersion())
                         .addValue("output", objectMapper.writeValueAsString(r.outputJson()))
-                        .addValue("status", r.status()));
+                        .addValue("status", r.status())
+                        .addValue("entryId", outputText(r.outputJson(), OUTPUT_LEARNED_ENTRY_ID))
+                        .addValue("sourceRun", outputText(r.outputJson(), OUTPUT_LEARNED_SOURCE_RUN)));
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                 throw new IllegalStateException("Failed to serialise ai_issue_sections output for issue #" + r.issueNo(), e);
             }
         }
+    }
+
+    private static String outputText(Map<String, Object> output, String key) {
+        Object v = output != null ? output.get(key) : null;
+        return v != null ? v.toString() : null;
     }
 
     private static <T> List<T> nn(List<T> l) {

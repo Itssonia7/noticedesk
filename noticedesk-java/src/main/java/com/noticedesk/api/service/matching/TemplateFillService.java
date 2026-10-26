@@ -9,8 +9,10 @@ import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.model.matching.ReplyTemplate;
 import com.noticedesk.api.model.matching.SourceMapEntry;
 import com.noticedesk.api.model.matching.TemplateBlock;
+import com.noticedesk.api.service.learned.LearnedLibrary;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -38,6 +40,14 @@ public class TemplateFillService {
 
     public void registerInMemoryTemplate(ReplyTemplate template) {
         inMemoryTemplates.computeIfAbsent(template.cardId(), k -> new ArrayList<>()).add(template);
+    }
+
+    /** Approved learned-library entries are templates of their own (LRN-... cards, include-learned on only). */
+    private LearnedLibrary learnedLibrary;
+
+    @Autowired(required = false)
+    public void setLearnedLibrary(LearnedLibrary learnedLibrary) {
+        this.learnedLibrary = learnedLibrary;
     }
 
     public record FilledBlock(
@@ -392,6 +402,11 @@ public class TemplateFillService {
                     list.add(t);
                 }
             }
+        }
+
+        if (learnedLibrary != null) {
+            // 'provisional' status: the fill raises FLAG_PROVISIONAL_TEMPLATE, so the partner note names the entry
+            learnedLibrary.templateFor(cardId).ifPresent(list::add);
         }
 
         if (jdbcTemplate != null) {

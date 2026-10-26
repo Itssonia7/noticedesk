@@ -16,7 +16,9 @@ noticedesk-private/                 # anywhere outside the repo, e.g. ~/noticede
 ├── cards/*.json                    # issue_cards rows      (card_id, version, title, summary, ...)
 ├── templates/*.json                # reply_templates rows  (template_id, version, card_id, blocks, ...)
 ├── stage_templates/*.json          # stage_templates rows  (stage, version, sections, ...)
-└── notices/*.json                  # real notices for the matching eval (same shape as testbench notices)
+├── notices/*.json                  # real notices for the matching eval (same shape as testbench notices)
+├── pdf/*.pdf                       # real notice PDFs for V7PdfPipelineRunnerTest (V7_PDF_NOTICES)
+└── learned/*.json                  # learned library: AI-written issues with no catalogue card (written by the app)
 ```
 
 Each JSON file holds one object or an array of objects whose keys are the table's column names.
@@ -57,12 +59,24 @@ SPRING_PROFILES_ACTIVE=private-seed mvn -f noticedesk-java/pom.xml spring-boot:r
 - `V7LivePipelineRunnerTest`: each `V7_LIVE_NOTICES` name is looked up on the classpath
   (`testbench/notices/<name>`) first, then in `$PRIVATE_SEED_DIR/notices/<name>`; an absolute path is
   also accepted. A name found nowhere refuses the run before any call.
+- `V7PdfPipelineRunnerTest`: each `V7_PDF_NOTICES` name is looked up in `$PRIVATE_SEED_DIR/pdf/<name>`
+  (or given as an absolute path). The OCR text and the draft go to `testbench/results/` (git-ignored, and
+  the commit hook rejects any file under it).
+- **Learned library** (`$PRIVATE_SEED_DIR/learned/<yyyy-mm-dd>_<notice-id>_issue<N>.json`): every issue the
+  v7 pipeline drafts with the new-issue writer and no catalogue card is saved there as a "provisional"
+  entry (ground, section, amount, period, the AI-written grounds of defence / legal submissions /
+  documents, citations with their check status, writer, commit). Entries hold notice text, so they are
+  written only under `PRIVATE_SEED_DIR` (never when it is unset, never inside a git working tree);
+  `.gitignore` ignores `learned/*.json` and the commit hook rejects any added `.json` in a `learned/` folder.
+  They are not part of the catalogue: the matcher sees APPROVED entries only, and only with
+  `CATALOGUE_INCLUDE_LEARNED=true`. Approve one with
+  `LEARNED_TOOL=true LEARNED_APPROVE=<entry_id> LEARNED_APPROVED_BY=<name> mvn -o test -Dtest=LearnedLibraryTool`.
 - Both runners refuse to start (before any call) when `PRIVATE_SEED_DIR` is set and the database still
   holds dummy cards (`issue_cards.card_id LIKE 'CARD-%'`): delete them first. They print the catalogue
   size and hash at the start so a run can be tied to the catalogue it used.
 
 As a second line of defence `.gitignore` ignores `private/`, `noticedesk-private/`, `*.real.json`,
-`*.real.sql`, `*.real.docx` and `*.real.pdf`.
+`*.real.sql`, `*.real.docx`, `*.real.pdf`, `learned/*.json` and `testbench/results/`.
 
 ## Commit-time check (enable once per clone)
 
@@ -79,6 +93,7 @@ commit. It looks at **added lines only** and rejects:
 | GSTIN | `[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]` not in `.githooks/allowed_ids.txt` |
 | PAN | `[A-Z]{5}[0-9]{4}[A-Z]` not in the allow-list (a PAN inside an allow-listed GSTIN is fine; GSTINs are checked first) |
 | Documents | a newly added / renamed / copied `.pdf`, `.docx` or `.xlsx` not in `.githooks/allowed_binaries.txt` |
+| Private paths | a newly added / renamed / copied `.json` in a `learned/` folder, or any file under `testbench/results/` |
 
 Findings show file, line number and a masked value, e.g. `notes.txt:12: possible GSTIN 27IIIJJ****I1Z9`.
 The offending line is never printed.
