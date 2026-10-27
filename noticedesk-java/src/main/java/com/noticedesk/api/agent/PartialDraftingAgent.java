@@ -56,10 +56,21 @@ public class PartialDraftingAgent {
             List<String> documents,
             String summaryLine,
             String model,
-            String promptVersion
+            String promptVersion,
+            List<AssumedFact> assumedFacts
     ) {
+        public PartialDraftingResult {
+            assumedFacts = assumedFacts != null ? List.copyOf(assumedFacts) : List.of();
+        }
+
         public PartialDraftingResult(List<PartialSectionAddition> sections, List<RawAiCitation> citations) {
             this(sections, citations, List.of(), null, null, PROMPT_VERSION);
+        }
+
+        /** No assumed facts. */
+        public PartialDraftingResult(List<PartialSectionAddition> sections, List<RawAiCitation> citations, List<String> documents,
+                                     String summaryLine, String model, String promptVersion) {
+            this(sections, citations, documents, summaryLine, model, promptVersion, List.of());
         }
     }
 
@@ -189,7 +200,8 @@ public class PartialDraftingAgent {
                 AiOutputParser.stringList(map, "documents"),
                 AiOutputParser.str(map.get("summary_line")),
                 model,
-                PROMPT_VERSION);
+                PROMPT_VERSION,
+                AiOutputParser.assumedFacts(map));
     }
 
     private PartialDraftingResult stubResult(MatchedIssue issue) {

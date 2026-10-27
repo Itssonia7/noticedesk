@@ -46,12 +46,25 @@ public class NewIssueDraftingAgent {
             List<String> documents,
             String summaryLine,
             String model,
-            String promptVersion
+            String promptVersion,
+            List<AssumedFact> assumedFacts
     ) {
+        public NewIssueDraftingResult {
+            assumedFacts = assumedFacts != null ? List.copyOf(assumedFacts) : List.of();
+        }
+
         public NewIssueDraftingResult(int issueNo, String section04Html, String section05Html, String section06Html,
                                       List<RawAiCitation> citations, String strengthNote) {
             this(issueNo, section04Html, section05Html, section06Html, citations, strengthNote,
                     List.of(), null, null, PROMPT_VERSION);
+        }
+
+        /** No assumed facts. */
+        public NewIssueDraftingResult(int issueNo, String section04Html, String section05Html, String section06Html,
+                                      List<RawAiCitation> citations, String strengthNote, List<String> documents,
+                                      String summaryLine, String model, String promptVersion) {
+            this(issueNo, section04Html, section05Html, section06Html, citations, strengthNote, documents, summaryLine,
+                    model, promptVersion, List.of());
         }
     }
 
@@ -181,7 +194,8 @@ public class NewIssueDraftingAgent {
                 AiOutputParser.str(map.get("strength_note")),
                 AiOutputParser.stringList(map, "documents"),
                 AiOutputParser.str(map.get("summary_line")),
-                model, PROMPT_VERSION);
+                model, PROMPT_VERSION,
+                AiOutputParser.assumedFacts(map));
     }
 
     private NewIssueDraftingResult stubResult(MatchedIssue issue) {

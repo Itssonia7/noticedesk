@@ -114,7 +114,7 @@ CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=2, unanswered_issues=[
 CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
 CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
 CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
-CHECK_MARKERS_LIST | FAIL | block | {missing_count=3, missing_markers=[date_of_receipt, reason_for_difference, section16_conditions_statement], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_MARKERS_LIST | FAIL | block | {confirm_count=0, confirm_markers=[], missing_count=3, missing_markers=[date_of_receipt, reason_for_difference, section16_conditions_statement], pending_ai_count=0, pending_ai_markers=[]}
 CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=4, unique_rendered_blocks=4}
 CHECK_PROCEEDING_CONSISTENT | PASS | block | {notice_section=Section 73, problems=[], stage=scn_73}
 FLAG_MISSING_DATE_OF_RECEIPT | FAIL | warn | {flag=warn:missing_date_of_receipt}
@@ -122,6 +122,7 @@ Missing Data Markers:
   * date_of_receipt (severity: block)
   * reason_for_difference (severity: block)
   * section16_conditions_statement (severity: block)
+Facts to confirm with the client: None
 Pending AI Markers: None
 
 

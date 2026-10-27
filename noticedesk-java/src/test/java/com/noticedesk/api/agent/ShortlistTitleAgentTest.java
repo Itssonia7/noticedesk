@@ -20,6 +20,8 @@ import org.mockito.Mockito;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -33,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ShortlistTitleAgentTest {
 
     private static final String MODEL = "test-matching-model";
-    private static final String SYSTEM_START = "# Shortlist title pass (v1.1)";
+    private static final String SYSTEM_START = "# Shortlist title pass (v1.2)";
 
     private final ObjectMapper om = new ObjectMapper();
     private AppProperties props;
@@ -90,8 +92,10 @@ class ShortlistTitleAgentTest {
                 + " (id and one-line title)."), system);
         assertTrue(system.contains("Be generous: include a card when in doubt; the full cards will be read later."));
         assertTrue(system.contains("never leave one out to keep the list short"));
+        assertTrue(system.contains("RANKED from the most likely to apply to the least"));
+        assertTrue(system.contains("only the first cards of the list may be used"));
         assertTrue(system.contains("Your answer must be ONLY this JSON object: {\"card_ids\": [\"NDK-001\", \"NDK-002\"]}"));
-        assertTrue(system.contains("card ids only: no titles, no reasons"));
+        assertTrue(system.contains("card ids only, in rank order (most likely first): no titles, no reasons"));
         assertTrue(system.contains("no markdown fences"));
         assertTrue(system.endsWith("ISSUE CARDS (id | title):\n"
                 + "NDK-001 | Vague show cause notice: no grounds stated\n"
@@ -119,6 +123,92 @@ class ShortlistTitleAgentTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> agent().parseOrThrow("{\"cards\": [\"NDK-001\"]}", ids));
         assertTrue(e.getMessage().contains("'card_ids' is missing"), e.getMessage());
+    }
+
+    // ------------------------------------------------------------------ the cap (fix 3: 16 ids one run, 30 the next)
+
+    private static List<IssueCard> thirtyCards() {
+        List<IssueCard> cards = new ArrayList<>();
+        for (int i = 1; i <= 30; i++) {
+            cards.add(card(String.format("NDK-%03d", i), "Card " + i, List.of("scn_73"), List.of("Section " + (100 + i))));
+        }
+        return cards;
+    }
+
+    /** "NDK-030", "NDK-029", ... "NDK-001": the model's rank order, the reverse of the catalogue order. */
+    private static List<String> rankedIds(int n) {
+        List<String> ids = new ArrayList<>();
+        for (int i = n; i >= 1; i--) ids.add(String.format("NDK-%03d", i));
+        return ids;
+    }
+
+    @Test
+    void aThirtyIdAnswerIsCutToTheFirstFifteenInRankOrder() {
+        List<IssueCard> cards = thirtyCards();
+        answer("{\"card_ids\": [" + rankedIds(30).stream().map(id -> "\"" + id + "\"").collect(java.util.stream.Collectors.joining(", ")) + "]}");
+
+        ShortlistTitleAgent.Picks picks = agent().pickCards(cards, "scn_73", NOTICE, UUID.randomUUID(), null);
+
+        assertEquals(rankedIds(30).subList(0, 15), List.copyOf(picks.cardIds()), "the first 15 of the ranked answer, in the answer's order");
+        assertEquals(30, picks.returnedCount());
+        assertTrue(picks.capped());
+        assertEquals(15, agent().maxCards(), "default matching.shortlist.title-max-cards");
+
+        // a shorter answer is kept whole; 0 switches the cap off; the cap also applies to regex-fallback ids
+        answer("{\"card_ids\": [\"NDK-003\", \"NDK-001\"]}");
+        ShortlistTitleAgent.Picks two = agent().pickCards(cards, "scn_73", NOTICE, null, null);
+        assertEquals(List.of("NDK-003", "NDK-001"), List.copyOf(two.cardIds()));
+        assertFalse(two.capped());
+        props.getMatching().getShortlist().setTitleMaxCards(0);
+        answer("{\"card_ids\": [" + rankedIds(30).stream().map(id -> "\"" + id + "\"").collect(java.util.stream.Collectors.joining(", ")) + "]}");
+        assertEquals(30, agent().pickCards(cards, "scn_73", NOTICE, null, null).cardIds().size());
+        props.getMatching().getShortlist().setTitleMaxCards(4);
+        answer("The cards " + String.join(", ", rankedIds(30)) + " apply.");
+        ShortlistTitleAgent.Picks fallback = agent().pickCards(cards, "scn_73", NOTICE, null, null);
+        assertEquals(List.of("NDK-030", "NDK-029", "NDK-028", "NDK-027"), List.copyOf(fallback.cardIds()));
+        assertTrue(fallback.parseFallback() && fallback.capped() && fallback.returnedCount() == 30);
+    }
+
+    @Test
+    void theMergedShortlistIsTheSameForTheSameInputs_whateverTheOrderOfTheIds() {
+        List<IssueCard> cards = thirtyCards();
+        String text = "Show cause notice under Section 73. Demand under Section 105 and Section 110.";
+        List<String> ranked = rankedIds(30).subList(0, 15);
+        List<String> shuffled = new ArrayList<>(ranked);
+        Collections.shuffle(shuffled, new java.util.Random(7));
+        CardShortlister.Shortlist a = CardShortlister.shortlist(cards, "scn_73", null, text, CardShortlister.Options.DEFAULT,
+                new LinkedHashSet<>(ranked), CardShortlister.AI_USED);
+        CardShortlister.Shortlist b = CardShortlister.shortlist(cards, "scn_73", null, text, CardShortlister.Options.DEFAULT,
+                new LinkedHashSet<>(shuffled), CardShortlister.AI_USED);
+        CardShortlister.Shortlist c = CardShortlister.shortlist(cards, "scn_73", null, text, CardShortlister.Options.DEFAULT,
+                new LinkedHashSet<>(ranked), CardShortlister.AI_USED);
+        assertEquals(a.cardIds(), b.cardIds(), "the rendered shortlist does not depend on the order the ids came in");
+        assertEquals(a.cardIds(), c.cardIds());
+        assertEquals(a.describe(), b.describe());
+        assertEquals(List.of("NDK-005", "NDK-010"), List.copyOf(a.labelPicks()), "the two label hits");
+        assertTrue(a.cardIds().containsAll(ranked) && a.cardIds().containsAll(a.labelPicks()));
+        assertEquals(17, a.size(), "15 AI picks + 2 label picks");
+        // catalogue order: the same set always renders in the same order
+        List<String> sorted = new ArrayList<>(a.cardIds());
+        Collections.sort(sorted);
+        assertEquals(sorted, a.cardIds());
+    }
+
+    @Test
+    void theCallIsMadeAtTemperatureZeroWhenTheProviderTakesOne() {
+        // a mocked provider has no per-call temperature (withTemperature returns null on a mock): the call is unchanged
+        answer("{\"card_ids\": [\"NDK-003\"]}");
+        assertEquals(Set.of("NDK-003"), agent().pickCards(CARDS, "scn_73", NOTICE, null, null).cardIds());
+        // a provider that takes one is asked for the fixed-temperature view and that view makes the call
+        LlmProvider plain = Mockito.mock(LlmProvider.class);
+        LlmProvider fixed = Mockito.mock(LlmProvider.class);
+        Mockito.when(plain.withTemperature(0.0)).thenReturn(fixed);
+        Mockito.when(fixed.generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean()))
+                .thenReturn(new LlmResponse("{\"card_ids\": [\"NDK-004\"]}", MODEL, "anthropic", 10, 5));
+        Mockito.when(factory.getLlmForAgent(Mockito.anyString())).thenReturn(plain);
+        assertEquals(Set.of("NDK-004"), agent().pickCards(CARDS, "scn_73", NOTICE, null, null).cardIds());
+        Mockito.verify(plain).withTemperature(0.0);
+        Mockito.verify(plain, Mockito.never()).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
     }
 
     // ------------------------------------------------------------------ the call
@@ -269,7 +359,9 @@ class ShortlistTitleAgentTest {
 
         assertNull(agent().pickCards(CARDS, "scn_73", NOTICE, null, tiny));
 
-        Mockito.verifyNoInteractions(llm);
+        // the provider is only asked for its fixed-temperature view; no call is made
+        Mockito.verify(llm, Mockito.never()).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+        Mockito.verify(llm, Mockito.never()).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
         assertEquals(1, tiny.budgetRefusals());
     }
 

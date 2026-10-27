@@ -1,5 +1,6 @@
 package com.noticedesk.api.service.matching;
 
+import com.noticedesk.api.agent.AssumedFact;
 import com.noticedesk.api.agent.CitationVerificationAgent;
 import com.noticedesk.api.agent.CitationVerificationAgent.VerifiedCitation;
 import com.noticedesk.api.agent.IssueMatchingAgent.MatchedIssue;
@@ -27,7 +28,7 @@ public class DraftCheckService {
     private static final Pattern UNRESOLVED_REF = Pattern.compile("\\[ref\\]", Pattern.CASE_INSENSITIVE);
     // "null and void" is a legal phrase, not a leaked null value
     private static final Pattern NULL_VALUE = Pattern.compile("\\bnull\\b(?!\\s+and\\s+void)", Pattern.CASE_INSENSITIVE);
-    private static final Pattern STRAY_MARKER = Pattern.compile("\\[\\[(?!MISSING:|PENDING_AI:|PARTNER:)[^\\]]{0,40}");
+    private static final Pattern STRAY_MARKER = Pattern.compile("\\[\\[(?!MISSING:|CONFIRM:|PENDING_AI:|PARTNER:)[^\\]]{0,40}");
     private static final Pattern INTERNAL_TEXT = Pattern.compile(
             "(?i)no template available|no_template_available|\\bCARD-\\d+\\b|\\bTPL-[A-Z0-9-]+|\\bBLK-[A-Z0-9-]+"
             + "|match status|strength note|\\[STUB\\b|\\b(?:opus|sonnet|haiku|claude|gpt-?\\d*|gemini)\\b");
@@ -175,7 +176,8 @@ public class DraftCheckService {
                 placeholderDetails
         ));
 
-        // 6. CHECK_MARKERS_LIST (block if MISSING or PENDING_AI markers exist)
+        // 6. CHECK_MARKERS_LIST (block if MISSING, CONFIRM or PENDING_AI markers exist): a CONFIRM marker (a fact a
+        //    writer assumed, to be confirmed with the client) is counted like a MISSING marker
         Pattern missingPattern = Pattern.compile("\\[\\[MISSING: ([^\\]]+)\\]\\]");
         Pattern pendingAiPattern = Pattern.compile("\\[\\[PENDING_AI: ([^\\]]+)\\]\\]");
 
@@ -186,6 +188,7 @@ public class DraftCheckService {
         }
         // one entry per data item (normalised key, synonyms merged), shown in its first original wording
         List<String> missingMarkers = DraftTextCleanup.dedupeMarkers(rawMissing);
+        List<String> confirmMarkers = DraftTextCleanup.dedupeMarkers(DraftTextCleanup.confirmMarkers(fullReplyHtml));
 
         Matcher pendingMatcher = pendingAiPattern.matcher(fullReplyHtml);
         List<String> pendingAiMarkers = new ArrayList<>();
@@ -193,14 +196,15 @@ public class DraftCheckService {
             pendingAiMarkers.add(pendingMatcher.group(1));
         }
 
-        boolean markersClean = missingMarkers.isEmpty() && pendingAiMarkers.isEmpty();
-        results.add(new DraftCheckResult(
-                "CHECK_MARKERS_LIST",
-                "block",
-                markersClean,
-                Map.of("missing_count", missingMarkers.size(), "missing_markers", missingMarkers,
-                       "pending_ai_count", pendingAiMarkers.size(), "pending_ai_markers", pendingAiMarkers)
-        ));
+        boolean markersClean = missingMarkers.isEmpty() && pendingAiMarkers.isEmpty() && confirmMarkers.isEmpty();
+        Map<String, Object> markerDetails = new LinkedHashMap<>();
+        markerDetails.put("missing_count", missingMarkers.size());
+        markerDetails.put("missing_markers", missingMarkers);
+        markerDetails.put("confirm_count", confirmMarkers.size());
+        markerDetails.put("confirm_markers", confirmMarkers);
+        markerDetails.put("pending_ai_count", pendingAiMarkers.size());
+        markerDetails.put("pending_ai_markers", pendingAiMarkers);
+        results.add(new DraftCheckResult("CHECK_MARKERS_LIST", "block", markersClean, markerDetails));
 
         // 7. CHECK_NO_DUPLICATE_BLOCKS (warn)
         List<String> blockIds = new ArrayList<>();
@@ -253,6 +257,44 @@ public class DraftCheckService {
         }
 
         return results;
+    }
+
+    /** Check name of {@link #assumedFactsCheck}. */
+    public static final String CHECK_ASSUMED_FACTS = "CHECK_ASSUMED_FACTS";
+
+    /**
+     * Stage 3 check (warn, never block) listing every fact the AI writers assumed: the {@code assumed_facts} they
+     * returned (as "Issue #n: fact" lines, with the sentence each supports) and the [[CONFIRM: ...]] markers found in
+     * the draft (de-duplicated). Passes when there is neither. The partner confirms each fact with the client; the
+     * CONFIRM markers themselves also fail CHECK_MARKERS_LIST (block) until they are resolved.
+     *
+     * @param assumedFacts "Issue #n" -> the facts that issue's writer returned
+     * @param sections     the assembled sections (the CONFIRM markers are read from all of them)
+     */
+    public DraftCheckResult assumedFactsCheck(Map<Integer, List<AssumedFact>> assumedFacts, List<AssembledSection> sections) {
+        List<String> facts = new ArrayList<>();
+        List<Map<String, Object>> detailed = new ArrayList<>();
+        if (assumedFacts != null) {
+            for (Map.Entry<Integer, List<AssumedFact>> e : assumedFacts.entrySet()) {
+                for (AssumedFact f : e.getValue() != null ? e.getValue() : List.<AssumedFact>of()) {
+                    if (f == null || f.fact() == null || f.fact().isBlank()) continue;
+                    facts.add("Issue #" + e.getKey() + ": " + f.fact());
+                    Map<String, Object> d = new LinkedHashMap<>();
+                    d.put("issue_no", e.getKey());
+                    d.put("fact", f.fact());
+                    if (f.sentence() != null && !f.sentence().isBlank()) d.put("sentence", f.sentence());
+                    detailed.add(d);
+                }
+            }
+        }
+        List<String> markers = DraftTextCleanup.dedupeMarkers(DraftTextCleanup.confirmMarkers(getAllSectionsHtml(sections != null ? sections : List.of())));
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("assumed_count", facts.size());
+        details.put("assumed_facts", facts);
+        details.put("assumed_facts_detail", detailed);
+        details.put("confirm_count", markers.size());
+        details.put("confirm_markers", markers);
+        return new DraftCheckResult(CHECK_ASSUMED_FACTS, "warn", facts.isEmpty() && markers.isEmpty(), details);
     }
 
     /**

@@ -165,12 +165,20 @@ INDIANKANOON_API_TOKEN=your-token-here
 # citations are NOT_CHECKED (block flag). HTTP 401 / 403 / 429 from IndianKanoon stop the run.
 INDIANKANOON_COST_INR_PER_SEARCH=0
 INDIANKANOON_COST_INR_PER_FRAGMENT=0
+# cases an AI writer may cite per issue (the writer prompts ask for at most 3). Extra cases stay in the text,
+# are marked NOT_CHECKED ("beyond per-issue citation limit") and are never sent to IndianKanoon. 0 = no limit.
+CITATIONS_MAX_PER_ISSUE=3
 ```
 
 Citation-only live check (no model calls): `ENABLE_E2E_TESTS=true INDIANKANOON_API_TOKEN=... mvn test
 -Dtest=CitationCheckRunnerTest` prints the status of five well-known citations (one invented, must be
-NOT_FOUND), the IndianKanoon call count and the configured cost. `CITATION_CHECK_LIST="case|court|year;..."`
-overrides the list.
+NOT_FOUND), the IndianKanoon call count and the configured cost. `CITATION_CHECK_LIST="case|court|year|quoted text;..."`
+overrides the list (court, year and quoted text optional; a quoted text costs one fragment call).
+
+A cited name is matched against the IndianKanoon title after both are normalised (Pvt / Private, Ltd / Limited,
+(P), Commr / Commissioner, CCE, "&" / "and", "M/s", "and others", bracketed parts, the judgment date and
+initials such as "D.Y.Beathel"); the cited court against the docsource ("Supreme Court of India", "<place> High
+Court", "CESTAT", "Appellate Tribunal").
 
 ### 3.3 Verify
 

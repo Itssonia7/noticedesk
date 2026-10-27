@@ -100,6 +100,10 @@ Key `.env` defaults (already stub-mode, no API keys required to run):
 - `CITATION_PROVIDER=stub` — set to `indiankanoon` + `INDIANKANOON_API_TOKEN=...` for real citation verification
 - `INDIANKANOON_COST_INR_PER_SEARCH=0` / `INDIANKANOON_COST_INR_PER_FRAGMENT=0` — real INR price of one IndianKanoon
   search / fragment call (set from your IndianKanoon plan); logged per call and counted against the per-notice cost cap
+- `CITATIONS_MAX_PER_ISSUE=3` — cases an AI writer may cite per issue; extra cases stay in the text but are
+  NOT_CHECKED (never sent to IndianKanoon) and listed in the partner note
+- `SHORTLIST_TITLE_MAX_CARDS=15` — cards kept from the AI shortlist title pass (ranked answer, first N kept at
+  temperature 0), so the matching prompt is the same size from run to run on the same notice
 - `CATALOGUE_INCLUDE_PROVISIONAL=true` — v7 matching also sees issue cards / reply templates promoted from an approved
   AI issue section (`POST /api/v7/ai-sections/{id}/promote`); set `false` to match against CA-approved content only
 - `AUTH_PROVIDER=dev` — dev header bypass, only works when `ENVIRONMENT=development`

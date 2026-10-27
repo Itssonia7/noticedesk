@@ -166,8 +166,16 @@ noticedesk:
       # it (measured: 1,500 truncated 11 of 14 notices, 3,000 still truncated one)
       title-max-tokens: ${MATCHING_SHORTLIST_TITLE_MAX_TOKENS:6000}
       title-retry-max-tokens: ${MATCHING_SHORTLIST_TITLE_RETRY_MAX_TOKENS:9000}
+      # the AI title pass answers a RANKED list; only the first this many ids are used (in rank order), so the
+      # shortlist and the matching prompt are the same size from run to run on the same notice. 0 = keep every id.
+      title-max-cards: ${SHORTLIST_TITLE_MAX_CARDS:15}
       # true: the shortlisted card ids (full, titles-only, defect-check cards; ids only) are logged at INFO, else DEBUG
       log-ids: ${MATCHING_SHORTLIST_LOG_IDS:false}
+    citations:
+      # cases an AI writer may cite per issue (the prompts ask for at most 3). Cases beyond the limit stay in the text
+      # but are marked NOT_CHECKED ("beyond per-issue citation limit"), listed in the partner note and never sent to
+      # IndianKanoon (a paid call per case). 0 = no limit.
+      max-per-issue: ${CITATIONS_MAX_PER_ISSUE:3}
   catalogue:
     # Provisional content = 'draft' issue cards promoted from an approved AI issue section (card ids
     # NDK-AI-nnn or a new draft version of an existing card) and their 'provisional' reply templates.

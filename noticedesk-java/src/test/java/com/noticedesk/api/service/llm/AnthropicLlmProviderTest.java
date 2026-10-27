@@ -162,6 +162,28 @@ class AnthropicLlmProviderTest {
     }
 
     @Test
+    void withTemperature_sendsZeroToSamplingModels_andNothingToThinkingModels() {
+        AnthropicLlmProvider p = providerFor("claude-3-5-haiku-20241022");
+        AnthropicLlmProvider fixed = (AnthropicLlmProvider) p.withTemperature(0.0);
+        assertEquals(0.0, fixed.fixedTemperature());
+        assertNull(p.fixedTemperature(), "the original provider is unchanged");
+        ObjectNode body = fixed.buildRequestBody("s", "u", "claude-3-5-haiku-20241022", 4000, 0.0, "low", true);
+        assertTrue(body.has("temperature"), "temperature 0 is sent explicitly, not left to the API default");
+        assertEquals(0.0, body.path("temperature").asDouble(), 1e-9);
+        assertFalse(p.buildRequestBody("s", "u", "claude-3-5-haiku-20241022", 4000, 0.0, "low", true).has("temperature"),
+                "without withTemperature a 0.0 is not sent (legacy rule)");
+
+        // thinking models reject sampling parameters: the effort setting stays, no temperature
+        AnthropicLlmProvider thinking = (AnthropicLlmProvider) providerFor("claude-opus-5-5").withTemperature(0.0);
+        ObjectNode effortBody = thinking.buildRequestBody("s", "u", "claude-opus-5-5", 4000, 0.0, "low", true);
+        assertFalse(effortBody.has("temperature"));
+        assertEquals("low", effortBody.path("output_config").path("effort").asText());
+        // models that deprecate temperature never get one either
+        assertFalse(((AnthropicLlmProvider) providerFor("claude-sonnet-4-20250514").withTemperature(0.0))
+                .buildRequestBody("s", "u", "claude-sonnet-4-20250514", 4000, 0.0, null, true).has("temperature"));
+    }
+
+    @Test
     void maxTokens_isClampedToConfiguredCeiling() {
         AnthropicLlmProvider p = new AnthropicLlmProvider("k", "claude-sonnet-5-5", 10.0, null, EFFORT_MODELS, 12000);
         ObjectNode body = p.buildRequestBody("s", "u", "claude-sonnet-5-5", 16000, 0.0, "low", true);

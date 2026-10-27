@@ -33,6 +33,31 @@ public class AnthropicLlmProvider implements LlmProvider {
     private final RestClient restClient;
     private final Set<String> effortModels;
     private final int maxTokensCeiling;
+    /** Temperature sent with every call of this instance (even 0.0); null = the legacy rule (only when > 0). */
+    private final Double fixedTemperature;
+
+    /** A view of {@code base} that sends {@code temperature} (0.0 included) to models that accept one. */
+    private AnthropicLlmProvider(AnthropicLlmProvider base, double temperature) {
+        this.model = base.model;
+        this.restClient = base.restClient;
+        this.effortModels = base.effortModels;
+        this.maxTokensCeiling = base.maxTokensCeiling;
+        this.fixedTemperature = temperature;
+    }
+
+    /**
+     * {@inheritDoc} Thinking (effort) models reject sampling parameters and keep their effort setting; for every other
+     * model the temperature is sent on each call of the returned instance, 0.0 included.
+     */
+    @Override
+    public LlmProvider withTemperature(double temperature) {
+        return new AnthropicLlmProvider(this, temperature);
+    }
+
+    /** The temperature fixed by {@link #withTemperature}, or null. */
+    Double fixedTemperature() {
+        return fixedTemperature;
+    }
 
     public AnthropicLlmProvider(String apiKey, String model, double timeoutSeconds, String workspaceId,
                                 Collection<String> effortModels, int maxTokensCeiling) {
@@ -51,6 +76,7 @@ public class AnthropicLlmProvider implements LlmProvider {
         this.model = model.trim();
         this.effortModels = normaliseModels(effortModels);
         this.maxTokensCeiling = maxTokensCeiling > 0 ? maxTokensCeiling : LEGACY_MAX_TOKENS_CEILING;
+        this.fixedTemperature = null;
 
         int timeoutMs = (int) (timeoutSeconds * 1000);
         RequestConfig requestConfig = RequestConfig.custom()
@@ -224,6 +250,8 @@ public class AnthropicLlmProvider implements LlmProvider {
             } else if (effort != null) {   // null = legacy call path that has no effort setting
                 log.warn("anthropic_effort_unset model={}: no output_config.effort sent, model default applies", activeModel);
             }
+        } else if (fixedTemperature != null && !modelDeprecatesTemperature(activeModel)) {
+            body.put("temperature", fixedTemperature);   // withTemperature: sent on every call, 0.0 included
         } else if (temperature > 0.0 && !modelDeprecatesTemperature(activeModel)) {
             body.put("temperature", temperature);
         }

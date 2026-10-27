@@ -199,9 +199,9 @@ class ShortlistDryRunTest {
             guard.attach(usage);
             guard.printSettings(System.out);
             agent = new ShortlistTitleAgent(props, om, usage, new LlmFactory(props));
-            System.out.printf("AI title pass: model=%s effort=%s max_tokens=%d retry_max_tokens=%d%n", model,
+            System.out.printf("AI title pass: model=%s effort=%s max_tokens=%d retry_max_tokens=%d max_cards=%d%n", model,
                     props.getLlm().effortForAgent(AppProperties.Llm.SHORTLIST), props.maxTokensForAgent(AppProperties.Llm.SHORTLIST, false),
-                    props.maxTokensForAgent(AppProperties.Llm.SHORTLIST, true));
+                    props.maxTokensForAgent(AppProperties.Llm.SHORTLIST, true), props.getMatching().getShortlist().getTitleMaxCards());
             if (guard.smoke()) notices = notices.subList(0, 1);
         }
 
@@ -243,8 +243,10 @@ class ShortlistDryRunTest {
                     line.append(" | AI FAILED after retry: labels only");
                 } else {
                     aiPickSizes.add(picks.cardIds().size());
-                    line.append(String.format(Locale.ROOT, " | ai %d%s | labels with-AI cut-off %d", picks.cardIds().size(),
-                            picks.parseFallback() ? " (parse fallback)" : "", withAi.labelPicks().size()));
+                    // the title-pass ids as they would go to the matcher (rank order, after the title-max-cards cap)
+                    line.append(String.format(Locale.ROOT, " | ai %d%s%s %s | labels with-AI cut-off %d", picks.cardIds().size(),
+                            picks.capped() ? " of " + picks.returnedCount() + " returned" : "",
+                            picks.parseFallback() ? " (parse fallback)" : "", picks.cardIds(), withAi.labelPicks().size()));
                 }
                 line.append(String.format(Locale.ROOT, " | union %s", withAi.describe()));
             }
@@ -376,9 +378,9 @@ class ShortlistDryRunTest {
         }
         String out = buf.toString(java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(out.contains("relative cutoff 0.35, min cards 15 (with AI picks: 0.50, 12)"), out);
-        assertTrue(java.util.regex.Pattern.compile("N-1 \\[scn_73\\] pool 4 \\| labels 2 -> .* \\| ai 1 \\| labels with-AI cut-off 2 \\| union \\d+ cards").matcher(out).find(), out);
+        assertTrue(java.util.regex.Pattern.compile("N-1 \\[scn_73\\] pool 4 \\| labels 2 -> .* \\| ai 1 \\[T-003\\] \\| labels with-AI cut-off 2 \\| union \\d+ cards").matcher(out).find(), out);
         assertTrue(out.contains("N-2 [scn_73]") && out.contains("| AI FAILED after retry: labels only | union"), out);
-        assertTrue(java.util.regex.Pattern.compile("N-3 .* \\| ai 1 \\| labels with-AI cut-off 2").matcher(out).find(), out);
+        assertTrue(java.util.regex.Pattern.compile("N-3 .* \\| ai 1 \\[T-003\\] \\| labels with-AI cut-off 2").matcher(out).find(), out);
         assertTrue(out.contains("N-4 [scn_73]"), out);
         assertFalse(out.contains("N-5 [scn_73]"), "the run stops on the second failed notice in a row");
         assertTrue(out.contains("RUN STOPPED: 2 consecutive failed or unusable model calls [shortlist#2:max_tokens, shortlist#2:max_tokens]"), out);

@@ -1,6 +1,7 @@
 package com.noticedesk.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.noticedesk.api.agent.AssumedFact;
 import com.noticedesk.api.agent.CitationVerificationAgent;
 import com.noticedesk.api.agent.CitationVerificationAgent.CitationVerificationResult;
 import com.noticedesk.api.agent.CitationVerificationAgent.VerifiedCitation;
@@ -112,6 +113,8 @@ public class V7DraftingPipelineService {
             "[[PARTNER: no catalogue card and no substantive demand identified for this ground; review the document]]";
     /** Draft flag (info) raised when the new-issue writer was skipped for an issue without a substantive ground. */
     public static final String FLAG_NEW_ISSUE_WRITER_SKIPPED = "info:new_issue_writer_skipped";
+    /** Draft flag (info): citations beyond {@code matching.citations.max-per-issue} were held back from IndianKanoon. */
+    public static final String FLAG_CITATION_LIMIT = "info:citation_limit_applied";
     /**
      * Words in an unmatched issue's label / why that mark an administrative document rather than a ground
      * (a corrigendum, an intimation of hearing date, an acknowledgement, a reminder, no ground / demand).
@@ -253,10 +256,15 @@ public class V7DraftingPipelineService {
     /** Stage 3 output of one issue before citation clean-up. */
     private record IssueAiOutput(MatchedIssue issue, String writer, List<AiFragment> fragments, List<RawAiCitation> citations,
                                  List<String> documents, String summaryLine, String strengthNote,
-                                 String model, String promptVersion, boolean placeholder) {
+                                 String model, String promptVersion, boolean placeholder, List<AssumedFact> assumedFacts) {
+        IssueAiOutput {
+            assumedFacts = assumedFacts != null ? List.copyOf(assumedFacts) : List.of();
+        }
+
         IssueAiOutput(MatchedIssue issue, String writer, List<AiFragment> fragments, List<RawAiCitation> citations,
-                      List<String> documents, String summaryLine, String strengthNote, String model, String promptVersion) {
-            this(issue, writer, fragments, citations, documents, summaryLine, strengthNote, model, promptVersion, false);
+                      List<String> documents, String summaryLine, String strengthNote, String model, String promptVersion,
+                      List<AssumedFact> assumedFacts) {
+            this(issue, writer, fragments, citations, documents, summaryLine, strengthNote, model, promptVersion, false, assumedFacts);
         }
 
         /** The issue is left to the partner: a [[PARTNER]] placeholder in sections 04 and 06, no model output. */
@@ -272,13 +280,13 @@ public class V7DraftingPipelineService {
         private static IssueAiOutput partnerPlaceholder(MatchedIssue issue, String marker, String writer) {
             String p = "<p>" + marker + "</p>";
             return new IssueAiOutput(issue, writer, List.of(new AiFragment(4, null, p), new AiFragment(6, null, p)),
-                    List.of(), List.of(), marker, null, null, null, true);
+                    List.of(), List.of(), marker, null, null, null, true, List.of());
         }
 
         /** A code-found defect with no catalogue card: its [[PARTNER]] note in Section 04 (rendered in 07), no writer call. */
         static IssueAiOutput codeDefectPlaceholder(MatchedIssue issue, String marker) {
             return new IssueAiOutput(issue, "none (defect found by code check, no catalogue card)",
-                    List.of(new AiFragment(4, null, "<p>" + marker + "</p>")), List.of(), List.of(), marker, null, null, null, true);
+                    List.of(new AiFragment(4, null, "<p>" + marker + "</p>")), List.of(), List.of(), marker, null, null, null, true, List.of());
         }
 
         /** An unmatched issue without a substantive ground: one [[PARTNER]] line in Section 04, no writer call. */
@@ -286,7 +294,7 @@ public class V7DraftingPipelineService {
             String p = "<p>" + NO_SUBSTANTIVE_GROUND_PLACEHOLDER + "</p>";
             return new IssueAiOutput(issue, "none (new-issue writer skipped: no substantive ground)",
                     List.of(new AiFragment(4, null, p)), List.of(), List.of(), NO_SUBSTANTIVE_GROUND_PLACEHOLDER,
-                    null, null, null, true);
+                    null, null, null, true, List.of());
         }
     }
 
@@ -459,18 +467,27 @@ public class V7DraftingPipelineService {
             }
         }
 
-        // ---- Stage 3: citation check on every AI citation (each case / provision once)
+        // ---- Stage 3: citation check on every AI citation (each case / provision once), at most
+        //      matching.citations.max-per-issue cases per issue (the rest NOT_CHECKED, never sent)
         List<RawAiCitation> rawCitations = new ArrayList<>();
         aiOutputs.forEach(o -> rawCitations.addAll(o.citations()));
         if (hsResult != null && hsResult.citations() != null) rawCitations.addAll(hsResult.citations());
-        List<RawAiCitation> allCitations = CitationVerificationAgent.dedupeCitations(rawCitations);
+        CitationSplit split = applyCitationLimit(aiOutputs, hsResult != null ? hsResult.citations() : null, citationsMaxPerIssue(), notes);
+        if (!split.beyondLimit().isEmpty()) stageFlags.add(FLAG_CITATION_LIMIT);
+        List<RawAiCitation> allCitations = CitationVerificationAgent.dedupeCitations(split.toCheck());
         if (allCitations.size() < rawCitations.size()) {
-            log.info("AI citations: {} listed, {} after removing duplicates", rawCitations.size(), allCitations.size());
+            log.info("AI citations: {} listed, {} sent to the check after removing duplicates and the per-issue limit ({} held back)",
+                    rawCitations.size(), allCitations.size(), split.beyondLimit().size());
         }
 
         // IndianKanoon calls are priced from configuration and count against the same per-notice cap
         CitationVerificationResult citationResult = verifyCitations(allCitations, noticeId, budget);
-        List<VerifiedCitation> verified = citationResult.citations();
+        List<VerifiedCitation> verified = new ArrayList<>(citationResult.citations());
+        verified.addAll(split.beyondLimit());
+        allCitations = new ArrayList<>(allCitations);
+        for (VerifiedCitation held : split.beyondLimit()) {
+            allCitations.add(new RawAiCitation(held.caseName(), held.court(), held.year(), held.quotedText(), held.rawText()));
+        }
 
         Set<String> notFoundIds = new HashSet<>();
         for (VerifiedCitation vc : verified) {
@@ -491,6 +508,17 @@ public class V7DraftingPipelineService {
         }
         if (citationResult.flags().contains(CitationVerificationAgent.FLAG_IK_COST_CAP)) {
             notes.add("Per-notice cost cap reached before every citation was checked: remaining citations are NOT_CHECKED.");
+        }
+
+        // facts the writers assumed ([[CONFIRM: ...]] in the text): one partner note line per fact
+        Map<Integer, List<AssumedFact>> assumedFacts = new LinkedHashMap<>();
+        for (IssueAiOutput o : aiOutputs) {
+            if (o.assumedFacts().isEmpty()) continue;
+            assumedFacts.put(o.issue().issueNo(), o.assumedFacts());
+            for (AssumedFact f : o.assumedFacts()) {
+                notes.add("Issue #" + o.issue().issueNo() + " fact to confirm with the client: " + HtmlSanitizer.sanitize(f.fact())
+                        + (f.sentence() != null && !f.sentence().isBlank() ? " (supports: " + HtmlSanitizer.sanitize(f.sentence()) + ")" : ""));
+            }
         }
 
         Map<Integer, AiIssueContent> aiContent = new LinkedHashMap<>();
@@ -557,6 +585,9 @@ public class V7DraftingPipelineService {
         if (!allCitations.isEmpty()) {
             checkResults.addAll(draftCheckService.citationChecks(verified));
         }
+        if (!aiOutputs.isEmpty()) {
+            checkResults.add(draftCheckService.assumedFactsCheck(assumedFacts, assemblyResult.sections()));
+        }
         Set<String> flags = new LinkedHashSet<>(stageFlags);
         Map<String, Map<String, Object>> flagDetails = new LinkedHashMap<>(stageFlagDetails);
         for (FilledTemplateResult ft : filledTemplates) {
@@ -583,7 +614,7 @@ public class V7DraftingPipelineService {
 
         List<DraftSection> draftSections = new ArrayList<>();
         String checkHtml = renderCheckResults(checkResults, assemblyResult,
-                assemblyResult.sections().stream().map(AssembledSection::bodyHtml).toList());
+                assemblyResult.sections().stream().map(AssembledSection::bodyHtml).toList(), assumedFacts);
         for (AssembledSection s : assemblyResult.sections()) {
             String bodyHtml = s.bodyHtml();
             if (s.num() == 13) {
@@ -1180,7 +1211,7 @@ public class V7DraftingPipelineService {
             }
             // the partner note's "Written by" names the model tier that wrote the issue
             return new IssueAiOutput(issue, highStakes ? "high_stakes" : "partial", frags, nn(r.citations()), nn(r.documents()), r.summaryLine(), null,
-                    r.model(), r.promptVersion());
+                    r.model(), r.promptVersion(), r.assumedFacts());
         }
 
         if (!"none".equalsIgnoreCase(issue.status())) {
@@ -1198,7 +1229,69 @@ public class V7DraftingPipelineService {
         if (r.section05Html() != null && !r.section05Html().isBlank()) frags.add(new AiFragment(5, null, HtmlSanitizer.sanitize(r.section05Html())));
         if (r.section06Html() != null && !r.section06Html().isBlank()) frags.add(new AiFragment(6, null, HtmlSanitizer.sanitize(r.section06Html())));
         return new IssueAiOutput(issue, highStakes ? "high_stakes" : "new_issue", frags, nn(r.citations()), nn(r.documents()), r.summaryLine(),
-                r.strengthNote(), r.model(), r.promptVersion());
+                r.strengthNote(), r.model(), r.promptVersion(), r.assumedFacts());
+    }
+
+    /** Detail text of a citation beyond {@code matching.citations.max-per-issue} (never sent to IndianKanoon). */
+    public static final String BEYOND_CITATION_LIMIT = "beyond per-issue citation limit";
+
+    /** {@code matching.citations.max-per-issue} (env CITATIONS_MAX_PER_ISSUE); 0 = no limit. */
+    int citationsMaxPerIssue() {
+        if (properties == null || properties.getMatching() == null || properties.getMatching().getCitations() == null) {
+            return AppProperties.Matching.Citations.DEFAULT_MAX_PER_ISSUE;
+        }
+        return Math.max(0, properties.getMatching().getCitations().getMaxPerIssue());
+    }
+
+    /** The citations the IndianKanoon check receives and the ones held back by the per-issue limit. */
+    record CitationSplit(List<RawAiCitation> toCheck, List<VerifiedCitation> beyondLimit) {}
+
+    /**
+     * Applies the per-issue citation limit: for every issue the first {@code limit} distinct cases (statutory
+     * references such as "Section 16(2)(c)" never count) are checked; a case cited beyond the limit by every issue
+     * that cites it is kept in the text, marked NOT_CHECKED with details {@link #BEYOND_CITATION_LIMIT}, and never
+     * sent to IndianKanoon. A case within the limit for one issue is checked once for all. High-stakes citations
+     * ({@code extra}) are always checked.
+     */
+    static CitationSplit applyCitationLimit(List<IssueAiOutput> outputs, List<RawAiCitation> extra, int limit, List<String> notes) {
+        Set<String> within = new LinkedHashSet<>();
+        Map<String, RawAiCitation> beyond = new LinkedHashMap<>();
+        for (IssueAiOutput o : outputs) {
+            int cases = 0;
+            List<String> held = new ArrayList<>();
+            for (RawAiCitation c : CitationVerificationAgent.dedupeCitations(o.citations())) {
+                String id = CitationVerificationAgent.citationIdentity(c.caseName());
+                boolean statutory = id.contains(":");
+                if (statutory || limit <= 0 || cases < limit) {
+                    if (!statutory) cases++;
+                    within.add(id);
+                } else {
+                    beyond.putIfAbsent(id, c);
+                    held.add(c.caseName());
+                }
+            }
+            if (!held.isEmpty() && notes != null) {
+                notes.add("Issue #" + o.issue().issueNo() + ": " + held.size() + " citation(s) beyond the per-issue limit of " + limit
+                        + " not sent to IndianKanoon (kept in the text, NOT_CHECKED): " + String.join("; ", held));
+            }
+        }
+        for (RawAiCitation c : extra != null ? extra : List.<RawAiCitation>of()) {
+            if (c != null && c.caseName() != null) within.add(CitationVerificationAgent.citationIdentity(c.caseName()));
+        }
+        List<RawAiCitation> toCheck = new ArrayList<>();
+        List<VerifiedCitation> heldBack = new ArrayList<>();
+        for (IssueAiOutput o : outputs) {
+            for (RawAiCitation c : o.citations()) {
+                if (within.contains(CitationVerificationAgent.citationIdentity(c.caseName()))) toCheck.add(c);
+            }
+        }
+        if (extra != null) toCheck.addAll(extra);
+        for (RawAiCitation c : beyond.values()) {
+            if (within.contains(CitationVerificationAgent.citationIdentity(c.caseName()))) continue;   // checked for another issue
+            heldBack.add(new VerifiedCitation(c.caseName(), c.caseName(), c.citedFor(), CitationVerificationAgent.NOT_CHECKED,
+                    null, null, 0.0, "flagged", BEYOND_CITATION_LIMIT, c.court(), c.year(), c.quotedText()));
+        }
+        return new CitationSplit(toCheck, heldBack);
     }
 
     private CitationVerificationResult verifyCitations(List<RawAiCitation> citations, UUID noticeId, NoticeCallBudget budget) {
@@ -1296,13 +1389,21 @@ public class V7DraftingPipelineService {
         m.put("documents", o.documents());
         m.put("summary_line", o.summaryLine());
         m.put("strength_note", o.strengthNote());
+        List<Map<String, Object>> facts = new ArrayList<>();
+        for (AssumedFact f : o.assumedFacts()) {
+            Map<String, Object> fm = new LinkedHashMap<>();
+            fm.put("fact", f.fact());
+            fm.put("sentence", f.sentence());
+            facts.add(fm);
+        }
+        m.put("assumed_facts", facts);
         return m;
     }
 
     private static final Pattern MISSING_MARKER = Pattern.compile("\\[\\[MISSING: ([^\\]]+)\\]\\]");
 
     private static String renderCheckResults(List<DraftCheckResult> checkResults, AssembledReplyResult assemblyResult,
-                                             List<String> sectionsHtml) {
+                                             List<String> sectionsHtml, Map<Integer, List<AssumedFact>> assumedFacts) {
         StringBuilder sb = new StringBuilder();
         sb.append("<p><strong>Code Quality Check Results & Flags:</strong></p><table>");
         sb.append("<tr><th>Check Name</th><th>Status</th><th>Severity</th><th>Details</th></tr>");
@@ -1321,18 +1422,33 @@ public class V7DraftingPipelineService {
         Matcher mm = MISSING_MARKER.matcher(String.join("\n", sectionsHtml));
         while (mm.find()) missing.add(mm.group(1));
         missing.addAll(assemblyResult.missingMarkers());
-        appendMarkerList(sb, "Missing Data Markers", DraftTextCleanup.dedupeMarkers(missing));
-        appendMarkerList(sb, "Pending AI Markers", assemblyResult.pendingAiMarkers());
+        appendMarkerList(sb, "Missing Data Markers", DraftTextCleanup.dedupeMarkers(missing), "block");
+        // the facts the writers assumed: every [[CONFIRM: fact]] in the draft plus the writers' assumed_facts lists
+        List<String> confirm = new ArrayList<>();
+        for (String html : sectionsHtml) confirm.addAll(DraftTextCleanup.confirmMarkers(html));
+        List<String> toConfirm = new ArrayList<>(DraftTextCleanup.dedupeMarkers(confirm));
+        Set<String> seen = new HashSet<>();
+        for (String c : toConfirm) seen.add(DraftTextCleanup.normaliseMarkerKey(c));
+        if (assumedFacts != null) {
+            for (Map.Entry<Integer, List<AssumedFact>> e : assumedFacts.entrySet()) {
+                for (AssumedFact f : e.getValue()) {
+                    if (f.fact() == null || !seen.add(DraftTextCleanup.normaliseMarkerKey(f.fact()))) continue;
+                    toConfirm.add("Issue #" + e.getKey() + ": " + HtmlSanitizer.sanitize(f.fact()));
+                }
+            }
+        }
+        appendMarkerList(sb, "Facts to confirm with the client", toConfirm, "warn");
+        appendMarkerList(sb, "Pending AI Markers", assemblyResult.pendingAiMarkers(), "block");
         return sb.toString();
     }
 
-    private static void appendMarkerList(StringBuilder sb, String label, List<String> markers) {
+    private static void appendMarkerList(StringBuilder sb, String label, List<String> markers, String severity) {
         if (markers == null || markers.isEmpty()) {
             sb.append("<p><strong>").append(label).append(":</strong> None</p>");
             return;
         }
         sb.append("<p><strong>").append(label).append(":</strong></p><ul>");
-        for (String m : markers) sb.append("<li>").append(m).append(" (severity: block)</li>");
+        for (String m : markers) sb.append("<li>").append(m).append(" (severity: ").append(severity).append(")</li>");
         sb.append("</ul>");
     }
 

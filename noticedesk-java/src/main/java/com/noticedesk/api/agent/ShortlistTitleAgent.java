@@ -37,15 +37,18 @@ import java.util.regex.Pattern;
  * truncated first attempt that the retry repairs is not a failure. A failed or refused call returns null: the
  * shortlist then uses labels only.
  *
- * <p>The answer is ids only ({@code {"card_ids": [...]}}). The provider abstraction has no JSON output mode, so the
- * parser is tolerant: fences are stripped, and when the JSON cannot be read the catalogue ids found in the text
+ * <p>The answer is ids only ({@code {"card_ids": [...]}}), ranked most likely first; only the first
+ * {@code matching.shortlist.title-max-cards} (default 15, env SHORTLIST_TITLE_MAX_CARDS) are kept, in that order, and
+ * the call is made at temperature 0 where the model takes one, so the same notice gives the same shortlist and the
+ * same matching prompt size from run to run. The provider abstraction has no JSON output mode, so the parser is
+ * tolerant: fences are stripped, and when the JSON cannot be read the catalogue ids found in the text
  * ({@link #CARD_ID}) are used, with {@link Picks#parseFallback()} set (flag {@code warn:shortlist_ai_parse_fallback}).
  */
 @Service
 @Slf4j
 public class ShortlistTitleAgent {
 
-    /** File {@code prompts/shortlist_titles_v1.md}; its header carries the revision (v1.1: ids-only answer). */
+    /** File {@code prompts/shortlist_titles_v1.md}; its header carries the revision (v1.1: ids-only answer; v1.2: ranked). */
     public static final String PROMPT_VERSION = "shortlist_titles_v1";
     /** Card ids looked for in an answer whose JSON cannot be read. */
     static final Pattern CARD_ID = Pattern.compile("\\bNDK-(?:AI-)?\\d{3}\\b");
@@ -67,21 +70,58 @@ public class ShortlistTitleAgent {
     }
 
     /**
-     * The cards the model named (catalogue ids only, in the model's order), the model that answered, and whether the
-     * ids were found by {@link #CARD_ID} in an answer whose JSON could not be read.
+     * The cards kept from the model's ranked answer (catalogue ids only, in the model's order, at most
+     * {@code matching.shortlist.title-max-cards}), the model that answered, whether the ids were found by
+     * {@link #CARD_ID} in an answer whose JSON could not be read, and how many catalogue ids the answer named before
+     * the cap ({@code returnedCount} >= {@code cardIds.size()}).
      */
-    public record Picks(Set<String> cardIds, String model, boolean parseFallback) {
+    public record Picks(Set<String> cardIds, String model, boolean parseFallback, int returnedCount) {
         public Picks {
             cardIds = cardIds != null ? Collections.unmodifiableSet(new LinkedHashSet<>(cardIds)) : Set.of();
+            returnedCount = Math.max(returnedCount, cardIds.size());
+        }
+
+        public Picks(Set<String> cardIds, String model, boolean parseFallback) {
+            this(cardIds, model, parseFallback, 0);
         }
 
         public Picks(Set<String> cardIds, String model) {
             this(cardIds, model, false);
         }
+
+        /** True when the answer named more cards than were kept. */
+        public boolean capped() {
+            return returnedCount > cardIds.size();
+        }
     }
 
-    /** Parsed answer: the ids and whether the regex fallback found them. */
-    record Parsed(Set<String> ids, boolean fallback) {}
+    /** Parsed answer: the ids (model order, capped), whether the regex fallback found them, and how many came back. */
+    record Parsed(Set<String> ids, boolean fallback, int returnedCount) {
+        Parsed(Set<String> ids, boolean fallback) {
+            this(ids, fallback, ids != null ? ids.size() : 0);
+        }
+    }
+
+    /** {@code matching.shortlist.title-max-cards} (env SHORTLIST_TITLE_MAX_CARDS); 0 = keep every id. */
+    int maxCards() {
+        if (properties.getMatching() == null || properties.getMatching().getShortlist() == null) {
+            return AppProperties.Matching.Shortlist.DEFAULT_TITLE_MAX_CARDS;
+        }
+        return Math.max(0, properties.getMatching().getShortlist().getTitleMaxCards());
+    }
+
+    /** The first {@link #maxCards()} ids of a ranked answer, in the answer's order. */
+    Parsed cap(Parsed parsed) {
+        int max = maxCards();
+        if (max <= 0 || parsed.ids().size() <= max) return parsed;
+        Set<String> kept = new LinkedHashSet<>();
+        for (String id : parsed.ids()) {
+            if (kept.size() >= max) break;
+            kept.add(id);
+        }
+        log.info("ShortlistTitleAgent: {} card(s) named, the first {} kept (matching.shortlist.title-max-cards)", parsed.ids().size(), max);
+        return new Parsed(kept, parsed.fallback(), parsed.ids().size());
+    }
 
     /** The model of this pass: {@code model-shortlist}, else the matching model; null when neither is set. */
     public String model() {
@@ -115,16 +155,20 @@ public class ShortlistTitleAgent {
         String userPrompt = userPrompt(noticeType, noticeText);
         try {
             LlmProvider llm = llmFactory.getLlmForAgent(AGENT_KEY);
+            // the same notice must give the same shortlist: temperature 0 where the provider / model takes one
+            // (a thinking model keeps its effort setting; the cap below still bounds the list)
+            llm = Objects.requireNonNullElse(llm.withTemperature(0.0), llm);
             Picks picks = WriterCall.run(llm, apiUsageLogService, properties, AGENT_KEY, label, model, systemPrompt, null,
                     userPrompt, noticeId, budget,
                     response -> {
-                        Parsed parsed = parseTolerant(response.content(), byId.keySet());
-                        return new Picks(parsed.ids(), response.model() != null ? response.model() : model, parsed.fallback());
+                        Parsed parsed = cap(parseTolerant(response.content(), byId.keySet()));
+                        return new Picks(parsed.ids(), response.model() != null ? response.model() : model, parsed.fallback(),
+                                parsed.returnedCount());
                     }, true);
             if (picks == null) {
                 log.warn("{} produced no usable output; shortlist by labels only", label);
             } else {
-                log.info("{} named {} card(s){}", label, picks.cardIds().size(),
+                log.info("{} named {} card(s), {} kept{}", label, picks.returnedCount(), picks.cardIds().size(),
                         picks.parseFallback() ? " (ids taken from unparseable JSON)" : "");
             }
             return picks;

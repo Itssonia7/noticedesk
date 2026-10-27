@@ -206,8 +206,24 @@ public final class DraftTextCleanup {
 
     /** A template variable prefix ("issue.", "facts.", "notice.", "client."); never shown in a marker. */
     private static final Pattern VARIABLE_PREFIX = Pattern.compile("(?i)^\\s*(issue|facts|notice|client)\\.(?=\\S)");
-    /** "[[MISSING: issue.x]]" in draft text: the prefix is removed from the visible marker. */
-    private static final Pattern PREFIXED_MARKER = Pattern.compile("(?i)(\\[\\[\\s*MISSING:\\s*)(issue|facts|notice|client)\\.(?=[^\\]\\s])");
+    /** "[[MISSING: issue.x]]" / "[[CONFIRM: issue.x]]" in draft text: the prefix is removed from the visible marker. */
+    private static final Pattern PREFIXED_MARKER = Pattern.compile("(?i)(\\[\\[\\s*(?:MISSING|CONFIRM):\\s*)(issue|facts|notice|client)\\.(?=[^\\]\\s])");
+    /** The "[[MISSING: " / "[[CONFIRM: " wrapper of a marker (either kind: both name a fact the client must supply or confirm). */
+    private static final String MARKER_WRAPPER = "^\\[\\[\\s*(?:MISSING|CONFIRM):\\s*|\\s*\\]\\]$";
+    /**
+     * A fact a writer could not find in the notice or the client facts, written as "[[CONFIRM: <fact>]]" inside a
+     * conditional sentence (the partner confirms it with the client before filing).
+     */
+    public static final Pattern CONFIRM_MARKER = Pattern.compile("\\[\\[\\s*CONFIRM:\\s*([^\\]]+)\\]\\]");
+
+    /** The CONFIRM markers of {@code html} (their fact text, in order of appearance, repeats included). */
+    public static List<String> confirmMarkers(String html) {
+        List<String> out = new ArrayList<>();
+        if (html == null) return out;
+        Matcher m = CONFIRM_MARKER.matcher(html);
+        while (m.find()) out.add(m.group(1).replaceAll("\\s+", " ").trim());
+        return out;
+    }
 
     /**
      * The name a [[MISSING: x]] marker shows: the variable name without its issue. / facts. / notice. prefix;
@@ -219,7 +235,7 @@ public final class DraftTextCleanup {
         return m.find() ? prefixReplacement(m.group(1)) + variable.substring(m.end()) : variable;
     }
 
-    /** Draft HTML with every "[[MISSING: issue.x]]" (any variable prefix) shown as "[[MISSING: x]]" ({@link #markerName}). */
+    /** Draft HTML with every "[[MISSING: issue.x]]" / "[[CONFIRM: issue.x]]" (any variable prefix) shown without the prefix ({@link #markerName}). */
     public static String stripMarkerPrefixes(String html) {
         if (html == null) return null;
         return PREFIXED_MARKER.matcher(html).replaceAll(r -> Matcher.quoteReplacement(r.group(1) + prefixReplacement(r.group(2))));
@@ -237,7 +253,7 @@ public final class DraftTextCleanup {
      */
     public static String normaliseMarkerKey(String key) {
         if (key == null) return "";
-        String k = markerName(key.trim().replaceAll("^\\[\\[\\s*MISSING:\\s*|\\s*\\]\\]$", ""))
+        String k = markerName(key.trim().replaceAll(MARKER_WRAPPER, ""))
                 .toLowerCase(Locale.ROOT)
                 .replaceAll("[\\s\\-]+", "_")
                 .replaceAll("_+", "_")
@@ -257,7 +273,7 @@ public final class DraftTextCleanup {
             for (String m : markers) {
                 String key = normaliseMarkerKey(m);
                 if (key.isEmpty() || firstText.containsKey(key)) continue;
-                String text = markerName(m.trim().replaceAll("^\\[\\[\\s*MISSING:\\s*|\\s*\\]\\]$", "")).replaceAll("\\s+", " ").trim();
+                String text = markerName(m.trim().replaceAll(MARKER_WRAPPER, "")).replaceAll("\\s+", " ").trim();
                 firstText.put(key, text);
             }
         }

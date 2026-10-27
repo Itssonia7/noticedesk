@@ -13,6 +13,8 @@ import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -140,19 +142,38 @@ public class DocxExportService {
                     XWPFParagraph lp = doc.createParagraph();
                     long depth = li.parents().stream().filter(a -> a.tagName().equals("ul") || a.tagName().equals("ol")).count();
                     lp.setIndentationLeft((int) (720 * Math.max(1, depth)));
-                    XWPFRun lr = lp.createRun();
-                    lr.setText("• " + itemText);
-                    lr.setFontFamily("Times New Roman");
-                    lr.setFontSize(11);
+                    addRuns(lp, "• " + itemText, false);
                 }
                 continue;
             }
-            XWPFRun run = p.createRun();
-            run.setText(text);
-            run.setBold(el.tagName().matches("h[1-6]"));   // issue headings and sub-headings
-            run.setFontFamily("Times New Roman");
-            run.setFontSize(11);
+            addRuns(p, text, el.tagName().matches("h[1-6]"));   // issue headings and sub-headings are bold
         }
+    }
+
+    /**
+     * A draft marker the partner must resolve before filing: [[MISSING: x]], [[CONFIRM: fact]], [[PENDING_AI: ...]]
+     * or [[PARTNER: ...]]. Rendered in bold so it stands out in the Word document.
+     */
+    static final Pattern MARKER = Pattern.compile("\\[\\[\\s*(?:MISSING|CONFIRM|PENDING_AI|PARTNER)\\b[^\\]]*\\]\\]");
+
+    /** The text as runs: plain text in the paragraph's weight, every marker ({@link #MARKER}) in bold. */
+    static void addRuns(XWPFParagraph p, String text, boolean bold) {
+        Matcher m = MARKER.matcher(text);
+        int last = 0;
+        while (m.find()) {
+            if (m.start() > last) addRun(p, text.substring(last, m.start()), bold);
+            addRun(p, m.group(), true);
+            last = m.end();
+        }
+        if (last < text.length()) addRun(p, text.substring(last), bold);
+    }
+
+    private static void addRun(XWPFParagraph p, String text, boolean bold) {
+        XWPFRun run = p.createRun();
+        run.setText(text);
+        run.setBold(bold);
+        run.setFontFamily("Times New Roman");
+        run.setFontSize(11);
     }
 
     private String nvl(String s) {

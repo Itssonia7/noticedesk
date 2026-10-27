@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 26-10-2026 (b26: six mechanical draft fixes from the RFD-08 run: client name from the notice, marker prefixes, writer enumerators, para-wise sub-entries, duplicate citations, refund prayer)
+Last updated: 27-10-2026 (b27: IndianKanoon name / court matching, CONFIRM markers for assumed facts, ranked and capped shortlist title pass, per-issue citation limit)
 
 ---
 
@@ -947,8 +947,71 @@ and `V7FirstRealNoticeFixesTest.clientLegalNameFromTheNoticeWhenTheClientRecordH
   only to a ground whose own template / AI text (sections 04 / 06) argues that point. The stage template's Section 12
   is not used for refund notices (partner note says so); Section 15 still comes from the stage template.
 
+## (b27) Citation matching, assumed facts, shortlist cap, citation limit (27-10-2026)
+
+Four fixes from the citation-only live run and the RFD-08 draft, all proved offline (synthetic text, mocked IndianKanoon
+client, no model call): `CitationNameMatchingTest` (6), `V7ConfirmMarkersAndCitationLimitTest` (7), three new tests in
+`ShortlistTitleAgentTest` and one in `AnthropicLlmProviderTest`.
+
+- **1. IndianKanoon name matching** (`CitationVerificationAgent.namesMatch`): the live run returned NOT_FOUND for 10 of
+  11 real cases because 80% of each party's raw words had to appear in the title. Now both sides go through
+  `partyWords`: a second case merged in brackets ("X v. Y (A v. B)") and a reporter citation after the respondent are cut
+  (the search query too: `searchQuery`; a petitioner named "Air India" is no longer cut at "AIR"), the title's trailing
+  " on 13 December, 2021" and bracketed parts ("(Data Cell)") are dropped, "(P)" / Pvt / Ltd / Co / Commr / Asst / Govt /
+  CCE / CIT / UOI / "&" are folded, punctuation inside initials ("M/S.D.Y.Beathel") becomes spaces, and "The", "M/s",
+  "And Another", "& Ors", "Etc" and company suffixes are dropped. Each cited party is compared with the title party in
+  the same position (both orders tried): >= 60% of its words, or every word of the shorter side (two or more words),
+  and the petitioner's key word (first word of three or more letters) is mandatory. The eleven real titles of the run
+  (Suncraft, D.Y. Beathel, Ecom Gill, Oryx Fisheries, Brindavan Beverages, Arise India, Diya Agencies, Coca Cola, LGW ...)
+  now match; a different respondent ("Arise India v Union of India") and the invented default-list case do not.
+  `courtMatches` tells Supreme Court / high court / tribunal / authority apart, folds high-court places (Bombay / Mumbai,
+  Madras / Chennai / Madurai, Calcutta / Kolkata, Karnataka / Bengaluru, Delhi / New Delhi ...), ignores "Hon'ble",
+  "of Judicature", "at", a bench word, "HC" / "SC", and accepts "CESTAT" / "Appellate Tribunal" docsource strings
+  (tribunals agree on their subject, CESTAT / ITAT, and ignore the bench place).
+- **1b. Citation list parser** (`CitationCheckRunnerTest.parseList`): the "year not numeric in 'E v. F|High Court of
+  Delhi|x'" warning in the result file came from the offline parsing test's own deliberately bad entry, not from a live
+  list. The parser now refuses a year that is not a four-digit number and a fifth field with a message naming the entry
+  (instead of a WARNING line and a silently unset year), and accepts an optional fourth field: the quoted text
+  (`case|court|year|quoted text`, one fragment call).
+- **2. Writers must not invent facts** (prompts `partial_drafting_v2.md` / `new_issue_v2.md`, rule 1a): every fact
+  comes from the notice text or the client facts given; a fact an argument needs but the input does not establish is
+  written as `[[CONFIRM: <fact>]]` inside a conditional sentence and returned in `assumed_facts` (fact + the sentence it
+  supports; parsed by `AiOutputParser.assumedFacts`, a plain string accepted, on `PartialDraftingResult` /
+  `NewIssueDraftingResult`, stored in the `ai_issue_sections` output as `assumed_facts`). Code: `CHECK_ASSUMED_FACTS`
+  (warn) lists "Issue #n: fact" lines and the CONFIRM markers found in the draft; `CHECK_MARKERS_LIST` counts CONFIRM
+  markers like MISSING markers (`confirm_count` / `confirm_markers`; the check fails, block); the Section 13 partner note
+  gets one Stage 3 line per fact ("Issue #1 fact to confirm with the client: ... (supports: ...)") and a "Facts to
+  confirm with the client" list next to the missing-data markers; `DraftTextCleanup` treats `[[CONFIRM: ...]]` like
+  `[[MISSING: ...]]` (prefix stripping, de-duplication, `confirmMarkers`); CHECK_NO_UNRESOLVED_PLACEHOLDERS knows the
+  marker; `DocxExportService` prints every `[[MISSING]]` / `[[CONFIRM]]` / `[[PENDING_AI]]` / `[[PARTNER]]` marker as
+  its own bold run. The RFD-08 template for card NDK-006 is private content (`$PRIVATE_SEED_DIR`), not in the repo:
+  its "the supplier filed its GSTR-1 belatedly" wording is for the partner to change there.
+- **3. Shortlist title pass repeatable** (`shortlist_titles_v1.md` v1.2, `ShortlistTitleAgent`): the model answers a
+  RANKED list (most likely first, each id once); the first `matching.shortlist.title-max-cards` (default 15, env
+  `SHORTLIST_TITLE_MAX_CARDS`, 0 = no cap) are kept in rank order (`Picks.returnedCount` / `capped()` say how many came
+  back; the regex fallback is capped too). The call goes through `LlmProvider.withTemperature(0.0)`: the Anthropic
+  provider returns a view that sends `temperature: 0` on every call to a sampling model (previously 0.0 meant "not
+  sent", so the API default applied); a thinking (effort) model keeps its effort setting and never gets a temperature
+  (the cap still bounds the list); other providers and mocks are unchanged. `CardShortlister` already rendered the
+  union in catalogue order; `theMergedShortlistIsTheSameForTheSameInputs_whateverTheOrderOfTheIds` proves it with the
+  15 ids shuffled. `ShortlistDryRunTest` prints the kept title-pass ids per notice ("ai 15 of 30 returned [NDK-...]")
+  and the cap in its settings line.
+- **4. Citation count limit** (prompt rule 6a: at most 3 cases per issue, the ones that matter most, the template's
+  cases preferred, each case once by its own name; `matching.citations.max-per-issue`, default 3, env
+  `CITATIONS_MAX_PER_ISSUE`, 0 = no limit): `V7DraftingPipelineService.applyCitationLimit` keeps the first N distinct
+  cases of each issue (statutory references never count); a case beyond the limit for every issue that cites it stays
+  in the text, is `NOT_CHECKED` with details "beyond per-issue citation limit", is never sent to IndianKanoon, and is
+  listed in the partner note ("Issue #1: 2 citation(s) beyond the per-issue limit of 3 not sent to IndianKanoon ...")
+  with flag `info:citation_limit_applied`. A case within the limit for one issue is checked once for all. As every
+  NOT_CHECKED citation, it fails CHECK_AI_CITATIONS_VERIFIED (block) until the partner removes or verifies it.
+- **Docs**: README and `docs/PRODUCTION-CONFIG.md` list `CITATIONS_MAX_PER_ISSUE`, `SHORTLIST_TITLE_MAX_CARDS` and the
+  four-field `CITATION_CHECK_LIST`.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **587 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 27-10-2026 after (b27), the Spring context test included (local Postgres 16).
+  Before the change the suite on `d87ddcc` was 570 tests, 0 failures, 2 skipped (re-run the same day).
 - Offline unit suite (`mvn -o test`): **570 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 26-10-2026 after (b26), the Spring context test included (local Postgres 16).
   Before the change the suite on `a004bdf` was 555 tests, 0 failures, 2 skipped.
@@ -1006,7 +1069,10 @@ and `V7FirstRealNoticeFixesTest.clientLegalNameFromTheNoticeWhenTheClientRecordH
    `relative-cutoff` / `min-cards` before the next live run.
 10. **Provisional templates**: review the first promoted templates (`reply_templates.status='provisional'`)
    and either set them 'active' (with the card) or retire them; set `INDIANKANOON_COST_INR_PER_*` from
-   the IndianKanoon plan; run `CitationCheckRunnerTest` once the token exists.
+   the IndianKanoon plan; re-run `CitationCheckRunnerTest` with the eleven real cases of the first run
+   (`CITATION_CHECK_LIST`) to confirm the (b27) matching live.
+11. **NDK-006 template wording** (private seed): replace "the supplier filed its GSTR-1 belatedly" by a conditional
+   sentence with a `[[CONFIRM: ...]]` marker, as the (b27) writer rule requires.
 
 ---
 

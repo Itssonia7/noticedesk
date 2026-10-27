@@ -126,9 +126,10 @@ CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=2, unanswered_issues=[
 CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
 CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
 CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
-CHECK_MARKERS_LIST | FAIL | block | {missing_count=4, missing_markers=[date_of_receipt, invoice_numbers_and_dates, goods_receipt_evidence, date_of_service], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_MARKERS_LIST | FAIL | block | {confirm_count=0, confirm_markers=[], missing_count=4, missing_markers=[date_of_receipt, invoice_numbers_and_dates, goods_receipt_evidence, date_of_service], pending_ai_count=0, pending_ai_markers=[]}
 CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=7, unique_rendered_blocks=7}
 CHECK_PROCEEDING_CONSISTENT | PASS | block | {notice_section=Section 73, problems=[], stage=scn_73}
+CHECK_ASSUMED_FACTS | PASS | warn | {assumed_count=0, assumed_facts=[], assumed_facts_detail=[], confirm_count=0, confirm_markers=[]}
 FLAG_AI_DRAFT_FAILED | FAIL | block | {flag=block:ai_draft_failed}
 FLAG_MISSING_DATE_OF_RECEIPT | FAIL | warn | {flag=warn:missing_date_of_receipt}
 DEFECT_ADDED_BY_CODE#2 | FAIL | info | {flag=info:defect_added_by_code, issue_no=2}
@@ -137,6 +138,7 @@ Missing Data Markers:
   * invoice_numbers_and_dates (severity: block)
   * goods_receipt_evidence (severity: block)
   * date_of_service (severity: block)
+Facts to confirm with the client: None
 Pending AI Markers: None
 
 

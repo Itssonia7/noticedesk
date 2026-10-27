@@ -20,6 +20,15 @@ public interface LlmProvider {
     }
 
     /**
+     * This provider with the sampling temperature fixed for every call made through the returned instance (used by
+     * calls whose answer must be the same from run to run, such as the shortlist title pass). Providers without a
+     * per-call temperature, and models that reject one (thinking models), return themselves: the call is unchanged.
+     */
+    default LlmProvider withTemperature(double temperature) {
+        return this;
+    }
+
+    /**
      * Call used by the v7 agents: no sampling parameters, thinking depth set by {@code effort}
      * ({@code low|medium|high|xhigh|max}). Providers without an effort control ignore it.
      */

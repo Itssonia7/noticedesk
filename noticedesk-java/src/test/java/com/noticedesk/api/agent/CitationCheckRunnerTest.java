@@ -96,34 +96,63 @@ class CitationCheckRunnerTest {
         }
     }
 
-    /** {@code case name|court|year;...}; a missing court or year is left null. */
+    /**
+     * {@code case name|court|year|quoted text;...}: the court, the year and the quoted text (fourth field, optional;
+     * it costs one fragment call) may be empty or absent and are then left null. A year that is not a four-digit
+     * number is refused with a message naming the field; a fifth or later field is refused (an entry that contains
+     * '|' in its case name must not be split further).
+     */
     static List<RawAiCitation> parseList(String env) {
         List<String> entries = env != null && !env.isBlank() ? List.of(env.split(";")) : DEFAULT_LIST;
         List<RawAiCitation> out = new ArrayList<>();
+        int position = 0;
         for (String entry : entries) {
             String e = entry.trim();
             if (e.isEmpty()) continue;
+            position++;
             String[] parts = e.split("\\|", -1);
+            if (parts.length > 4) {
+                throw new IllegalArgumentException("entry " + position + " has " + parts.length
+                        + " fields; the format is case name|court|year|quoted text (fields after the case name are optional)");
+            }
             String name = parts[0].trim();
+            if (name.isEmpty()) throw new IllegalArgumentException("entry " + position + " has no case name");
             String court = parts.length > 1 && !parts[1].isBlank() ? parts[1].trim() : null;
             Integer year = null;
             if (parts.length > 2 && !parts[2].isBlank()) {
-                try {
-                    year = Integer.parseInt(parts[2].trim());
-                } catch (NumberFormatException ex) {
-                    System.out.println("WARNING: year not numeric in '" + e + "'; left unset");
+                String y = parts[2].trim();
+                if (!y.matches("(?:19|20)\\d{2}")) {
+                    throw new IllegalArgumentException("entry " + position + " ('" + name + "'): year field '" + y
+                            + "' is not a four-digit year");
                 }
+                year = Integer.parseInt(y);
             }
-            if (!name.isEmpty()) out.add(new RawAiCitation(name, court, year, null, "citation check"));
+            String quote = parts.length > 3 && !parts[3].isBlank() ? parts[3].trim() : null;
+            out.add(new RawAiCitation(name, court, year, quote, "citation check"));
         }
         return out;
     }
 
     @Test
     void listParsing_isOffline() {
-        List<RawAiCitation> list = parseList("A v. B|Supreme Court|1999; C v. D||; E v. F|High Court of Delhi|x");
-        if (list.size() != 3 || list.get(0).year() != 1999 || list.get(1).court() != null || list.get(2).year() != null) {
+        List<RawAiCitation> list = parseList("A v. B|Supreme Court|1999; C v. D||; E v. F|High Court of Delhi; G v. H|SC|2001|credit is a right");
+        if (list.size() != 4 || list.get(0).year() != 1999 || list.get(1).court() != null || list.get(1).year() != null
+                || !"High Court of Delhi".equals(list.get(2).court()) || list.get(2).year() != null
+                || !"credit is a right".equals(list.get(3).quotedText()) || list.get(0).quotedText() != null) {
             fail("unexpected parse: " + list);
+        }
+        // a year that is not a four-digit number, or a fifth field, is refused with a message naming the entry
+        try {
+            parseList("E v. F|High Court of Delhi|x");
+            fail("a non-numeric year must be refused");
+        } catch (IllegalArgumentException ex) {
+            if (!ex.getMessage().contains("entry 1") || !ex.getMessage().contains("year field 'x'")) fail(ex.getMessage());
+        }
+        try {
+            parseList("A v. B|SC|1999|quote|extra");
+            fail("a fifth field must be refused");
+        } catch (IllegalArgumentException ex) {
+            if (!ex.getMessage().contains("5 fields")) fail(ex.getMessage());
         }
         if (parseList(null).size() != DEFAULT_LIST.size()) fail("default list expected");
         BigDecimal zero = new ApiUsageLogService(null, new AppProperties()).indianKanoonCostInr(ApiUsageLogService.IK_FRAGMENT);

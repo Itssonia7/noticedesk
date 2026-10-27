@@ -129,6 +129,30 @@ final class AiOutputParser {
         return citations;
     }
 
+    /**
+     * The writer's {@code assumed_facts}: objects {@code {"fact": ..., "sentence": ...}} (a plain string is a fact
+     * without its sentence). Entries without a fact are dropped; the fact text is trimmed of a [[CONFIRM: ...]] wrapper.
+     */
+    static List<AssumedFact> assumedFacts(Map<String, Object> map) {
+        List<AssumedFact> out = new ArrayList<>();
+        if (map.get("assumed_facts") instanceof List<?> list) {
+            for (Object o : list) {
+                String fact = null;
+                String sentence = null;
+                if (o instanceof Map<?, ?> m) {
+                    fact = str(m.get("fact"));
+                    sentence = str(m.get("sentence"));
+                } else if (o != null) {
+                    fact = str(o);
+                }
+                if (fact == null) continue;
+                fact = fact.replaceAll("^\\[\\[\\s*CONFIRM:\\s*|\\s*\\]\\]$", "").trim();
+                if (!fact.isEmpty()) out.add(new AssumedFact(fact, sentence));
+            }
+        }
+        return out;
+    }
+
     static List<String> stringList(Map<String, Object> map, String key) {
         List<String> out = new ArrayList<>();
         if (map.get(key) instanceof List<?> list) {

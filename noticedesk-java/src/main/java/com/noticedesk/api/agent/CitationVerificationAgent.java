@@ -358,9 +358,6 @@ public class CitationVerificationAgent {
     private static final Set<String> NAME_STOPWORDS = Set.of(
             "ltd", "limited", "pvt", "private", "co", "company", "the", "m", "s", "ms", "and", "inc",
             "corp", "corporation", "llp", "of", "others", "ors", "anr", "another");
-    private static final Set<String> COURT_STOPWORDS = Set.of(
-            "court", "of", "the", "hon", "ble", "honble", "honourable", "india", "high", "supreme",
-            "judicature", "at", "bench");
 
     /** Flag set when the per-notice cost cap stopped IndianKanoon calls (remaining citations NOT_CHECKED). */
     public static final String FLAG_IK_COST_CAP = "IK_COST_CAP_REACHED";
@@ -458,7 +455,7 @@ public class CitationVerificationAgent {
         try {
             callsMade[0]++;
             recordIkCall(ApiUsageLogService.IK_SEARCH, noticeId, budget);
-            List<IndianKanoonClient.IkDoc> docs = ikClient.search(token, r.caseName());
+            List<IndianKanoonClient.IkDoc> docs = ikClient.search(token, searchQuery(r.caseName()));
             IndianKanoonClient.IkDoc match = null;
             for (IndianKanoonClient.IkDoc d : docs) {
                 if (namesMatch(r.caseName(), d.title())) {
@@ -635,31 +632,217 @@ public class CitationVerificationAgent {
                 + "|" + r.year() + "|" + quote;
     }
 
-    static boolean namesMatch(String citedName, String ikTitle) {
-        if (citedName == null || ikTitle == null) return false;
-        String[] sides = normaliseText(citedName).replace(" versus ", " v ").replace(" vs ", " v ").split(" v ");
-        Set<String> titleTokens = new HashSet<>(Arrays.asList(normaliseText(ikTitle).split(" ")));
-        int sidesChecked = 0;
-        for (String side : sides) {
-            List<String> tokens = significant(side, NAME_STOPWORDS);
-            if (tokens.isEmpty()) continue;
-            sidesChecked++;
-            long hit = tokens.stream().filter(titleTokens::contains).count();
-            if (hit * 5 < tokens.size() * 4) {  // need >= 80% of each party's words
-                return false;
-            }
-        }
-        return sidesChecked > 0;
+    // ---------------------------------------------------------------- case-name matching against IndianKanoon titles
+
+    /** "(Arise India Ltd. v. Commissioner ...)" after a case name: a second case merged into the first in brackets. */
+    private static final Pattern BRACKETED_CASE = Pattern.compile(
+            "(?i)\\s*[(\\[][^()\\[\\]]*\\b(?:vs?\\.?|v/s\\.?|versus)\\b[^()\\[\\]]*[)\\]]");
+    /** "... on 13 December, 2021" at the end of an IndianKanoon title. */
+    private static final Pattern TITLE_DATE = Pattern.compile("(?i)\\s+on\\s+\\d{1,2}\\s+[A-Za-z]+,?\\s+(?:19|20)\\d{2}\\s*$");
+    /** "(Data Cell)", "[Appellant]": bracketed parts of a party name (after "(P)" has been folded to "private"). */
+    private static final Pattern BRACKETED_PART = Pattern.compile("\\s*[(\\[][^()\\[\\]]*[)\\]]");
+    /** Words that carry no identity: articles, "M/s", "and others", company suffixes (folded first, then dropped). */
+    private static final Set<String> NAME_DROP = Set.of(
+            "the", "m", "s", "ms", "and", "another", "anr", "others", "ors", "etc", "etc.", "through", "thru", "its",
+            "limited", "private", "company", "corporation", "incorporated", "llp", "ltd", "pvt", "co", "corp", "inc", "of");
+    /** Abbreviations folded to their full spelling before comparison (one token -> one or more tokens). */
+    private static final Map<String, String> NAME_EXPANSIONS = Map.ofEntries(
+            Map.entry("pvt", "private"), Map.entry("ltd", "limited"), Map.entry("p", "private"), Map.entry("co", "company"),
+            Map.entry("corp", "corporation"), Map.entry("inc", "incorporated"),
+            Map.entry("commr", "commissioner"), Map.entry("comm", "commissioner"), Map.entry("cmr", "commissioner"),
+            Map.entry("asst", "assistant"), Map.entry("asstt", "assistant"), Map.entry("addl", "additional"),
+            Map.entry("dy", "deputy"), Map.entry("jt", "joint"), Map.entry("govt", "government"),
+            Map.entry("cce", "commissioner central excise"), Map.entry("cgst", "central goods services tax"),
+            Map.entry("cit", "commissioner income tax"), Map.entry("uoi", "union india"),
+            Map.entry("cst", "commissioner sales tax"), Map.entry("ctt", "commissioner trade taxes"),
+            Map.entry("ito", "income tax officer"), Map.entry("sto", "state tax officer"), Map.entry("ac", "assistant commissioner"));
+
+    /**
+     * The text sent to the IndianKanoon search for a cited name: a second case merged into the name in brackets
+     * ("X v. Y (A v. B)") is dropped, as is a reporter citation after the name. Other names go as written.
+     */
+    static String searchQuery(String citedName) {
+        if (citedName == null) return "";
+        String s = BRACKETED_CASE.matcher(citedName.replace(' ', ' ')).replaceAll("");
+        s = stripReporterAfterRespondent(s);
+        s = s.replaceAll("\\s+", " ").trim();
+        return s.isEmpty() ? citedName.trim() : s;
     }
 
+    /** Removes a reporter citation after the respondent only, so a petitioner named "Air India" is never cut at "AIR". */
+    private static String stripReporterAfterRespondent(String s) {
+        Matcher v = VERSUS.matcher(s);
+        int last = -1;
+        while (v.find()) last = v.end();
+        if (last < 0) return s;
+        return s.substring(0, last) + REPORTER.matcher(s.substring(last)).replaceFirst("");
+    }
+
+    /**
+     * The significant words of each party of a case name, in order: the name is cut at a bracketed second case and a
+     * reporter citation, split at "v." / "vs" / "versus", a trailing " on <date>" (IndianKanoon titles) and bracketed
+     * parts such as "(Data Cell)" are dropped, "(P)" / "Pvt" / "Ltd" / "Commr" / "Asst" / "CCE" ... are folded to their
+     * full spelling, "&" to "and", punctuation inside initials ("D.Y.Beathel", "M/S.") becomes spaces, and articles,
+     * "M/s", "and another", "& Ors", "etc" and company suffixes are dropped. A one-party title gives one list.
+     */
+    static List<List<String>> partyWords(String name) {
+        if (name == null) return List.of();
+        String s = name.replace(' ', ' ').replace("&amp;", " and ").replace("&", " and ");
+        s = BRACKETED_CASE.matcher(s).replaceAll("");
+        s = TITLE_DATE.matcher(s).replaceFirst("");
+        s = stripReporterAfterRespondent(s);
+        s = s.replaceAll("(?i)\\(\\s*p\\s*\\)", " private ");
+        s = BRACKETED_PART.matcher(s).replaceAll(" ");
+        List<List<String>> out = new ArrayList<>();
+        for (String side : VERSUS.split(" " + s + " ")) {
+            List<String> words = new ArrayList<>();
+            String plain = side.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
+            for (String tok : plain.split(" ")) {
+                if (tok.isEmpty()) continue;
+                for (String w : NAME_EXPANSIONS.getOrDefault(tok, tok).split(" ")) {
+                    if (!NAME_DROP.contains(w)) words.add(w);
+                }
+            }
+            if (!words.isEmpty()) out.add(words);
+        }
+        return out;
+    }
+
+    /** The word of a party that must be present for a match: its first word of three or more letters, else its first word. */
+    private static String keyWord(List<String> words) {
+        for (String w : words) if (w.length() >= 3) return w;
+        return words.isEmpty() ? null : words.get(0);
+    }
+
+    /**
+     * True when the IndianKanoon title names the cited case. Each cited party is compared with the title party in the
+     * same position (both orders are tried): at least 60% of the cited party's significant words, or every word of the
+     * shorter side, must appear in the title party, and the first party's key word must. A title without "vs" is
+     * compared as one bag of words. Company suffixes, "M/s", "and others", bracketed parts, the judgment date and
+     * abbreviations are normalised on both sides ({@link #partyWords}).
+     */
+    static boolean namesMatch(String citedName, String ikTitle) {
+        if (citedName == null || ikTitle == null) return false;
+        List<List<String>> cited = partyWords(citedName);
+        List<List<String>> title = partyWords(ikTitle);
+        if (cited.isEmpty() || title.isEmpty()) return false;
+        if (cited.size() == 1 || title.size() == 1) {
+            List<String> all = new ArrayList<>();
+            title.forEach(all::addAll);
+            for (int i = 0; i < cited.size(); i++) {
+                if (!partyMatches(cited.get(i), all, i == 0)) return false;
+            }
+            return true;
+        }
+        if (partyMatches(cited.get(0), title.get(0), true) && partyMatches(cited.get(1), title.get(1), false)) return true;
+        return partyMatches(cited.get(0), title.get(1), true) && partyMatches(cited.get(1), title.get(0), false);
+    }
+
+    private static boolean partyMatches(List<String> cited, List<String> titleWords, boolean keyWordRequired) {
+        if (cited.isEmpty()) return true;
+        Set<String> title = new HashSet<>(titleWords);
+        if (keyWordRequired) {
+            String key = keyWord(cited);
+            if (key != null && !title.contains(key)) return false;
+        }
+        long hits = cited.stream().filter(title::contains).count();
+        int shorter = Math.min(cited.size(), title.size());
+        // every word of the shorter side (two or more words, or a one-word party on both sides), or >= 60% of the cited words
+        boolean shorterCovered = hits >= shorter && (shorter >= 2 || cited.size() == 1 && title.size() == 1);
+        return shorterCovered || hits * 5 >= cited.size() * 3;
+    }
+
+    // ---------------------------------------------------------------- court matching against IndianKanoon docsource
+
+    /** Place / state words of a high court and their other spellings; both sides are folded to the first spelling. */
+    private static final List<List<String>> COURT_PLACE_ALIASES = List.of(
+            List.of("bombay", "mumbai", "maharashtra", "nagpur", "aurangabad", "goa", "panaji"),
+            List.of("madras", "chennai", "tamil", "tamilnadu", "madurai"),
+            List.of("calcutta", "kolkata", "bengal", "jalpaiguri", "andaman", "port", "blair"),
+            List.of("karnataka", "bangalore", "bengaluru", "dharwad", "kalaburagi", "gulbarga"),
+            List.of("delhi", "newdelhi"), List.of("gujarat", "ahmedabad"), List.of("allahabad", "prayagraj", "lucknow"),
+            List.of("punjab", "haryana", "chandigarh"), List.of("telangana", "hyderabad"), List.of("andhra", "amaravati"),
+            List.of("kerala", "ernakulam", "kochi"), List.of("orissa", "odisha", "cuttack"),
+            List.of("madhya", "jabalpur", "indore", "gwalior"), List.of("rajasthan", "jaipur", "jodhpur"),
+            List.of("patna", "bihar"), List.of("jharkhand", "ranchi"), List.of("chhattisgarh", "bilaspur"),
+            List.of("uttarakhand", "nainital"), List.of("himachal", "shimla"), List.of("gauhati", "guwahati", "assam"),
+            List.of("jammu", "kashmir", "srinagar", "ladakh"), List.of("tripura", "agartala"), List.of("meghalaya", "shillong"),
+            List.of("manipur", "imphal"), List.of("sikkim", "gangtok"));
+    private static final Set<String> COURT_NOISE = Set.of(
+            "court", "courts", "of", "the", "hon", "ble", "honble", "honourable", "india", "high", "supreme", "judicature",
+            "at", "bench", "hc", "sc", "and", "pradesh", "state", "division", "single", "larger", "full", "constitution",
+            "principal", "seat", "circuit", "regional", "zonal", "new");
+
+    private enum CourtKind { SUPREME, HIGH, TRIBUNAL, AUTHORITY, OTHER }
+
+    private static CourtKind courtKind(String n) {
+        if (n.contains("supreme") || n.matches(".*\\bsc\\b.*") || n.contains("apex")) return CourtKind.SUPREME;
+        if (n.contains("high court") || n.matches(".*\\bhc\\b.*") || n.contains("high ct")) return CourtKind.HIGH;
+        if (n.contains("tribunal") || n.matches(".*\\b(?:cestat|itat|nclt|nclat|cat|gstat|appellate)\\b.*")) return CourtKind.TRIBUNAL;
+        if (n.matches(".*\\b(?:aar|aaar|authority|commissioner|appeals)\\b.*")) return CourtKind.AUTHORITY;
+        return CourtKind.OTHER;
+    }
+
+    /** The subject of a tribunal ("cestat" / "itat" ...) so that two tribunals of different subjects never match. */
+    private static String tribunalSubject(String n) {
+        if (n.contains("cestat") || n.contains("customs") || n.contains("excise") || n.contains("service tax")) return "cestat";
+        if (n.contains("itat") || n.contains("income tax")) return "itat";
+        if (n.contains("nclat")) return "nclat";
+        if (n.contains("nclt") || n.contains("company law")) return "nclt";
+        if (n.contains("gstat") || n.contains("goods and services")) return "gstat";
+        return null;
+    }
+
+    private static String foldPlace(String token) {
+        for (List<String> aliases : COURT_PLACE_ALIASES) {
+            if (aliases.contains(token)) return aliases.get(0);
+        }
+        return token;
+    }
+
+    private static Set<String> courtPlaces(String n) {
+        Set<String> out = new HashSet<>();
+        for (String t : n.split(" ")) {
+            if (t.isBlank() || COURT_NOISE.contains(t)) continue;
+            // tribunal / authority words are not places
+            if (t.matches("cestat|itat|nclt|nclat|gstat|cat|aar|aaar|tribunal|appellate|authority|customs|excise|service|tax|income|goods|services|advance|ruling|rulings|national|company|law|central|administrative")) continue;
+            out.add(foldPlace(t));
+        }
+        return out;
+    }
+
+    /**
+     * True when the cited court is the IndianKanoon docsource. Supreme Court, high courts, tribunals and authorities
+     * are told apart; a high court must agree on its place / state (other spellings folded: Bombay / Mumbai, Madras /
+     * Chennai, Calcutta / Kolkata, Karnataka / Bangalore ...; "Hon'ble", "of Judicature", "at", a bench word are
+     * ignored); tribunals agree on their subject (CESTAT / ITAT ...) and ignore the bench place; docsource strings such
+     * as "Supreme Court of India", "Calcutta High Court", "CESTAT" and "Appellate Tribunal" are accepted.
+     */
     static boolean courtMatches(String citedCourt, String ikSource) {
         if (citedCourt == null || citedCourt.isBlank() || ikSource == null || ikSource.isBlank()) return false;
-        String cited = normaliseText(citedCourt);
-        String source = normaliseText(ikSource);
-        if (cited.contains("supreme") != source.contains("supreme")) return false;
-        if (cited.contains("high court") != source.contains("high court")) return false;
-        Set<String> sourceTokens = new HashSet<>(Arrays.asList(source.split(" ")));
-        return sourceTokens.containsAll(significant(cited, COURT_STOPWORDS));
+        String cited = normaliseText(citedCourt).replaceAll("\\bnew delhi\\b", "newdelhi");
+        String source = normaliseText(ikSource).replaceAll("\\bnew delhi\\b", "newdelhi");
+        CourtKind ck = courtKind(cited);
+        CourtKind sk = courtKind(source);
+        if (ck != sk) {
+            // "Appellate Tribunal" / "CESTAT" cited against an authority-like docsource, or the reverse: both non-courts
+            boolean bothNonCourt = (ck == CourtKind.TRIBUNAL || ck == CourtKind.AUTHORITY || ck == CourtKind.OTHER)
+                    && (sk == CourtKind.TRIBUNAL || sk == CourtKind.AUTHORITY || sk == CourtKind.OTHER);
+            if (!bothNonCourt) return false;
+        }
+        if (ck == CourtKind.SUPREME) return true;
+        if (ck == CourtKind.HIGH) {
+            Set<String> citedPlaces = courtPlaces(cited);
+            Set<String> sourcePlaces = courtPlaces(source);
+            return sourcePlaces.containsAll(citedPlaces);
+        }
+        String cs = tribunalSubject(cited);
+        String ss = tribunalSubject(source);
+        if (cs != null && ss != null) return cs.equals(ss);
+        if (cs != null || ss != null) return true;   // one side names only "Appellate Tribunal": accept
+        Set<String> citedPlaces = courtPlaces(cited);
+        Set<String> sourcePlaces = courtPlaces(source);
+        return sourcePlaces.containsAll(citedPlaces) || citedPlaces.containsAll(sourcePlaces);
     }
 
     private static final Pattern YEAR = Pattern.compile("\\b(19|20)\\d{2}\\b");

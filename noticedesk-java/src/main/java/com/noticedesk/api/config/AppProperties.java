@@ -204,6 +204,18 @@ public class AppProperties {
     public static class Matching {
         private boolean allowDraftCards = false;
         private Shortlist shortlist = new Shortlist();
+        private Citations citations = new Citations();
+
+        @Data
+        public static class Citations {
+            /** Default of {@code matching.citations.max-per-issue}. */
+            public static final int DEFAULT_MAX_PER_ISSUE = 3;
+            /**
+             * Cases an AI writer may cite per issue (env CITATIONS_MAX_PER_ISSUE). Cases beyond it stay in the text but
+             * are marked NOT_CHECKED ("beyond per-issue citation limit") and never sent to IndianKanoon; 0 = no limit.
+             */
+            private int maxPerIssue = DEFAULT_MAX_PER_ISSUE;
+        }
 
         @Data
         public static class Shortlist {
@@ -233,6 +245,14 @@ public class AppProperties {
             private Integer titleMaxTokens = 6000;
             /** max_tokens of the AI title pass retry after a max_tokens stop. */
             private Integer titleRetryMaxTokens = 9000;
+            /** Default of {@code matching.shortlist.title-max-cards}. */
+            public static final int DEFAULT_TITLE_MAX_CARDS = 15;
+            /**
+             * Cards kept from the AI title pass (env SHORTLIST_TITLE_MAX_CARDS): the model answers a ranked list and
+             * the first this many are used, so the shortlist (and the matching prompt's size) is the same from run to
+             * run on the same notice. 0 = keep every id.
+             */
+            private int titleMaxCards = DEFAULT_TITLE_MAX_CARDS;
         }
     }
 
