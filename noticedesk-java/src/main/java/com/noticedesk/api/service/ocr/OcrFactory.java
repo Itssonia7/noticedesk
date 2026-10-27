@@ -35,8 +35,10 @@ public class OcrFactory {
     }
 
     private OcrProvider buildProvider(String name) {
-        return switch (name != null ? name : "stub") {
+        return switch (name != null ? name.trim().toLowerCase(java.util.Locale.ROOT) : "stub") {
             case "stub" -> new StubOcrProvider();
+            // no network: PDFBox text layer, else the system tesseract command (see LocalOcrProvider)
+            case LocalOcrProvider.NAME -> new LocalOcrProvider();
             case "gemini" -> {
                 AppProperties.Ocr.Gemini g = properties.getOcr().getGemini();
                 String model = g.getModel() != null && !g.getModel().isBlank() ? g.getModel() : properties.getLlm().getGemini().getModel();

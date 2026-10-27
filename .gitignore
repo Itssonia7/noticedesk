@@ -61,6 +61,15 @@ scratch/generate_change_audit_pdf.py
 testbench/results/
 # learned library entries (notice text) belong in $PRIVATE_SEED_DIR/learned only
 learned/*.json
+# PDF runner privacy files belong in $PRIVATE_SEED_DIR/results only: the anonymisation map holds the real
+# identifiers, the *_anon files the anonymised notice / draft, the restored draft and summary the real ones
+*_anon_map.json
+*_ocr_anon.txt
+*_draft_anon.txt
+results/*_ocr.txt
+results/*_draft.txt
+results/*_draft.docx
+results/*_summary.txt
 
 # Private data protection
 private/

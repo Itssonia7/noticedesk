@@ -33,6 +33,15 @@
 33EEEEE4444E1Z5
 99AAAAA0000A1Z5
 
+# Anonymiser tests (NoticeAnonymiserTest, V7PdfPrivacyPipelineOfflineTest, LocalOcrProviderTest): synthetic inputs
+# (repeated letters) and the placeholders the anonymiser produces (AAAAA + sequence; the state code is kept)
+27ZZZZZ9999Z1Z9
+24YYYYY8888Y1Z8
+29XXXXX7777X1Z7
+27AAAAA0001A1Z1
+24AAAAA0002A1Z2
+29AAAAA0003A1Z3
+
 # Dev / demo seeds (seed_demo.sql, packages/db/seeds/phase1_demo.sql)
 07AANPK7890F1ZD
 07MNOPQ9012R1Z6

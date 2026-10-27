@@ -18,6 +18,9 @@ noticedesk-private/                 # anywhere outside the repo, e.g. ~/noticede
 ├── stage_templates/*.json          # stage_templates rows  (stage, version, sections, ...)
 ├── notices/*.json                  # real notices for the matching eval (same shape as testbench notices)
 ├── pdf/*.pdf                       # real notice PDFs for V7PdfPipelineRunnerTest (V7_PDF_NOTICES)
+├── results/                        # written by the PDF runner: <id>_ocr_anon.txt, <id>_anon_map.json (the real
+│                                   # identifiers behind the placeholders), <id>_draft_anon.txt, <id>_draft.txt / .docx,
+│                                   # <id>_summary.txt (restored). Never inside the repository.
 └── learned/*.json                  # learned library: AI-written issues with no catalogue card (written by the app)
 ```
 
@@ -60,8 +63,26 @@ SPRING_PROFILES_ACTIVE=private-seed mvn -f noticedesk-java/pom.xml spring-boot:r
   (`testbench/notices/<name>`) first, then in `$PRIVATE_SEED_DIR/notices/<name>`; an absolute path is
   also accepted. A name found nowhere refuses the run before any call.
 - `V7PdfPipelineRunnerTest`: each `V7_PDF_NOTICES` name is looked up in `$PRIVATE_SEED_DIR/pdf/<name>`
-  (or given as an absolute path). The OCR text and the draft go to `testbench/results/` (git-ignored, and
-  the commit hook rejects any file under it).
+  (or given as an absolute path). **Privacy-first order** (the firm's gemini key is on the free tier, whose data
+  may be used for training, so no client-identifying text may reach a model):
+  1. the text is read **locally** (`OCR_PROVIDER=local`, the default: the PDF text layer through PDFBox; a scanned
+     PDF through the system `tesseract` command, refused when it is not installed). Nothing leaves the laptop. A
+     non-local provider (`gemini`, ...) sends the raw PDF to a model before anonymisation and is refused unless
+     `NOTICE_ANONYMISE=off` is set explicitly;
+  2. the text is **anonymised** (`NoticeAnonymiser`, `NOTICE_ANONYMISE` default on): GSTINs (state code kept), PANs,
+     TAN / CIN / IEC / Aadhaar / bank account / IFSC, phones, e-mails, PIN codes, ARN / DIN / reference numbers (shape
+     kept), the taxpayer's name ("NOTICEE COMPANY", legal-form suffix kept), other parties ("SUPPLIER n TRADERS"),
+     persons ("PERSON n") and the street part of addresses ("ADDRESS n"; city and State kept) become same-shape
+     placeholders. Amounts, dates, periods, sections, form names, officer designations, rates, HSN and invoice
+     numbers stay. The anonymised text goes to `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt`, the reversible mapping
+     to `<id>_anon_map.json` (real values: only there, never in a git working tree, never logged; the console gets a
+     `Privacy:` line with counts only);
+  3. triage (`DocumentParsingAgent`) and the whole v7 pipeline run on the anonymised text; the learned library stores
+     the anonymised text only; the file name sent to the triage model is `notice.pdf`, not the PDF's name;
+  4. the outputs are **de-anonymised before saving**: `<id>_draft_anon.txt` (as the models produced it),
+     `<id>_draft.txt`, `<id>_draft.docx` and `<id>_summary.txt` (restored). The notice id is the PDF's file name, so
+     name PDFs neutrally (`scn-001.pdf`), not after the client.
+  The runner refuses to start when `PRIVATE_SEED_DIR` is unset or points inside a git working tree.
 - **Learned library** (`$PRIVATE_SEED_DIR/learned/<yyyy-mm-dd>_<notice-id>_issue<N>.json`): every issue the
   v7 pipeline drafts with the new-issue writer and no catalogue card is saved there as a "provisional"
   entry (ground, section, amount, period, the AI-written grounds of defence / legal submissions /
@@ -76,7 +97,8 @@ SPRING_PROFILES_ACTIVE=private-seed mvn -f noticedesk-java/pom.xml spring-boot:r
   size and hash at the start so a run can be tied to the catalogue it used.
 
 As a second line of defence `.gitignore` ignores `private/`, `noticedesk-private/`, `*.real.json`,
-`*.real.sql`, `*.real.docx`, `*.real.pdf`, `learned/*.json` and `testbench/results/`.
+`*.real.sql`, `*.real.docx`, `*.real.pdf`, `learned/*.json`, `testbench/results/`, `*_anon_map.json`,
+`*_ocr_anon.txt`, `*_draft_anon.txt` and `results/*_ocr.txt` / `*_draft.txt` / `*_draft.docx` / `*_summary.txt`.
 
 ## Commit-time check (enable once per clone)
 
@@ -93,7 +115,7 @@ commit. It looks at **added lines only** and rejects:
 | GSTIN | `[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]` not in `.githooks/allowed_ids.txt` |
 | PAN | `[A-Z]{5}[0-9]{4}[A-Z]` not in the allow-list (a PAN inside an allow-listed GSTIN is fine; GSTINs are checked first) |
 | Documents | a newly added / renamed / copied `.pdf`, `.docx` or `.xlsx` not in `.githooks/allowed_binaries.txt` |
-| Private paths | a newly added / renamed / copied `.json` in a `learned/` folder, or any file under `testbench/results/` |
+| Private paths | a newly added / renamed / copied `.json` in a `learned/` folder, any file under `testbench/results/`, a `*_anon_map.json` / `*_ocr_anon.txt` / `*_draft_anon.txt` anywhere, or a `*_ocr.txt` / `*_draft.txt` / `*_draft.docx` / `*_summary.txt` inside a `results/` folder |
 
 Findings show file, line number and a masked value, e.g. `notes.txt:12: possible GSTIN 27IIIJJ****I1Z9`.
 The offending line is never printed.

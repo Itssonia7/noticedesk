@@ -1,10 +1,14 @@
 package com.noticedesk.api.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.agent.DocumentParsingAgent;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmResponse;
+import com.noticedesk.api.service.ocr.LocalOcrProvider;
 import com.noticedesk.api.service.ocr.OcrProvider;
 import com.noticedesk.api.service.ocr.OcrResult;
+import com.noticedesk.api.service.privacy.AnonymisationMap;
+import com.noticedesk.api.service.privacy.NoticeAnonymiser;
 
 import java.io.File;
 import java.io.IOException;
@@ -16,12 +20,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Function;
 
 /**
- * The steps of {@link V7PdfPipelineRunnerTest} before the v7 pipeline, as the upload path runs them
- * ({@code DocumentController.processOcrAndWorkflow}): OCR through the primary OCR provider, then the document parsing
- * agent that labels {@code document_type} (ParseAndRouteWorkflow). Each billed call is logged to the usage service, so
- * the run ledger, the run cap and the fail-fast guard see it. No database or network access of its own.
+ * The steps of {@link V7PdfPipelineRunnerTest} before the v7 pipeline: OCR through the configured OCR provider
+ * ({@code OCR_PROVIDER}, default {@code local}: PDFBox text layer / tesseract, no network), anonymisation of the text
+ * ({@code NOTICE_ANONYMISE}, default on), then the document parsing agent that labels {@code document_type}
+ * (ParseAndRouteWorkflow) on the ANONYMISED text. Each billed call is logged to the usage service, so the run ledger,
+ * the run cap and the fail-fast guard see it. No database or network access of its own.
  */
 final class PdfNoticeSteps {
 
@@ -29,6 +35,38 @@ final class PdfNoticeSteps {
 
     static final String OCR_STEP = "ocr";
     static final String TRIAGE_STEP = "triage";
+
+    /** Env: OCR provider of the runner (default local). */
+    static final String OCR_PROVIDER_ENV = "OCR_PROVIDER";
+    static final String DEFAULT_OCR_PROVIDER = LocalOcrProvider.NAME;
+    /** Env: "off" switches the anonymiser off (and accepts a non-local OCR provider); anything else = on. */
+    static final String ANONYMISE_ENV = "NOTICE_ANONYMISE";
+
+    // ---------------------------------------------------------------- privacy settings
+
+    /** OCR provider name for the runner: {@code OCR_PROVIDER}, else local. */
+    static String ocrProviderName(String envValue) {
+        return envValue == null || envValue.isBlank() ? DEFAULT_OCR_PROVIDER : envValue.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /** True unless {@code NOTICE_ANONYMISE} is explicitly "off" / "false" / "0". */
+    static boolean anonymise(String envValue) {
+        if (envValue == null || envValue.isBlank()) return true;
+        String v = envValue.trim().toLowerCase(Locale.ROOT);
+        return !(v.equals("off") || v.equals("false") || v.equals("0") || v.equals("no"));
+    }
+
+    /**
+     * Why the run must be refused, or null: a non-local OCR provider sends the raw document bytes (the client's name,
+     * GSTIN, everything) to a model before the anonymiser can run, which the free-tier key makes unacceptable unless
+     * the operator switched the anonymiser off explicitly ({@code NOTICE_ANONYMISE=off}).
+     */
+    static String privacyRefusal(String ocrProvider, boolean anonymise) {
+        if (DEFAULT_OCR_PROVIDER.equals(ocrProvider) || !anonymise) return null;
+        return "REFUSED: OCR_PROVIDER=" + ocrProvider + " sends the raw PDF bytes to a model before anonymisation (the "
+                + "firm's gemini key is on the free tier, whose data may be used for training). Use OCR_PROVIDER=local "
+                + "(PDFBox text layer, tesseract for scans) or set NOTICE_ANONYMISE=off to accept that explicitly.";
+    }
 
     /** Notice id of a PDF: the file name without extension, lower-cased, every run of non-alphanumerics replaced by '-'. */
     static String noticeIdFor(String fileName) {
@@ -97,6 +135,8 @@ final class PdfNoticeSteps {
         OcrResult.OcrUsage u = r.usage();
         if (usage != null && u != null) {
             cost = logAndPrice(usage, u.provider(), u.model(), u.inputTokens(), u.outputTokens(), OCR_STEP, tenantId, noticeId);
+            // the local provider (PDFBox / tesseract) has no price entry: it costs nothing
+            if (LocalOcrProvider.NAME.equals(u.provider())) cost = BigDecimal.ZERO;
         }
         boolean usable = r.text() != null && !r.text().isBlank();
         if (usage != null) usage.reportOutcome(OCR_STEP, 1, usable, usable ? null : "no_text");
@@ -134,18 +174,91 @@ final class PdfNoticeSteps {
         return f;
     }
 
+    // ---------------------------------------------------------------- anonymisation
+
+    /**
+     * The anonymised notice: the text every model call sees, the mapping (real values, kept only under
+     * {@code $PRIVATE_SEED_DIR/results}) and the restorer applied to every output before it is saved.
+     */
+    record AnonymisedNotice(String text, AnonymisationMap map, boolean on) {
+        /** Restores the real values in {@code s}; identity when the anonymiser is off. */
+        String restore(String s) {
+            return on ? NoticeAnonymiser.deAnonymise(s, map) : s;
+        }
+
+        Function<String, String> restorer() {
+            return on ? this::restore : null;
+        }
+
+        String privacyLine() {
+            return on ? "Privacy: anonymised " + map.summaryLine() : "Privacy: NOTICE_ANONYMISE=off, the real text was used";
+        }
+    }
+
+    /** Anonymises the OCR text (identity with the same text and an empty map when {@code on} is false). */
+    static AnonymisedNotice anonymise(String ocrText, boolean on) {
+        if (!on) return new AnonymisedNotice(ocrText, new AnonymisationMap(), false);
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(ocrText);
+        return new AnonymisedNotice(r.text(), r.map(), true);
+    }
+
+    /**
+     * Saves the anonymised text as {@code <noticeId>_ocr_anon.txt} and the mapping as {@code <noticeId>_anon_map.json}
+     * (the mapping holds the real values: {@code resultsDir} must be under {@code $PRIVATE_SEED_DIR}, never a folder
+     * inside a git working tree). Returns the two files (the map file is null when the anonymiser is off).
+     */
+    static File[] saveAnonymised(File resultsDir, String noticeId, AnonymisedNotice a, ObjectMapper om) throws IOException {
+        if (insideGitWorkTree(resultsDir)) {
+            throw new IOException("REFUSED: " + resultsDir.getAbsolutePath() + " is inside a git working tree; the anonymisation "
+                    + "map holds real client identifiers and may only be written under $PRIVATE_SEED_DIR/results");
+        }
+        File text = new File(resultsDir, noticeId + "_ocr_anon.txt");
+        Files.writeString(text.toPath(), a.text() != null ? a.text() : "", StandardCharsets.UTF_8);
+        File map = null;
+        if (a.on()) {
+            map = new File(resultsDir, noticeId + "_anon_map.json");
+            a.map().writeTo(map, om);
+        }
+        return new File[]{text, map};
+    }
+
+    /** True when {@code dir} (or a parent) holds a {@code .git} entry. */
+    static boolean insideGitWorkTree(File dir) {
+        File d = dir.getAbsoluteFile();
+        while (d != null) {
+            if (new File(d, ".git").exists()) return true;
+            d = d.getParentFile();
+        }
+        return false;
+    }
+
+    /**
+     * The results folder of the PDF runner: {@code $PRIVATE_SEED_DIR/results} (created). Null when
+     * {@code PRIVATE_SEED_DIR} is unset: the runner refuses to start, because the de-anonymised draft and the mapping
+     * have no place outside the repository then.
+     */
+    static File privateResultsDir(String privateSeedDir) {
+        if (privateSeedDir == null || privateSeedDir.isBlank()) return null;
+        File dir = new File(privateSeedDir.trim(), "results");
+        if (!dir.isDirectory() && !dir.mkdirs()) return null;
+        return dir;
+    }
+
     // ---------------------------------------------------------------- triage
 
     record TriageStep(String documentType, String provider, String model, BigDecimal costInr) {}
 
     /**
      * The document_type label the app gives after OCR (ParseAndRouteWorkflow -> DocumentParsingAgent); usage logged as
-     * step "triage". "needs_review" when the agent could not place the document.
+     * step "triage". "needs_review" when the agent could not place the document. {@code text} is the text the agent
+     * sees: the ANONYMISED text in the PDF runner. The prompt also carries the file name, which on a laptop is often
+     * "<client> SCN.pdf": with an anonymised text the agent is given a neutral name ({@link #neutralFilename}) instead.
      */
-    static TriageStep triage(DocumentParsingAgent agent, String noticeId, String filename, OcrResult ocr,
+    static TriageStep triage(DocumentParsingAgent agent, String noticeId, String filename, OcrResult ocr, String text,
                              ApiUsageLogService usage, UUID tenantId, UUID noticeUuid) {
-        DocumentParsingAgent.ParseInput in = new DocumentParsingAgent.ParseInput(noticeId, filename, "web_upload",
-                ocr.text(), ocr.providerName(), ocr.pageCount());
+        boolean anonymised = text != null && !text.equals(ocr.text());
+        DocumentParsingAgent.ParseInput in = new DocumentParsingAgent.ParseInput(noticeId, anonymised ? neutralFilename(filename) : filename,
+                "web_upload", text != null ? text : ocr.text(), ocr.providerName(), ocr.pageCount());
         DocumentParsingAgent.ParsedDocument parsed;
         try {
             parsed = agent.parseDocument(in);
@@ -162,6 +275,20 @@ final class PdfNoticeSteps {
         Object type = parsed.payload() != null ? parsed.payload().get("document_type") : null;
         String docType = type != null && !type.toString().isBlank() ? type.toString() : "needs_review";
         return new TriageStep(docType, parsed.providerName(), parsed.model(), cost);
+    }
+
+    /** "notice.pdf" / "notice.png": the extension of {@code filename} on a name that says nothing about the client. */
+    static String neutralFilename(String filename) {
+        String n = filename != null ? filename : "";
+        int dot = n.lastIndexOf('.');
+        String ext = dot > 0 && dot < n.length() - 1 ? n.substring(dot).toLowerCase(Locale.ROOT) : ".pdf";
+        return "notice" + ext;
+    }
+
+    /** As {@link #triage(DocumentParsingAgent, String, String, OcrResult, String, ApiUsageLogService, UUID, UUID)} on the OCR text itself. */
+    static TriageStep triage(DocumentParsingAgent agent, String noticeId, String filename, OcrResult ocr,
+                             ApiUsageLogService usage, UUID tenantId, UUID noticeUuid) {
+        return triage(agent, noticeId, filename, ocr, ocr.text(), usage, tenantId, noticeUuid);
     }
 
     /** "Triage: document_type=DRC-01 (anthropic:model, cost INR 0.0123)". */

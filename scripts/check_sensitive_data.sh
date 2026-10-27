@@ -6,8 +6,10 @@
 #   * GSTINs  [0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]  not listed in .githooks/allowed_ids.txt
 #   * PANs    [A-Z]{5}[0-9]{4}[A-Z]  not listed (a PAN inside an allow-listed GSTIN is allowed)
 #   * newly added / renamed / copied .pdf .docx .xlsx files not listed in .githooks/allowed_binaries.txt
-#   * newly added / renamed / copied .json files in a learned/ folder (learned library entries hold notice text)
-#     and any file under testbench/results/ (runner output: OCR text and drafts of real notices)
+#   * newly added / renamed / copied .json files in a learned/ folder (learned library entries hold notice text),
+#     any file under testbench/results/ (runner output: OCR text and drafts of real notices), and the PDF runner's
+#     privacy files anywhere: *_anon_map.json (the anonymisation map holds the real identifiers), *_ocr.txt,
+#     *_ocr_anon.txt, *_draft_anon.txt, *_draft.txt / *_draft.docx and *_summary.txt inside a results/ folder
 #
 # Findings print file, line number and a MASKED value (e.g. 27IIIJJ****I1Z9). The matching line
 # itself is never printed.
@@ -95,6 +97,12 @@ scan_name_status_for_binaries() {
         case "$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')" in
             learned/*.json|*/learned/*.json|testbench/results/*|*/testbench/results/*)
                 echo "${label}${path}: private path (learned library / runner results) must stay outside the repository"
+                found=1
+                continue ;;
+            *_anon_map.json|*_ocr_anon.txt|*_draft_anon.txt \
+            |results/*_ocr.txt|*/results/*_ocr.txt|results/*_draft.txt|*/results/*_draft.txt \
+            |results/*_draft.docx|*/results/*_draft.docx|results/*_summary.txt|*/results/*_summary.txt)
+                echo "${label}${path}: private path (PDF runner output: anonymisation map, notice text or draft) must stay under \$PRIVATE_SEED_DIR/results"
                 found=1
                 continue ;;
         esac

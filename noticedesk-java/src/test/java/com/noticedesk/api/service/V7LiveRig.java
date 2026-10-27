@@ -33,6 +33,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -62,7 +63,7 @@ final class V7LiveRig {
     final RunCostLedger ledger;
     final V7DraftingPipelineService pipelineService;
     final LearnedLibrary learnedLibrary;
-    final File resultsDir;
+    File resultsDir;
     final String privateSeedDir;
     final BigDecimal noticeCap;
     final BigDecimal runCap;
@@ -264,13 +265,30 @@ final class V7LiveRig {
                 learnedLibrary, resultsDir, privateSeedDir, noticeCap, runCap);
     }
 
+    /** Results folder for the files of this run (the PDF runner uses {@code $PRIVATE_SEED_DIR/results}). */
+    void useResultsDir(File dir) {
+        this.resultsDir = dir;
+    }
+
     /**
      * Runs the v7 pipeline on one notice text and prints its report. {@code extraLines} are printed right after the
      * notice heading (the PDF runner's "OCR:" / "Triage:" lines); {@code preNoticeInr} is spend on this notice before
-     * the pipeline (OCR, triage), added to its total.
+     * the pipeline (OCR, triage), added to its total. The draft is saved as {@code <noticeId>_v7_draft.txt}.
      */
     NoticeOutcome runNotice(String noticeId, String label, String docType, String ocr, String expectedStatus,
                             List<String> extraLines, BigDecimal preNoticeInr) throws Exception {
+        return runNotice(noticeId, label, docType, ocr, expectedStatus, extraLines, preNoticeInr, null);
+    }
+
+    /**
+     * As {@link #runNotice(String, String, String, String, String, List, BigDecimal)}; with a {@code restorer} (the
+     * anonymiser's de-anonymise function) {@code ocr} is the ANONYMISED text, the pipeline, the learned library and
+     * every model call see only that, and the outputs are written twice: {@code <noticeId>_draft_anon.txt} as the
+     * pipeline produced it and {@code <noticeId>_draft.txt} / {@code <noticeId>_draft.docx} / {@code <noticeId>_summary.txt}
+     * with the real values restored. The report lines are printed restored.
+     */
+    NoticeOutcome runNotice(String noticeId, String label, String docType, String ocr, String expectedStatus,
+                            List<String> extraLines, BigDecimal preNoticeInr, Function<String, String> restorer) throws Exception {
         BigDecimal pre = preNoticeInr != null ? preNoticeInr : BigDecimal.ZERO;
         // the notice cap covers what this notice already spent before the pipeline (OCR, triage)
         props.getLlm().setMaxCostInrPerNotice(noticeCap.subtract(pre).max(BigDecimal.ZERO).doubleValue());
@@ -351,29 +369,51 @@ final class V7LiveRig {
             }
         }
 
-        // Render full draft text and save it to testbench/results/<noticeId>_v7_draft.txt
+        // Render the full draft text (as the pipeline produced it: anonymised when a restorer is given)
         String fullDraftText = V7LivePipelineRunnerTest.renderDraft(noticeId, result);
-        File draftFile = new File(resultsDir, noticeId + "_v7_draft.txt");
-        Files.writeString(draftFile.toPath(), fullDraftText, StandardCharsets.UTF_8);
-
-        System.out.printf("%n--- Notice: %s (%s) ---%n", noticeId, label);
-        if (extraLines != null) extraLines.forEach(System.out::println);
-        System.out.printf("Expected Status (Answer Key): %s%n", expectedStatus);
-        System.out.printf("Matching Step: In=%d, Out=%d | INR=%.4f%n", matchingInTokens, matchingOutTokens, matchingInr);
-        System.out.printf("Variables Step: INR=%.4f%n", variablesInr);
-        System.out.printf("Writer Step: INR=%.4f%n", writerInr);
-        System.out.printf("IndianKanoon Step: INR=%.4f%n", ikInr);
-        System.out.printf("Total Notice Cost: %.4f INR%n", noticeTotalInr);
         long blocking = result.checkResults() == null ? 0 : result.checkResults().stream()
                 .filter(c -> !c.passed() && "block".equals(c.severity())).count();
-        System.out.printf("Citation Statuses: %s%n", citStatuses.isEmpty() ? "None" : citStatuses);
-        System.out.printf("Shortlist: %s%n", V7LivePipelineRunnerTest.shortlistLine(result.checkResults()));
-        System.out.printf("Matched issues: %s%n", V7LivePipelineRunnerTest.matchedIssuesLine(jdbc.getJdbcTemplate().queryForList(
+
+        List<String> report = new ArrayList<>();
+        report.add(String.format("--- Notice: %s (%s) ---", noticeId, label));
+        if (extraLines != null) report.addAll(extraLines);
+        report.add(String.format("Expected Status (Answer Key): %s", expectedStatus));
+        report.add(String.format("Matching Step: In=%d, Out=%d | INR=%.4f", matchingInTokens, matchingOutTokens, matchingInr));
+        report.add(String.format("Variables Step: INR=%.4f", variablesInr));
+        report.add(String.format("Writer Step: INR=%.4f", writerInr));
+        report.add(String.format("IndianKanoon Step: INR=%.4f", ikInr));
+        report.add(String.format("Total Notice Cost: %.4f INR", noticeTotalInr));
+        report.add(String.format("Citation Statuses: %s", citStatuses.isEmpty() ? "None" : citStatuses));
+        report.add(String.format("Shortlist: %s", V7LivePipelineRunnerTest.shortlistLine(result.checkResults())));
+        report.add(String.format("Matched issues: %s", V7LivePipelineRunnerTest.matchedIssuesLine(jdbc.getJdbcTemplate().queryForList(
                 "SELECT issue_no, status, card_ids::text AS card_ids FROM issue_matches WHERE notice_id = CAST(? AS UUID)"
-                        + " AND created_at >= ? ORDER BY issue_no", noticeUuid.toString(), runStart)));
-        System.out.printf("Flags: %s%n", allFlags);
-        learnedLines(result).forEach(System.out::println);
-        System.out.printf("Saved draft to: %s%n", draftFile.getAbsolutePath());
+                        + " AND created_at >= ? ORDER BY issue_no", noticeUuid.toString(), runStart))));
+        report.add(String.format("Flags: %s", allFlags));
+        report.addAll(learnedLines(result));
+
+        File draftFile;
+        if (restorer == null) {
+            draftFile = new File(resultsDir, noticeId + "_v7_draft.txt");
+            Files.writeString(draftFile.toPath(), fullDraftText, StandardCharsets.UTF_8);
+            report.add("Saved draft to: " + draftFile.getAbsolutePath());
+        } else {
+            // the anonymised draft as the models saw it, then every output with the real values restored
+            File anonFile = new File(resultsDir, noticeId + "_draft_anon.txt");
+            Files.writeString(anonFile.toPath(), fullDraftText, StandardCharsets.UTF_8);
+            draftFile = new File(resultsDir, noticeId + "_draft.txt");
+            Files.writeString(draftFile.toPath(), restorer.apply(fullDraftText), StandardCharsets.UTF_8);
+            File docxFile = new File(resultsDir, noticeId + "_draft.docx");
+            Files.write(docxFile.toPath(), restoredDocx(result, restorer, restorer.apply(clientName), restorer.apply(gstin != null ? gstin : ""),
+                    docType, fy));
+            report.replaceAll(restorer::apply);
+            report.add("Saved anonymised draft to: " + anonFile.getAbsolutePath());
+            report.add("Saved restored draft to: " + draftFile.getAbsolutePath() + " and " + docxFile.getAbsolutePath());
+            File summaryFile = new File(resultsDir, noticeId + "_summary.txt");
+            Files.writeString(summaryFile.toPath(), String.join("\n", report) + "\n", StandardCharsets.UTF_8);
+            report.add("Saved summary to: " + summaryFile.getAbsolutePath());
+        }
+        System.out.println();
+        report.forEach(System.out::println);
 
         if ("notice_10_nomatch_anti_profiteering.json".equals(label)) {
             System.out.println("\n=== FULL DRAFT FOR NOTICE_10 ===");
@@ -386,6 +426,29 @@ final class V7LiveRig {
 
     static UUID noticeUuid(String noticeId) {
         return UUID.nameUUIDFromBytes(noticeId.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * The draft as a DOCX (internal mode: every section plus the partner note) with every value restored by
+     * {@code restorer}. {@code clientName} / {@code gstin} are already restored; the PAN is the GSTIN's characters 3-12.
+     */
+    static byte[] restoredDocx(DraftingPipelineResult result, Function<String, String> restorer, String clientName, String gstin,
+                               String docType, String fy) {
+        List<Map<String, Object>> sections = new ArrayList<>();
+        for (DraftingAgent.DraftSection s : result.draft().sections()) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("num", s.num());
+            m.put("title", restorer.apply(s.title() != null ? s.title() : ""));
+            m.put("body_html", restorer.apply(s.bodyHtml() != null ? s.bodyHtml() : ""));
+            sections.add(m);
+        }
+        String pan = gstin != null && gstin.length() == 15 ? gstin.substring(2, 12) : "[[MISSING: PAN]]";
+        String firm = Optional.ofNullable(System.getenv("FIRM_NAME")).filter(s -> !s.isBlank()).orElse("[[FIRM NAME]]");
+        DocxExportService.CoverSheetData cover = new DocxExportService.CoverSheetData(firm,
+                clientName != null && !clientName.isBlank() ? clientName : "[[MISSING: client name]]", pan, "GSTIN",
+                gstin != null && !gstin.isBlank() ? gstin : "[[MISSING: GSTIN]]", docType, fy, null, null);
+        String note = result.draft().internalPartnerNote();
+        return new DocxExportService().renderDraftDocx("internal", cover, sections, note != null ? restorer.apply(note) : null);
     }
 
     /** One "Learned: saved LRN-xxxx for issue #N" line per AI section the pipeline saved to the learned library. */

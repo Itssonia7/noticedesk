@@ -103,11 +103,33 @@ try_commit "nested learned folder rejected" reject
 mkdir -p testbench/results; printf 'ocr' > testbench/results/n1_ocr.txt; git add -f testbench/results/n1_ocr.txt
 try_commit "runner result rejected" reject
 
+# 11b. the PDF runner's privacy files rejected wherever they are: the anonymisation map, the anonymised text, a draft
+#      or summary inside a results/ folder
+printf '{}' > n1_anon_map.json; git add -f n1_anon_map.json
+try_commit "anonymisation map rejected" reject
+if printf '%s' "$LAST_OUT" | grep -Fq "n1_anon_map.json: private path"; then ok "anonymisation map reported as a private path"; else bad "anon map finding"; echo "$LAST_OUT"; fi
+mkdir -p docs; printf 'text' > docs/n1_ocr_anon.txt; git add -f docs/n1_ocr_anon.txt
+try_commit "anonymised notice text rejected" reject
+mkdir -p docs; printf 'text' > docs/n1_draft_anon.txt; git add -f docs/n1_draft_anon.txt
+try_commit "anonymised draft rejected" reject
+mkdir -p private/results; printf 'text' > private/results/n1_draft.txt; git add -f private/results/n1_draft.txt
+try_commit "restored draft in a results folder rejected" reject
+mkdir -p private/results; printf 'x' > private/results/n1_draft.docx; git add -f private/results/n1_draft.docx
+try_commit "restored draft docx in a results folder rejected" reject
+mkdir -p private/results; printf 'text' > private/results/n1_summary.txt; git add -f private/results/n1_summary.txt
+try_commit "run summary in a results folder rejected" reject
+mkdir -p private/results; printf 'text' > private/results/n1_ocr.txt; git add -f private/results/n1_ocr.txt
+try_commit "OCR text in a results folder rejected" reject
+
 # 12. a file merely named like the folder, and source code in a package named learned, are fine
 printf 'notes\n' > learned_notes.txt; git add learned_notes.txt
 try_commit "file named learned_notes accepted" accept
 mkdir -p src/service/learned; printf 'class LearnedLibrary {}\n' > src/service/learned/LearnedLibrary.java; git add src/service/learned/LearnedLibrary.java
 try_commit "source file in a learned package accepted" accept
+printf 'golden draft text\n' > golden_draft.txt; git add golden_draft.txt
+try_commit "a draft text outside a results folder accepted" accept
+mkdir -p src/service/privacy; printf 'class NoticeAnonymiser {}\n' > src/service/privacy/NoticeAnonymiser.java; git add src/service/privacy/NoticeAnonymiser.java
+try_commit "source file of the anonymiser accepted" accept
 
 echo ""
 echo "check_sensitive_data tests: $pass passed, $fail failed"

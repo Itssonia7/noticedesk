@@ -198,6 +198,11 @@ public final class DefectChecker {
     /** A real DIN / RFN value: a token of 8 or more letters / digits with at least one digit. */
     private static final Pattern DIN_VALUE = Pattern.compile("(?i)(?<![A-Z0-9])(?=[A-Z0-9/-]*\\d)[A-Z0-9/-]{8,}");
 
+    /** True when {@code value} reads as a DIN / RFN value (the test the DIN defect check applies to the DIN line). */
+    public static boolean looksLikeDinValue(String value) {
+        return value != null && DIN_VALUE.matcher(value).find();
+    }
+
     static CodeDefect din(String text, String matcherDin, LocalDate date) {
         String head = head(text);
         String designations = String.join("\n", lastLines(text, SIGNATURE_LINES).stream()

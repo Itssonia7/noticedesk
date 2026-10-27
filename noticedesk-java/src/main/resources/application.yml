@@ -82,6 +82,11 @@ noticedesk:
     # model is LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES (empty = GEMINI_MODEL) and the key GEMINI_API_KEY.
     provider-new-issue: ${LLM_PROVIDER_NEW_ISSUE:}
     provider-high-stakes: ${LLM_PROVIDER_HIGH_STAKES:}
+    # Provider of the document parsing agent = the triage after OCR (anthropic | gemini | stub); empty = provider-primary.
+    # Default: the primary provider with model-parsing (an Anthropic model id), NOT gemini. With gemini the model is
+    # LLM_MODEL_PARSING when it names a Gemini model, else GEMINI_MODEL; the key is GEMINI_API_KEY. The PDF runner reads
+    # LLM_PROVIDER_TRIAGE / LLM_MODEL_TRIAGE and sends the triage only the ANONYMISED notice text.
+    provider-parsing: ${LLM_PROVIDER_TRIAGE:}
     model-extraction: ${LLM_MODEL_EXTRACTION:claude-haiku-4-5-20251001}
     model-formatting: ${LLM_MODEL_FORMATTING:claude-haiku-4-5-20251001}
     model-opus: ${LLM_MODEL_OPUS:claude-opus-4-7}
@@ -241,7 +246,21 @@ noticedesk:
         output-per-million: 75.0
         cache-read-per-million: 1.50
         cache-write-per-million: 18.75
+      # the local OCR provider's engines (OCR_PROVIDER=local): nothing is sent anywhere, the "ocr" step costs 0
+      "pdfbox":
+        input-per-million: 0.0
+        output-per-million: 0.0
+        cache-read-per-million: 0.0
+        cache-write-per-million: 0.0
+      "tesseract":
+        input-per-million: 0.0
+        output-per-million: 0.0
+        cache-read-per-million: 0.0
+        cache-write-per-million: 0.0
   ocr:
+    # stub | local | gemini | google_doc_ai | azure_doc_intel. "local" never uses the network: the PDF text layer through
+    # PDFBox, a scanned PDF through the system tesseract command (refused when tesseract is not installed). The PDF
+    # runner (V7PdfPipelineRunnerTest) reads OCR_PROVIDER (default local) instead and anonymises the text before any model.
     provider-primary: ${OCR_PROVIDER_PRIMARY:stub}
     provider-fallback: ${OCR_PROVIDER_FALLBACK:}
     # OCR_PROVIDER_PRIMARY=gemini: the PDF / image is sent inline to this model (GEMINI_API_KEY). The default model is

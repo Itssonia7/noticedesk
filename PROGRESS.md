@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 27-10-2026 (b27: IndianKanoon name / court matching, CONFIRM markers for assumed facts, ranked and capped shortlist title pass, per-issue citation limit)
+Last updated: 27-10-2026 (b28: privacy-first PDF path: local text extraction, anonymiser, triage and v7 on the anonymised text, de-anonymised outputs)
 
 ---
 
@@ -1007,8 +1007,88 @@ client, no model call): `CitationNameMatchingTest` (6), `V7ConfirmMarkersAndCita
 - **Docs**: README and `docs/PRODUCTION-CONFIG.md` list `CITATIONS_MAX_PER_ISSUE`, `SHORTLIST_TITLE_MAX_CARDS` and the
   four-field `CITATION_CHECK_LIST`.
 
+## (b28) Privacy-first PDF path: local text, anonymiser, de-anonymised outputs (27-10-2026)
+
+The firm's gemini key is on the FREE tier (data may be used for training). Until now the PDF runner sent the raw PDF
+bytes to `GeminiOcrProvider`, so the client's name, GSTIN and address reached the model before anything else ran.
+All proved offline with synthetic text (fictional party "ZETA ALLOYS", allow-listed placeholder GSTINs); no live call.
+
+- **1. Local text extraction** (`service/ocr/LocalOcrProvider`, `OcrFactory` name `local`, PDFBox 3.0.3 added to the
+  pom): a digital PDF's text layer is read page by page with `PDFTextStripper` (reading order, so a table row stays on
+  one line) with the same `=== PAGE n ===` markers as the gemini provider, so page count, header facts and the
+  anonymiser are unchanged. A page with fewer than 40 letters / digits counts as scanned; when fewer than half the
+  pages have text the PDF is scanned: every text-less page is rendered at 300 dpi and run through the system
+  `tesseract <png> stdout -l eng`; without tesseract on the PATH the provider fails with `OcrException` "scanned PDF
+  needs tesseract or a paid OCR provider; refusing to send raw bytes to a free-tier model" (an image needs tesseract
+  too). Usage reports provider `local`, "model" `pdfbox` / `tesseract` (priced 0 in application.yml), 0 tokens: the
+  runner logs the step `ocr` at INR 0.0000. `OCR_PROVIDER_PRIMARY=local` also works for the app's upload path.
+  Proved by `LocalOcrProviderTest` (7: PDFs built in the test, a fake tesseract runner present / absent).
+- **2. Anonymiser** (`service/privacy/NoticeAnonymiser`, `AnonymisationMap`; pure code): one pass collects spans from
+  every detector over the original text, resolves overlaps (GSTIN before PAN, names before addresses) and writes the
+  placeholders; the same real value always gets the same placeholder. GSTIN `27AAACB....` -> `27AAAAA0001A1Z1` (state
+  code and entity digit kept; the PAN inside is the standalone PAN's placeholder `AAAAA0001A`; check character = the
+  GSTIN's sequence); TAN `AAAA00001A`, CIN, IEC / Aadhaar / bank account (labelled) and IFSC keep their shape; phones
+  `9000000001` (also `98765 43210` and `022-...`), e-mails `person1@example.com`, PIN codes `900001`; ARN / DIN /
+  reference numbers after their labels (`Ref. No`, `DIN`, `ARN`, `Notice No`, `Case ID`, `Temporary ID`, ...) and bare
+  ARN / portal / DIN shapes keep letters and separators and replace each digit run by the sequence number (a 4-digit
+  year and the "-24" after it in `SCN/MH/2023-24/606` are kept), so the DIN defect check still sees a DIN-shaped value
+  (`DefectChecker.looksLikeDinValue`). Names: the taxpayer's core (from `NoticeHeaderFacts.taxpayerLegalName`, the
+  labelled Legal / Trade / "Name of the taxpayer" names, an "M/s" name nearest the taxpayer GSTIN, the addressee line
+  after "To,") -> `NOTICEE COMPANY` (a second distinct taxpayer name `NOTICEE COMPANY 2`), the legal-form suffix
+  ("Private Limited", "Pvt. Ltd.", "LLP", "& Co", ...) stays in the text; other parties ("M/s" names nearest another
+  GSTIN, labelled supplier / vendor names, the table cell next to another party's GSTIN, a business after "Shri")
+  -> `SUPPLIER n` plus the trailing trade word (`SUPPLIER 1 TRADERS`); persons after Shri / Smt / Mr / Ms / Dr /
+  Proprietor / Director / Partner / Authorised Signatory -> `PERSON n` (the honorific stays). Every occurrence of a
+  core is replaced case-insensitively (a title-case occurrence gets the title-case placeholder, so the mapping restores
+  each spelling exactly); a one-word core shorter than five letters or in a common-word list is replaced only with its
+  suffix attached. Addresses: the text after `Address` / `Add.` / `Regd. office` / `Principal place of business` and
+  the lines of the "To," block up to the PIN -> `ADDRESS n`, keeping the trailing segments that are a State or a known
+  city (jurisdiction); the PIN becomes `90000n`. Kept: amounts, dates, periods, sections, form names, officer
+  designations, the office, tax rates, HSN, invoice numbers. `deAnonymise(text, map)` matches placeholders longest
+  first, as whole tokens, case-insensitively (a writer that re-cases "Noticee Company" is still restored). A second
+  pass over an anonymised text changes nothing (placeholder shapes are recognised). The mapping is JSON
+  `{version, counts, entries:[{kind, placeholder, value}]}`; `summaryLine()` gives counts only. Proved by
+  `NoticeAnonymiserTest` (8): nothing identifying survives, consistency and shape, DIN check, exact round trip (also
+  through the JSON file), idempotence, `NoticeHeaderFacts` still finds the taxpayer GSTIN / name / State on the
+  anonymised text, persons / labelled names / other ids, empty text.
+- **3. Pipeline order in the PDF runner** (`V7PdfPipelineRunnerTest`, `PdfNoticeSteps`, `V7LiveRig`): `OCR_PROVIDER`
+  (default `local`) -> anonymise (`NOTICE_ANONYMISE`, default on) -> `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` and
+  `<id>_anon_map.json` -> triage on the anonymised text (file name sent as `notice.pdf`, never the PDF's name) -> v7
+  pipeline on the anonymised text (unchanged) -> outputs restored before saving: `<id>_draft_anon.txt` (as produced),
+  `<id>_draft.txt`, `<id>_draft.docx` (internal mode, cover from the restored header, partner note restored),
+  `<id>_summary.txt` (the report lines, restored; printed restored too). Guards: a non-local OCR provider with the
+  anonymiser on is refused before any file is read ("REFUSED: OCR_PROVIDER=gemini sends the raw PDF bytes to a model
+  before anonymisation ... set NOTICE_ANONYMISE=off to accept that explicitly"); `PRIVATE_SEED_DIR` must be set and
+  outside a git working tree (the map is never written inside one: `saveAnonymised` refuses). The learned library
+  stores the anonymised text only (the pipeline never sees anything else; the entry's `notice_id` is the PDF's file
+  name, so PDFs should be named neutrally). One `Privacy: anonymised GSTINs a, PANs b, names c (taxpayer, other
+  parties, persons), addresses d, references e, other ids f` line per notice. `V7LivePipelineRunnerTest` (JSON notices)
+  is unchanged (`runNotice` without a restorer still writes `<id>_v7_draft.txt`). Proved by
+  `V7PdfPrivacyPipelineOfflineTest` (4: settings and guard, git-tree refusal, local text -> anonymise -> triage with a
+  capturing provider -> mocked pipeline -> learned entry -> restored TXT / DOCX, per-agent triage provider).
+- **4. Triage**: `DocumentParsingAgent` ran, and still runs by default, on the PRIMARY provider (Anthropic in the
+  rig) with `model-parsing` (`LLM_MODEL_PARSING`, default an Anthropic Haiku model id), not on gemini; only
+  `NoticeTriageAgent` (the checklist triage, not used by the runner) is pinned to gemini. New `provider-parsing`
+  (`LLM_PROVIDER_TRIAGE`, blank = primary) in `AppProperties.Llm.providerForAgent("parsing")`; with gemini the model
+  is `LLM_MODEL_PARSING` when it names a gemini model, else `GEMINI_MODEL`. The runner reads `LLM_PROVIDER_TRIAGE`
+  (default anthropic) and `LLM_MODEL_TRIAGE` (else `LLM_MODEL_PARSING`, else application.yml), requires the model
+  to be priced and `GEMINI_API_KEY` for gemini. The triage prompt and logic are unchanged; it works on the anonymised
+  text (document type, period, sections, grounds need no identifier).
+- **5. Privacy hook, ignore list, docs**: `scripts/check_sensitive_data.sh` rejects `*_anon_map.json`,
+  `*_ocr_anon.txt`, `*_draft_anon.txt` anywhere and `*_ocr.txt` / `*_draft.txt` / `*_draft.docx` / `*_summary.txt`
+  inside a `results/` folder (hook tests 32 passed, 10 new); `.gitignore` the same patterns;
+  `.githooks/allowed_ids.txt` lists the synthetic test GSTINs and the placeholders the tests assert. README (env
+  vars), `docs/PRIVATE_DATA.md` (the privacy order, `results/`), `docs/PRODUCTION-CONFIG.md` 2b (table, env vars, the
+  copy-paste Linux laptop block with `LIVE_EXPECTED_COMMIT`, the caps and the Sonnet writer).
+- Not done: a live run (no key, no PDF here); tesseract is not installed in this container, so the tesseract branch is
+  proved with a fake runner only; the anonymiser is regex-based (an unusual name layout can survive: read
+  `<id>_ocr_anon.txt` once before the first live run).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **606 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 27-10-2026 after (b28), the Spring context test included (local Postgres 16).
+  Before the change the suite on `102c4c2` was 587 tests, 0 failures, 2 skipped (re-run the same day).
 - Offline unit suite (`mvn test`): **587 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 27-10-2026 after (b27), the Spring context test included (local Postgres 16).
   Before the change the suite on `d87ddcc` was 570 tests, 0 failures, 2 skipped (re-run the same day).
@@ -1037,13 +1117,16 @@ client, no model call): `CitationNameMatchingTest` (6), `V7ConfirmMarkersAndCita
 - Golden drafts compared on every run, built from the testbench notice JSON:
   - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
   - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.
-- Privacy hook tests: 22 passed, 0 failed (after (b25); 16 before).
+- Privacy hook tests: 32 passed, 0 failed (after (b28); 22 after (b25), 16 before).
 
 ## (d) Open items
 
 1. **Next live run**: smoke run first (`LIVE_SMOKE=true`, `LIVE_EXPECTED_COMMIT` set), then Run 2
    on notices 01, 04, 06, 11, 10 (`V7_LIVE_NOTICES`). Set `LLM_MODEL_MATCHING`,
    `LLM_MODEL_PARTIAL_DRAFTING`, `LLM_MODEL_NEW_ISSUE`, `LLM_MODEL_HIGH_STAKES`, `INDIANKANOON_API_TOKEN`.
+   For a real PDF use the (b28) privacy path (`docs/PRODUCTION-CONFIG.md` 2b): after the first run read
+   `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` once to confirm nothing identifying survived the anonymiser, and
+   install `tesseract-ocr` before a scanned PDF.
 2. **CA-approved content**: real issue cards, reply templates and stage templates (prayer, filing
    checklist). All current templates are marked "[DEV - not CA reviewed]". Approved content goes in
    `$PRIVATE_SEED_DIR`, not the repo (see `docs/PRIVATE_DATA.md`).

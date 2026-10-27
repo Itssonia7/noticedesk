@@ -133,6 +133,21 @@ v7 drafting (Java only):
   notices to the high-stakes writer. Off, every notice uses the normal path (code template fill, partial writer,
   new-issue writer).
 
+PDF runner privacy path (`V7PdfPipelineRunnerTest`; details in [`docs/PRIVATE_DATA.md`](docs/PRIVATE_DATA.md), the
+copy-paste laptop block in [`docs/PRODUCTION-CONFIG.md`](docs/PRODUCTION-CONFIG.md#2b-pdf-runner-on-a-laptop--local-text-anonymisation-restored-draft)):
+- `OCR_PROVIDER=local` (default) — the PDF text layer through PDFBox; a scanned PDF through the system `tesseract`
+  command (`apt install tesseract-ocr tesseract-ocr-eng`), refused with a clear message when it is not installed.
+  Nothing is sent to any model. `gemini` (the free-tier key) is refused unless `NOTICE_ANONYMISE=off`.
+- `NOTICE_ANONYMISE=on` (default) — GSTINs, PANs, names, addresses, reference numbers and other ids become same-shape
+  placeholders before triage and the v7 pipeline; the outputs are restored before saving. `off` sends the real text
+  (only with an explicit decision to do so).
+- `PRIVATE_SEED_DIR` (required) — `pdf/` holds the notices (`V7_PDF_NOTICES=a.pdf,b.pdf`), `results/` receives
+  `<id>_ocr_anon.txt`, `<id>_anon_map.json`, `<id>_draft_anon.txt`, `<id>_draft.txt`, `<id>_draft.docx`, `<id>_summary.txt`.
+- `LLM_PROVIDER_TRIAGE=anthropic` (default) / `LLM_MODEL_TRIAGE=` (default `LLM_MODEL_PARSING`, else the
+  `model-parsing` default in `application.yml`, an Anthropic Haiku model id) — the document-type triage after the local
+  text. Triage does **not** run on gemini unless `LLM_PROVIDER_TRIAGE=gemini` is set; either way it sees only the
+  anonymised text. `OCR_PROVIDER_PRIMARY=local` also works for the app's upload path.
+
 ---
 
 ## 3. Frontend (Next.js)

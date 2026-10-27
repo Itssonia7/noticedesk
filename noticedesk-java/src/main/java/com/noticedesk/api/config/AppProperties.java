@@ -49,6 +49,11 @@ public class AppProperties {
         private String providerNewIssue = "";
         /** Provider of the high-stakes writer; blank = the primary provider. */
         private String providerHighStakes = "";
+        /**
+         * Provider of the document parsing agent (triage after OCR: document type, period, sections, grounds);
+         * blank = the primary provider. Env {@code LLM_PROVIDER_TRIAGE}.
+         */
+        private String providerParsing = "";
         private Anthropic anthropic = new Anthropic();
         private OpenAi openai = new OpenAi();
         private Gemini gemini = new Gemini();
@@ -111,12 +116,13 @@ public class AppProperties {
 
         /**
          * Provider for an agent key: {@code provider-new-issue} for new_issue, {@code provider-high-stakes} for
-         * high_stakes when set, else the primary provider.
+         * high_stakes, {@code provider-parsing} for parsing (triage) when set, else the primary provider.
          */
         public String providerForAgent(String agent) {
             String override = switch (agent != null ? agent : "") {
                 case "new_issue" -> providerNewIssue;
                 case "high_stakes" -> providerHighStakes;
+                case "parsing" -> providerParsing;
                 default -> null;
             };
             return override != null && !override.isBlank() ? override.trim().toLowerCase(java.util.Locale.ROOT) : providerPrimary;
@@ -447,8 +453,15 @@ public class AppProperties {
         if ("openai".equals(provider)) {
             return llm.openai.model;
         } else if ("gemini".equals(provider)) {
-            // the writers name their own model (LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES); else GEMINI_MODEL
-            String writerModel = "new_issue".equals(agent) ? llm.modelNewIssue : "high_stakes".equals(agent) ? llm.modelHighStakes : null;
+            // the writers name their own model (LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES), the parsing agent
+            // LLM_MODEL_PARSING when it is not an Anthropic model id; else GEMINI_MODEL
+            String writerModel = switch (agent != null ? agent : "") {
+                case "new_issue" -> llm.modelNewIssue;
+                case "high_stakes" -> llm.modelHighStakes;
+                case "parsing" -> llm.modelParsing != null && !llm.modelParsing.toLowerCase(java.util.Locale.ROOT).startsWith("claude")
+                        ? llm.modelParsing : null;
+                default -> null;
+            };
             return writerModel != null && !writerModel.isBlank() ? writerModel.trim() : llm.gemini.model;
         } else if (!"anthropic".equals(provider)) {
             return "";
