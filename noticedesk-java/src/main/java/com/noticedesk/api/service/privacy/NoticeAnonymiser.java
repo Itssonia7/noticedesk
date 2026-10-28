@@ -214,6 +214,28 @@ public final class NoticeAnonymiser {
             "(?i)\\b(?:Shri|Smt|Sri|Shrimati|Kumari|Mr|Mrs|Ms|Miss|Dr)\\.?\\s+"
             + "|\\b(?:Proprietor|Proprietress|Partner|Director|Managing\\s+Director|Authori[sz]ed\\s+Signatory|Signatory|Karta|Prop)\\.?\\s*[:\\-–]\\s*");
     private static final Pattern PERSON_WORD = Pattern.compile("^[A-Z][A-Za-z.'\\-]*$");
+    /**
+     * A line that is an officer's designation: "Dy. Commissioner of State Tax", "State Tax Officer", "(Proper
+     * Officer)", "Assistant Commissioner (ST), Mumbai". The office line "OFFICE OF THE ..." is not one.
+     */
+    private static final Pattern DESIGNATION_LINE = Pattern.compile(
+            "(?i)^\\s*\\(?\\s*(?:(?:Dy\\.?|Deputy|Asst\\.?|Assistant|Joint|Jt\\.?|Addl\\.?|Additional|Principal|Chief|Special|Senior|Sr\\.?)\\s+)*"
+            + "(?:Commissioner|Superintendent|Inspector|State\\s+Tax\\s+Officer|Tax\\s+Officer|Proper\\s+Officer|Adjudicating\\s+Authority"
+            + "|Appellate\\s+Authority|Officer|Adjudicating\\s+Officer|Assessing\\s+Officer|Authorised\\s+Officer|Authorized\\s+Officer)\\b.*$");
+    /** Marks a signature: "Sd/-", "Signed by", "Digitally signed by", "Signature:"; the signer's name follows on the line or the next. */
+    private static final Pattern SIGNATURE_MARKER = Pattern.compile(
+            "(?i)(?:\\bSd/-|\\bSd\\.|\\bSigned\\s+by|\\bDigitally\\s+signed\\s+by|\\bSignature)\\s*[:\\-–]?[ \\t]*");
+    /** "Nikhil Raut, State Tax Officer" / "Sunita Gaikwad, Dy. Commissioner": a name right before a designation on one line. */
+    private static final Pattern NAME_BEFORE_DESIGNATION = Pattern.compile(
+            "(?<![A-Za-z0-9.])([A-Z][a-z]+(?:\\s+(?:[A-Z]\\.|[A-Z][a-z]+)){1,3}),?\\s+\\(?(?:(?:Dy\\.?|Deputy|Asst\\.?|Assistant|Joint|Jt\\.?|Addl\\.?"
+            + "|Additional|Principal|Chief|Special|Senior|Sr\\.?)\\s+)*(?:Commissioner|Superintendent|Inspector|State\\s+Tax\\s+Officer|Tax\\s+Officer"
+            + "|Proper\\s+Officer|Adjudicating\\s+Authority)\\b");
+    /** Office / unit words that follow a designation in a signature block; never part of a person's name. */
+    private static final Set<String> NOT_IN_A_SIGNATURE_NAME = Set.of("nodal", "division", "zone", "range", "ward", "circle", "unit",
+            "branch", "cell", "wing", "headquarters", "hq", "bureau", "intelligence", "investigation", "anti", "evasion", "audit",
+            "large", "taxpayer", "taxpayers", "office", "commissionerate", "department", "government", "place", "date", "copy",
+            "seal", "stamp", "signature", "signed", "digitally", "sd", "sd/-", "encl", "enclosure", "to", "the", "for", "and", "of",
+            "mumbai", "maharashtra", "india", "gst", "sgst", "cgst", "mgst", "igst", "state", "tax", "ltu", "jurisdiction");
     private static final Set<String> NOT_IN_A_PERSON_NAME = Set.of("assistant", "deputy", "joint", "additional", "principal",
             "commissioner", "superintendent", "inspector", "officer", "state", "central", "tax", "gst", "cgst", "sgst",
             "proprietor", "director", "partner", "of", "the", "and", "son", "daughter", "wife", "s/o", "d/o", "w/o", "age",
@@ -320,6 +342,7 @@ public final class NoticeAnonymiser {
         findReferences();
         findBusinessNames();
         findPersonNames();
+        findSignatureNames();
         findAddresses();
 
         String out = apply();
@@ -1104,6 +1127,101 @@ public final class NoticeAnonymiser {
             boolean upper = found.equals(found.toUpperCase(Locale.ROOT));
             add(at, at + found.length(), upper ? ph : titleCase(ph), AnonymisationMap.KIND_PERSON_NAME, 5);
         }
+    }
+
+    // ---------------------------------------------------------------- signature block
+
+    /**
+     * The officer who signed: a name on a line of its own next to a designation line ("Nikhil Raut" above "Dy.
+     * Commissioner of State Tax"), after "Sd/-" / "Signed by" / "Signature" (same line or the next), or right before a
+     * designation on one line ("Sunita Gaikwad, State Tax Officer"). The designation stays; the person -> "PERSON n",
+     * every occurrence.
+     */
+    private void findSignatureNames() {
+        List<int[]> lines = new ArrayList<>();
+        int at = 0;
+        while (at <= text.length()) {
+            int le = text.indexOf('\n', at);
+            if (le < 0) le = text.length();
+            lines.add(new int[]{at, le});
+            if (le >= text.length()) break;
+            at = le + 1;
+        }
+        for (int i = 0; i < lines.size(); i++) {
+            String line = text.substring(lines.get(i)[0], lines.get(i)[1]);
+            if (!DESIGNATION_LINE.matcher(line).matches()) continue;
+            // the nearest non-blank line above and below, at most two lines away
+            for (int dir : new int[]{-1, 1}) {
+                for (int k = 1; k <= 2; k++) {
+                    int j = i + dir * k;
+                    if (j < 0 || j >= lines.size()) break;
+                    String other = text.substring(lines.get(j)[0], lines.get(j)[1]);
+                    if (other.isBlank()) continue;
+                    personOnLine(other, lines.get(j)[0]);
+                    break;
+                }
+            }
+        }
+        Matcher m = SIGNATURE_MARKER.matcher(text);
+        while (m.find()) {
+            int[] line = lineBounds(m.end());
+            String rest = text.substring(m.end(), line[1]);
+            if (!rest.isBlank()) {
+                personOnLine(rest, m.end());
+            } else {
+                int next = line[1] + 1;
+                for (int k = 0; k < 2 && next < text.length(); k++) {
+                    int[] nl = lineBounds(next);
+                    String other = text.substring(nl[0], nl[1]);
+                    if (!other.isBlank()) {
+                        if (!DESIGNATION_LINE.matcher(other).matches()) personOnLine(other, nl[0]);
+                        break;
+                    }
+                    next = nl[1] + 1;
+                }
+            }
+        }
+        m = NAME_BEFORE_DESIGNATION.matcher(text);
+        while (m.find()) personOnLine(m.group(1), m.start(1));
+        // placeholders numbered in text order (the first occurrence of each name), every occurrence replaced
+        List<String> names = new ArrayList<>(signatureNames.keySet());
+        names.sort(Comparator.comparingInt(this::firstOccurrence));
+        for (String name : names) {
+            String key = AnonymisationMap.KIND_PERSON_NAME + "|" + name.toUpperCase(Locale.ROOT);
+            if (placeholders.containsKey(key)) continue;   // found with an honorific already: every occurrence is covered
+            String ph = PERSON_PLACEHOLDER + " " + nextSequence(AnonymisationMap.KIND_PERSON_NAME);
+            placeholders.put(key, ph);
+            replaceCore(name, ph, AnonymisationMap.KIND_PERSON_NAME, 5);
+        }
+    }
+
+    /** Signature-block persons found (upper case -> as first written). */
+    private final LinkedHashMap<String, String> signatureNames = new LinkedHashMap<>();
+
+    /** Notes the person whose name is {@code line} (brackets, honorific and trailing punctuation set aside), if it reads as one. */
+    private void personOnLine(String line, int lineStart) {
+        String s = line.strip().replaceAll("^[(\\[]+|[)\\],.;:]+$", "").strip();
+        s = s.replaceFirst("(?i)^(?:Shri|Smt|Sri|Shrimati|Kumari|Mr|Mrs|Ms|Miss|Dr)\\.?\\s+", "");
+        if (!readsAsPersonName(s)) return;
+        if (coreIsTaxpayer.containsKey(s.toUpperCase(Locale.ROOT))) return;   // a business already classified
+        signatureNames.putIfAbsent(s.toUpperCase(Locale.ROOT), s);
+    }
+
+    /** Two to four capitalised words (title case or capitals; an initial allowed), none a designation, office, form or place word. */
+    static boolean readsAsPersonName(String s) {
+        if (s == null || s.isBlank() || s.chars().anyMatch(Character::isDigit)) return false;
+        if (PLACEHOLDER_NAME_PREFIX.matcher(s).find() || ALREADY_PLACEHOLDER.matcher(s).matches()) return false;
+        String[] words = s.trim().split("\\s+");
+        if (words.length < 2 || words.length > 4) return false;
+        for (String w : words) {
+            String bare = w.replaceAll("[.,]+$", "");
+            boolean initial = bare.matches("[A-Z]");
+            if (!initial && !(bare.matches("[A-Z][a-z'\\-]+") || bare.matches("[A-Z][A-Z'\\-]+"))) return false;
+            String lw = bare.toLowerCase(Locale.ROOT);
+            if (NOT_IN_A_PERSON_NAME.contains(lw) || NOT_IN_A_SIGNATURE_NAME.contains(lw) || BUSINESS_STOP_WORDS.contains(bare.toUpperCase(Locale.ROOT))) return false;
+            if (TRADE_WORDS.contains(lw) || STATE_OR_CITY.matcher(bare).matches()) return false;
+        }
+        return !LEGAL_SUFFIX.matcher(" " + s).find();
     }
 
     // ---------------------------------------------------------------- addresses

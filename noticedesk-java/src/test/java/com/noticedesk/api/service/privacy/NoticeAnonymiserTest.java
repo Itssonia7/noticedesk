@@ -333,6 +333,49 @@ class NoticeAnonymiserTest {
         assertEquals(a, NoticeAnonymiser.anonymise(a).text(), "a second pass changes nothing");
     }
 
+    /**
+     * The signature block at the end: the signing officer's name on a line of its own next to the designation line,
+     * after "Sd/-", in brackets, or before a designation on one line ("..., State Tax Officer") -> "PERSON n"; the
+     * designation, the office line, place and date stay.
+     */
+    @Test
+    void personNamesInTheSignatureBlockAreReplaced() {
+        String text = """
+                GSTIN: 27ZZZZZ9999Z1Z9
+                3. You are directed to file a reply within 15 days of receipt of this notice.
+                Place: Mumbai
+                Date: 12.09.2025
+
+                Sd/-
+                Nikhil Raut
+                Dy. Commissioner of State Tax
+                Mumbai Nodal Division 3
+
+                Copy to: Sunita Gaikwad, State Tax Officer, for information and necessary action.
+                Signed by Nikhil Raut on 12.09.2025.
+
+                (Prakash Shelar)
+                State Tax Officer
+                Digitally signed by
+                Prakash Shelar
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        for (String name : List.of("Nikhil", "Raut", "Sunita", "Gaikwad", "Prakash", "Shelar")) {
+            assertFalse(a.contains(name), "survived: " + name + "\n" + a);
+        }
+        assertTrue(a.contains("\nSd/-\nPerson 1\nDy. Commissioner of State Tax\nMumbai Nodal Division 3\n"), a);
+        assertTrue(a.contains("Copy to: Person 2, State Tax Officer, for information"), a);
+        assertTrue(a.contains("Signed by Person 1 on 12.09.2025."), "every occurrence of the same person\n" + a);
+        assertTrue(a.contains("\n(Person 3)\nState Tax Officer\nDigitally signed by\nPerson 3\n"), a);
+        for (String kept : List.of("Place: Mumbai", "Date: 12.09.2025", "within 15 days")) assertTrue(a.contains(kept), "lost: " + kept + "\n" + a);
+        assertTrue(r.privacyLine().contains("persons 3"), r.privacyLine());
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        assertEquals(a, NoticeAnonymiser.anonymise(a).text(), "a second pass changes nothing");
+        // the existing notice's closing designation line (no name) is untouched
+        assertTrue(NoticeAnonymiser.anonymise(NOTICE).text().endsWith("\nAssistant Commissioner of State Tax\n"));
+    }
+
     @Test
     void emptyAndPlainTextAreUntouched() {
         assertEquals("", NoticeAnonymiser.anonymise("").text());
