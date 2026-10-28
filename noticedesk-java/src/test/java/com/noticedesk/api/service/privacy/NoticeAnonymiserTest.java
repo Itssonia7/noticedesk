@@ -244,6 +244,95 @@ class NoticeAnonymiserTest {
         assertEquals("27AAAAA0001A1Z1", NoticeHeaderFacts.taxpayerGstin(a).gstin());
     }
 
+    /**
+     * Vendor names a refund show cause notice prints in capitals, in three layouts: (a) prose, the name before a
+     * bracketed "(GSTIN:...)"; (b) "supplier i.e. NAME" with the GSTIN on the next line and "supplier of NAME";
+     * (c) a table whose cells are each on their own line (split GSTIN, blank line, the name, blank line, amounts),
+     * the same vendor twice. Every one becomes "SUPPLIER n" (trade word kept), every occurrence, the taxpayer stays
+     * "NOTICEE COMPANY", form / office / heading words in capitals are untouched, and no upper-case business phrase
+     * survives.
+     */
+    @Test
+    void upperCaseVendorNamesInProseAndTableBlocksAreReplaced() {
+        String text = """
+                GOVERNMENT OF MAHARASHTRA
+                OFFICE OF THE DY. COMMISSIONER OF STATE TAX, MUMBAI NODAL DIVISION 3
+                FORM GST RFD-08
+                SHOW CAUSE NOTICE FOR REJECTION OF REFUND APPLICATION
+                To,
+                M/s ZETA ALLOYS PRIVATE LIMITED
+                GSTIN: 27ZZZZZ9999Z1Z9
+                1. M/s Zeta Alloys Private Limited (the claimant) has claimed a refund of INPUT TAX CREDIT on inward supplies.
+                2. (a) On verification it is seen that the supplier  KAPPA WIRELESS NETWORKS  (GSTIN:24YYYYY8888Y1Z8)  at Rs. 2,00,000 has not filed GSTR-3B.
+                   (b) The supplier i.e.  SIGMA FREIGHT MOVERS
+                (GSTIN:  29XXXXX7777X1Z7) is non-existent; the supplier  of  THETA METAL TRADERS  (GSTIN:36UUUUU4444U1Z4) is cancelled.
+                   (c) The following inward supplies are ineligible:
+                Sr. No.
+                GSTIN of supplier
+                Trade/Legal Name
+                Invoice value
+                IGST
+                Reason
+                1
+                33WWWWW6
+                666W1Z6
+
+                OMICRON CABLES LIMITED
+
+                5,00,000
+                90,000
+                Supplier has not filed GSTR-1
+                2
+                07VVVVV5
+                555V1Z5
+
+                UPSILON POLYMERS PVT. LTD.
+
+                3,00,000
+                54,000
+                Supplier registration cancelled
+                3
+                33WWWWW6
+                666W1Z6
+
+                OMICRON CABLES LIMITED
+
+                1,00,000
+                18,000
+                TOTAL
+                9,00,000
+                3. The claimant is directed to show cause why the refund of Rs. 1,62,000 should not be rejected under Section 54 of the CGST Act, 2017.
+                Dy. Commissioner of State Tax
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        String lower = a.toLowerCase(Locale.ROOT);
+        for (String name : List.of("zeta alloys", "kappa wireless", "sigma freight", "theta metal", "omicron cables", "upsilon polymers",
+                "ZZZZZ", "YYYYY", "XXXXX", "UUUUU", "WWWWW", "VVVVV")) {
+            assertFalse(lower.contains(name.toLowerCase(Locale.ROOT)), "survived: " + name + "\n" + a);
+        }
+        assertTrue(a.contains("M/s NOTICEE COMPANY PRIVATE LIMITED\nGSTIN: 27AAAAA0001A1Z1"), a);
+        assertTrue(a.contains("M/s Noticee Company Private Limited (the claimant)"), a);
+        assertTrue(a.contains("the supplier  SUPPLIER 1  (GSTIN:24AAAAA0002A1Z2)  at Rs. 2,00,000"), "layout (a)\n" + a);
+        assertTrue(a.contains("supplier i.e.  SUPPLIER 2\n(GSTIN:  29AAAAA0003A1Z3)"), "layout (b), GSTIN on the next line\n" + a);
+        assertTrue(a.contains("supplier  of  SUPPLIER 3 TRADERS  (GSTIN:36AAAAA0004A1Z4)"), "layout (b), trade word kept\n" + a);
+        assertEquals(2, count(a, "\n33AAAAA0\n005A1Z5\n\nSUPPLIER 4 LIMITED\n"), "layout (c): the same vendor twice, the same placeholder\n" + a);
+        assertTrue(a.contains("\n07AAAAA0\n006A1Z6\n\nSUPPLIER 5 POLYMERS PVT. LTD.\n"), "layout (c): trade word and legal-form suffix kept\n" + a);
+        assertFalse(a.contains("NOTICEE COMPANY 2"), "no vendor is mistaken for the taxpayer\n" + a);
+        // form, office and heading words in capitals stay
+        for (String kept : List.of("GOVERNMENT OF MAHARASHTRA", "OFFICE OF THE DY. COMMISSIONER OF STATE TAX, MUMBAI NODAL DIVISION 3",
+                "FORM GST RFD-08", "SHOW CAUSE NOTICE FOR REJECTION OF REFUND APPLICATION", "INPUT TAX CREDIT", "Trade/Legal Name",
+                "GSTIN of supplier", "TOTAL\n9,00,000", "Supplier has not filed GSTR-1", "Supplier registration cancelled",
+                "Section 54 of the CGST Act, 2017", "Dy. Commissioner of State Tax")) {
+            assertTrue(a.contains(kept), "lost: " + kept + "\n" + a);
+        }
+        // no upper-case phrase of two or more words outside the stop list survives
+        assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases(a), a);
+        assertTrue(r.privacyLine().contains("other parties 5"), r.privacyLine());
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        assertEquals(a, NoticeAnonymiser.anonymise(a).text(), "a second pass changes nothing");
+    }
+
     @Test
     void emptyAndPlainTextAreUntouched() {
         assertEquals("", NoticeAnonymiser.anonymise("").text());

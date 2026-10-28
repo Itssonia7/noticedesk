@@ -24,9 +24,13 @@ import java.util.regex.Pattern;
  * TANs, CINs, IEC / Aadhaar / bank account numbers (labelled), IFSC codes, phone numbers, e-mail addresses, PIN codes,
  * ARN / DIN / notice reference numbers (shape kept, so the code defect checks still see a DIN-shaped value), the
  * taxpayer's legal / trade name ("NOTICEE COMPANY", the legal-form suffix such as "Private Limited" stays in the text),
- * other parties' names ("SUPPLIER n", a trailing trade word such as "Traders" kept in the placeholder), person names
- * after Shri / Smt / Mr / Ms / Proprietor / Director / Partner / Authorised signatory ("PERSON n"), and the
- * street / building part of addresses ("ADDRESS n"; the city and the State are kept for jurisdiction).
+ * other parties' names ("SUPPLIER n", a trailing trade word such as "Traders" kept in the placeholder; found after
+ * "M/s", after a label or the word "supplier" / "vendor", in the cell next to another GSTIN, as the last upper-case
+ * business phrase before a GSTIN, or as an upper-case line of its own near a GSTIN in a table block; form, statute,
+ * office and heading words never count as a name), person names after Shri / Smt / Mr / Ms / Proprietor / Director /
+ * Partner / Authorised signatory ("PERSON n"), and the street / building part of addresses ("ADDRESS n"; the city and
+ * the State are kept for jurisdiction). A GSTIN split over a line break or a hyphen by a PDF text layer is replaced
+ * with the break kept.
  *
  * <p>Kept: amounts, dates, periods, section numbers, form names, officer designations, the department office, tax
  * rates, HSN codes and invoice numbers (an invoice number is touched only where it contains a party name that is
@@ -118,6 +122,66 @@ public final class NoticeAnonymiser {
     private static final Pattern PARTY_NAME_LABEL = Pattern.compile(
             "(?i)\\b(?:name\\s+of\\s+(?:the\\s+)?(?:supplier|vendor|recipient|buyer|seller|customer|counter\\s*party|other\\s+party)"
             + "|supplier(?:'s)?\\s+name|vendor(?:'s)?\\s+name|recipient(?:'s)?\\s+name)\\s*[:\\-–]\\s*");
+    /**
+     * "the supplier XYZ ...", "supplier i.e. XYZ", "supplier of XYZ", "vendor M/s XYZ": the word itself introduces the
+     * name (no colon). The name must read as a business (two or more words, no form word) and be in upper case or be
+     * followed by a GSTIN, so "supplier has", "Supplier Invoice No." and "supplier of goods" never match.
+     */
+    private static final Pattern PARTY_WORD_LABEL = Pattern.compile(
+            "(?i)\\b(?:supplier|vendor|seller)\\s+(?:i\\.?\\s?e\\.?,?\\s+|namely,?\\s+|viz\\.?,?\\s+|of\\s+|being\\s+|M/s\\.?\\s+)?");
+    /** "Trade/Legal Name: XYZ", "Legal/Trade name of the supplier - XYZ" (a table header on its own line gives no name). */
+    private static final Pattern TRADE_LEGAL_NAME_LABEL = Pattern.compile(
+            "(?i)\\b(?:trade|legal)\\s*/\\s*(?:legal|trade)\\s+name(?:\\s+of\\s+(?:the\\s+)?(supplier|vendor|recipient|RTP|tax\\s*payer"
+            + "|taxable\\s+person|registered\\s+person|noticee|applicant))?\\s*[:\\-–]?\\s*");
+
+    /**
+     * A run of upper-case words on one line (letters, '&', '.', '-', apostrophe; every word at least two characters):
+     * a business name printed in capitals, or a heading / form phrase, told apart by {@link #BUSINESS_STOP_WORDS}.
+     */
+    private static final Pattern ALL_CAPS_RUN = Pattern.compile(
+            "(?<![A-Za-z0-9&])((?:[A-Z][A-Z.\\-']+|&)(?:[ \\t]+(?:[A-Z][A-Z.\\-']+|&))+)(?![A-Za-z0-9])");
+    /** Characters before a GSTIN in which the last upper-case business phrase is read as that GSTIN's holder. */
+    private static final int PHRASE_BEFORE_GSTIN_CHARS = 200;
+    /** Lines around a GSTIN in a table block in which an upper-case line of its own is that GSTIN's holder. */
+    private static final int PHRASE_LINES_AROUND_GSTIN = 3;
+    /** The words of a form, statute, office, table heading or address: an upper-case run holding one is never a business name. */
+    static final Set<String> BUSINESS_STOP_WORDS = Set.of(
+            // forms, statutes, tax words
+            "SHOW", "CAUSE", "NOTICE", "NOTICES", "GSTIN", "GSTR", "GST", "ITC", "IGST", "CGST", "SGST", "UTGST", "RTP", "ARN", "DIN",
+            "RFD", "DRC", "ASMT", "APL", "FORM", "PAN", "TAN", "CIN", "HSN", "SAC", "ACT", "ACTS", "RULE", "RULES", "SECTION", "SEC",
+            "SUB", "CLAUSE", "SCHEDULE", "NOTIFICATION", "CIRCULAR", "INPUT", "CREDIT", "TAX", "TAXES", "TAXABLE", "REFUND", "CLAIM",
+            "CLAIMED", "DEMAND", "RECOVERY", "INTEREST", "PENALTY", "LATE", "FEE", "FEES", "RETURN", "RETURNS", "ANNUAL", "MONTHLY",
+            "QUARTERLY", "REGISTRATION", "CERTIFICATE", "ADJUDICATION", "HEARING", "PERSONAL", "REPLY", "SUBMISSION", "SUBMISSIONS",
+            "ORDER", "APPEAL", "APPLICATION", "ACKNOWLEDGEMENT", "ACKNOWLEDGMENT", "PROVISIONAL", "FINAL", "ASSESSMENT", "AUDIT",
+            "SCRUTINY", "INSPECTION", "SEARCH", "SEIZURE", "DETENTION", "ATTACHMENT", "CANCELLATION", "SUSPENSION", "REVOCATION",
+            "COMPOSITION", "EXEMPTION", "EXPORT", "IMPORT", "LUT", "BOND", "ZERO", "RATED", "INVERTED", "DUTY", "STRUCTURE",
+            "REJECTION", "SANCTION", "GRANT", "ISSUE", "ISSUANCE", "DISALLOWANCE", "DENIAL", "SUPPLY", "SUPPLIES", "INWARD", "OUTWARD",
+            // offices and designations
+            "CENTRAL", "STATE", "GOVERNMENT", "GOVT", "GOVT.", "OFFICE", "DEPARTMENT", "DEPT", "DEPT.", "MINISTRY", "FINANCE",
+            "REVENUE", "COMMISSIONER", "COMMISSIONERATE", "DY", "DY.", "DEPUTY", "ASST", "ASST.", "ASSISTANT", "JOINT", "ADDL",
+            "ADDL.", "ADDITIONAL", "PRINCIPAL", "CHIEF", "SUPERINTENDENT", "INSPECTOR", "OFFICER", "OFFICERS", "AUTHORITY",
+            "PROPER", "ADJUDICATING", "APPELLATE", "TRIBUNAL", "COURT", "HIGH", "SUPREME", "BOARD", "CBIC", "CBDT", "DGGI", "DGARM",
+            "DIVISION", "ZONE", "RANGE", "WARD", "CIRCLE", "UNIT", "NODAL", "JURISDICTION", "JURISDICTIONAL", "EXCISE", "CUSTOMS",
+            "INDIRECT", "DIRECT", "BHAVAN", "SADAN", "MAHAL",
+            // table headings and amounts
+            "SR", "SR.", "SL", "SL.", "NO", "NO.", "NOS", "NOS.", "TOTAL", "GRAND", "SUM", "AMOUNT", "AMOUNTS", "VALUE", "VALUES", "RS",
+            "RS.", "INR", "LAKH", "LAKHS", "CRORE", "CRORES", "INVOICE", "INVOICES", "BILL", "BILLS", "DATE", "DATED", "DT", "DT.",
+            "PERIOD", "FY", "F.Y.", "MONTH", "YEAR", "QUARTER", "REASON", "REASONS", "REMARK", "REMARKS", "DESCRIPTION", "PARTICULARS",
+            "DETAILS", "NAME", "NAMES", "TRADE", "LEGAL", "ADDRESS", "ADDRESSES", "TYPE", "STATUS", "QTY", "QUANTITY", "RATE",
+            "RATES", "CESS", "DIFFERENCE", "MISMATCH", "EXCESS", "SHORT", "SHORTFALL", "LIABILITY", "PAID", "PAYABLE", "PAYMENT",
+            "ELIGIBLE", "INELIGIBLE", "AVAILED", "UTILISED", "UTILIZED", "REVERSED", "REVERSAL", "BLOCKED", "NIL", "NA", "N.A.",
+            "YES", "NIL.", "TABLE", "ANNEXURE", "ANNEX", "PARA", "PART", "PAGE", "SUPPLIER", "SUPPLIERS", "VENDOR", "VENDORS",
+            "RECIPIENT", "RECIPIENTS", "NOTICEE", "TAXPAYER", "PERSON", "DEALER", "DEALERS", "REGISTERED", "UNREGISTERED",
+            "APPLICANT", "ASSESSEE", "CLAIMANT",
+            // signature and letter words
+            "SIGNED", "SIGNATURE", "DIGITALLY", "SD", "SD/-", "PLACE", "COPY", "CC", "TO", "FROM", "SUBJECT", "SUBJ", "REF", "REF.",
+            "REFERENCE", "ENCL", "ENCL.", "ENCLOSURE", "SIR", "MADAM", "DEAR", "YOURS", "FAITHFULLY", "SINCERELY", "WHEREAS",
+            "THEREFORE", "HENCE", "AND", "OR", "OF", "THE", "FOR", "IN", "ON", "AT", "BY", "AS", "PER", "UNDER", "WITH", "WITHOUT",
+            "VIDE", "THROUGH", "VIA", "I.E.", "IE", "VIZ", "VIZ.", "ETC", "ETC.", "DURING", "UPTO", "TILL", "BEFORE", "AFTER",
+            // address words
+            "AREA", "ESTATE", "PLOT", "SECTOR", "PHASE", "COMPLEX", "TOWER", "FLOOR", "ROAD", "STREET", "LANE", "NAGAR", "MARG",
+            "COLONY", "OPP", "OPP.", "NEAR", "BEHIND", "DIST", "DIST.", "DISTRICT", "TALUKA", "TEHSIL", "PIN", "PINCODE", "POST",
+            "VILLAGE", "CITY", "TOWN", "BUILDING", "BLDG", "BLDG.", "HOUSE", "OFFICE.", "WING", "GALA", "SHOP", "UNIT.");
     /** Where a business name ends. */
     private static final Pattern NAME_END = Pattern.compile(
             "(?i)[\\n\\r(\\[\\],;|:]|\\s[-–]\\s|\\bGSTIN\\b|\\bGST\\s*(?:No|Registration|IN)\\b|\\bPAN\\b|\\bhaving\\b|\\bbearing\\b"
@@ -612,6 +676,11 @@ public final class NoticeAnonymiser {
                 if (b != null && looksLikeName(b.core())) coreIsTaxpayer.putIfAbsent(b.core().toUpperCase(Locale.ROOT), false);
             }
         }
+        // 6. names introduced by the word "supplier" / "vendor" (no colon) and by "Trade/Legal Name"
+        findWordLabelledNames();
+        // 7. an upper-case business phrase before a GSTIN (whole, split or placeholder) and an upper-case line of its
+        //    own near a GSTIN in a table block: the holder of that GSTIN
+        findUpperCasePhrasesNearGstins();
         // placeholders numbered in the order the names first appear in the text (the legal name read by the header
         // facts stays "NOTICEE COMPANY" without a number)
         List<String> ordered = new ArrayList<>(coreIsTaxpayer.keySet());
@@ -704,6 +773,179 @@ public final class NoticeAnonymiser {
     private void classify(BusinessName b, boolean taxpayer) {
         String upper = b.core().toUpperCase(Locale.ROOT);
         coreIsTaxpayer.putIfAbsent(upper, taxpayer);
+    }
+
+    /** True when the GSTIN nearest to [start, end) is the taxpayer's (or none is near and nothing says otherwise). */
+    private boolean nearestGstinIsTaxpayer(int start, int end) {
+        String nearest = nearestGstin(start, end);
+        return nearest != null ? nearest.equals(taxpayerGstin) : taxpayerGstin == null;
+    }
+
+    private void findWordLabelledNames() {
+        Matcher m = PARTY_WORD_LABEL.matcher(text);
+        while (m.find()) {
+            BusinessName b = nameAt(m.end());
+            if (b == null || !readsAsBusinessPhrase(b.core(), false)) continue;
+            String core = b.core();
+            boolean upper = core.equals(core.toUpperCase(Locale.ROOT));
+            if (!upper && !gstinFollows(b.end())) continue;
+            classify(b, nearestGstinIsTaxpayer(b.start(), b.end()) && taxpayerGstin != null);
+        }
+        m = TRADE_LEGAL_NAME_LABEL.matcher(text);
+        while (m.find()) {
+            BusinessName b = nameAt(m.end());
+            if (b == null || !readsAsBusinessPhrase(b.core(), false)) continue;
+            String who = m.group(1) != null ? m.group(1).toLowerCase(Locale.ROOT) : "";
+            boolean party = who.startsWith("supplier") || who.startsWith("vendor") || who.startsWith("recipient");
+            classify(b, !party && nearestGstinIsTaxpayer(b.start(), b.end()));
+        }
+    }
+
+    /** True when a GSTIN (whole, split or placeholder) or its label starts within 60 characters after {@code at}. */
+    private boolean gstinFollows(int at) {
+        int to = Math.min(text.length(), at + 60);
+        for (GstinHit h : gstinHits) if (h.start() >= at && h.start() < to) return true;
+        return text.substring(at, to).matches("(?is)[\\s(\\[,:\\-–]*(?:GSTIN|GST\\s*(?:No|IN|Registration)).*");
+    }
+
+    private void findUpperCasePhrasesNearGstins() {
+        for (GstinHit g : gstinHits) {
+            boolean taxpayer = g.joined().equals(taxpayerGstin);
+            // (a) the last upper-case business phrase within PHRASE_BEFORE_GSTIN_CHARS before the GSTIN, no other
+            //     GSTIN in between; for the taxpayer's GSTIN only on its line or the line before (the head of a notice
+            //     is full of upper-case office lines, and the taxpayer's name is read by the header rules anyway)
+            int from = Math.max(0, g.start() - PHRASE_BEFORE_GSTIN_CHARS);
+            int regionStart = Math.max(0, Math.max(text.lastIndexOf('\n', from), from - 120));
+            Matcher m = ALL_CAPS_RUN.matcher(text);
+            m.useTransparentBounds(true);
+            m.region(regionStart, g.start());
+            int[] last = null;
+            String lastCore = null;
+            while (m.find()) {
+                if (m.end(1) < from) continue;
+                String core = businessPhraseCore(m.group(1));
+                if (core == null) continue;
+                last = new int[]{m.start(1), m.end(1)};
+                lastCore = core;
+            }
+            if (last != null) {
+                int phraseEnd = last[1];
+                boolean otherBetween = false;
+                for (GstinHit h : gstinHits) {
+                    if (h != g && h.start() >= phraseEnd && h.start() < g.start()) otherBetween = true;
+                }
+                long newlines = text.substring(phraseEnd, g.start()).chars().filter(c -> c == '\n').count();
+                if (!otherBetween && (!taxpayer || newlines <= 1)) {
+                    coreIsTaxpayer.putIfAbsent(lastCore.toUpperCase(Locale.ROOT), taxpayer);
+                }
+            }
+            // (b) an upper-case line of its own within PHRASE_LINES_AROUND_GSTIN lines before or after the GSTIN
+            int[] startLine = lineBounds(g.start());
+            int[] endLine = lineBounds(Math.max(g.start(), g.end() - 1));
+            int at = endLine[1] + 1;
+            for (int i = 0; i < PHRASE_LINES_AROUND_GSTIN && at < text.length(); i++) {
+                int[] line = lineBounds(at);
+                if (lineHasAnotherGstin(line, g)) break;
+                String core = upperCaseLineCore(text.substring(line[0], line[1]));
+                if (core != null) coreIsTaxpayer.putIfAbsent(core.toUpperCase(Locale.ROOT), taxpayer);
+                at = line[1] + 1;
+            }
+            at = startLine[0] - 1;   // the '\n' that ends the line before
+            for (int i = 0; i < PHRASE_LINES_AROUND_GSTIN && at >= 0; i++) {
+                int[] line = lineBounds(at);
+                if (lineHasAnotherGstin(line, g)) break;
+                String core = upperCaseLineCore(text.substring(line[0], line[1]));
+                if (core != null) coreIsTaxpayer.putIfAbsent(core.toUpperCase(Locale.ROOT), taxpayer);
+                at = line[0] - 1;
+            }
+        }
+    }
+
+    /** [start, end) of the line holding {@code pos} (end excludes the '\n'; a pos on a '\n' is that line's end). */
+    private int[] lineBounds(int pos) {
+        int p = Math.min(Math.max(pos, 0), text.length());
+        int ls = text.lastIndexOf('\n', p - 1) + 1;
+        int le = text.indexOf('\n', p);
+        if (le < 0) le = text.length();
+        return new int[]{ls, le};
+    }
+
+    /** The business cores of every upper-case run of {@code text} that reads as a business name (none for a clean anonymised text). */
+    static List<String> upperCaseBusinessPhrases(String text) {
+        List<String> out = new ArrayList<>();
+        if (text == null) return out;
+        Matcher m = ALL_CAPS_RUN.matcher(text);
+        while (m.find()) {
+            String core = businessPhraseCore(m.group(1));
+            if (core != null) out.add(core);
+        }
+        return out;
+    }
+
+    private boolean lineHasAnotherGstin(int[] line, GstinHit g) {
+        for (GstinHit h : gstinHits) {
+            if (h != g && h.start() < line[1] && h.end() > line[0]) return true;
+        }
+        return false;
+    }
+
+    /** The business core of a line that is nothing but an upper-case business phrase (an optional "M/s" before it), else null. */
+    static String upperCaseLineCore(String line) {
+        String s = line.strip().replaceFirst("(?i)^M/s\\.?\\s*", "").replaceAll("[\\s,.;:|]+$", "").strip();
+        if (s.isEmpty()) return null;
+        Matcher m = ALL_CAPS_RUN.matcher(s);
+        if (!m.matches()) return null;
+        return businessPhraseCore(s);
+    }
+
+    /**
+     * The business core of an upper-case run, or null when the run is a heading / form phrase: form, statute, office,
+     * table and address words are cut from both ends; a run with such a word left inside, a State or city name, a
+     * placeholder, or fewer than two words (after the legal-form suffix is set aside) is not a name.
+     */
+    static String businessPhraseCore(String run) {
+        if (run == null || PLACEHOLDER_NAME_PREFIX.matcher(run.trim()).find()) return null;   // "NOTICEE COMPANY PRIVATE LIMITED"
+        List<String> words = new ArrayList<>(List.of(run.trim().split("\\s+")));
+        for (int i = 0; i < words.size(); i++) words.set(i, words.get(i).replaceAll("^[\\-']+|[\\-',]+$", ""));
+        while (!words.isEmpty() && isStopOrEmpty(words.get(0))) words.remove(0);
+        while (!words.isEmpty() && isStopOrEmpty(words.get(words.size() - 1))) words.remove(words.size() - 1);
+        if (words.size() < 2 || words.size() > 6) return null;
+        for (String w : words) if (BUSINESS_STOP_WORDS.contains(w.toUpperCase(Locale.ROOT))) return null;
+        String name = String.join(" ", words);
+        BusinessName b = split(name);
+        if (b == null) return null;
+        String core = b.core();
+        if (!readsAsBusinessPhrase(core, !b.suffix().isEmpty())) return null;
+        return core;
+    }
+
+    private static boolean isStopOrEmpty(String w) {
+        if (w.isEmpty() || w.equals("&")) return true;
+        String u = w.toUpperCase(Locale.ROOT);
+        return BUSINESS_STOP_WORDS.contains(u) || u.replaceAll("[^A-Z]", "").length() < 2;
+    }
+
+    /**
+     * True when {@code core} reads as a business name: no stop word, no placeholder, not a State / city, two or more
+     * words (one word of five or more letters is enough when a legal-form suffix followed it, {@code suffixed}).
+     */
+    static boolean readsAsBusinessPhrase(String core, boolean suffixed) {
+        if (core == null || core.isBlank()) return false;
+        if (PLACEHOLDER_NAME_PREFIX.matcher(core).find() || ALREADY_PLACEHOLDER.matcher(core).matches()) return false;
+        String[] words = core.trim().split("\\s+");
+        if (words.length > 6) return false;
+        if (words.length < 2 && !(suffixed && core.replaceAll("[^A-Za-z]", "").length() >= 5)) return false;
+        if (words.length < 2 && LEGAL_SUFFIX.matcher(" " + core).find()) return false;   // "COMPANY" alone is a suffix word
+        if (words.length < 2 && TRADE_WORDS.contains(core.toLowerCase(Locale.ROOT))) return false;   // "POLYMERS" after "SUPPLIER 5"
+        int letters = 0;
+        for (String w : words) {
+            String u = w.toUpperCase(Locale.ROOT).replaceAll("[,;:]+$", "");
+            if (BUSINESS_STOP_WORDS.contains(u)) return false;
+            letters += w.replaceAll("[^A-Za-z]", "").length();
+        }
+        if (letters < 4) return false;
+        if (!looksLikeName(core)) return false;
+        return !STATE_OR_CITY.matcher(core.replaceAll("[^A-Za-z ]", "").trim()).matches();
     }
 
     /** The business name starting at {@code at} (up to {@link #NAME_END}); null when it does not read as a name. */
@@ -977,16 +1219,38 @@ public final class NoticeAnonymiser {
         addresses.add(new AddressCandidate(from, from + replaced.length(), replaced));
     }
 
-    private boolean isState(String part) {
-        String p = part.replaceAll("[^A-Za-z ]", "").trim();
-        if (p.isEmpty()) return false;
-        for (String s : stateNames) if (s.equalsIgnoreCase(p)) return true;
-        return p.matches("(?i)(?:New\\s+)?Delhi|Mumbai|Pune|Thane|Nagpur|Nashik|Ahmedabad|Surat|Vadodara|Rajkot|Chennai|Coimbatore|Madurai"
+    /** Known city names (jurisdiction words kept in an address, never a business name on their own). */
+    private static final Pattern CITY_NAMES = Pattern.compile(
+            "(?i)(?:New\\s+)?Delhi|Mumbai|Pune|Thane|Nagpur|Nashik|Ahmedabad|Surat|Vadodara|Rajkot|Chennai|Coimbatore|Madurai"
                 + "|Hyderabad|Secunderabad|Kolkata|Howrah|Bengaluru|Bangalore|Mysuru|Mysore|Kochi|Cochin|Ernakulam|Thiruvananthapuram|Trivandrum"
                 + "|Jaipur|Jodhpur|Udaipur|Lucknow|Kanpur|Noida|Ghaziabad|Agra|Varanasi|Gurugram|Gurgaon|Faridabad|Chandigarh|Ludhiana"
                 + "|Amritsar|Jalandhar|Bhopal|Indore|Jabalpur|Raipur|Patna|Ranchi|Bhubaneswar|Cuttack|Guwahati|Dehradun|Shimla|Panaji|Goa"
                 + "|Visakhapatnam|Vijayawada|Guntur|Tirupati|Nellore|Vapi|Valsad|Bharuch|Ankleshwar|Gandhinagar|Jamnagar|Bhavnagar|Aurangabad"
-                + "|Solapur|Kolhapur|Sangli|Satara|Ratnagiri|Palghar|Navi Mumbai|Kalyan|Dombivli|Bhiwandi|Vasai|Virar|Ulhasnagar|Ambernath"
+                + "|Solapur|Kolhapur|Sangli|Satara|Ratnagiri|Palghar|Navi\\s+Mumbai|Kalyan|Dombivli|Bhiwandi|Vasai|Virar|Ulhasnagar|Ambernath"
                 + "|Salem|Erode|Tiruppur|Trichy|Tiruchirappalli|Vellore|Hosur|Mangaluru|Mangalore|Hubballi|Hubli|Belagavi|Belgaum|Kozhikode|Calicut|Thrissur");
+    /** A State / UT name (GST state codes plus the usual other spellings) or a known city, as a whole string. */
+    private static final Pattern STATE_OR_CITY = Pattern.compile("(?i)" + allStateNamesAlternation() + "|" + CITY_NAMES.pattern());
+
+    private static String allStateNamesAlternation() {
+        StringBuilder sb = new StringBuilder();
+        List<String> names = new ArrayList<>();
+        for (String code : List.of("01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15",
+                "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "29", "30", "31", "32", "33", "34",
+                "35", "36", "37", "38")) {
+            GstStateCodes.nameForCode(code).ifPresent(names::add);
+        }
+        names.addAll(List.of("Telangana", "Odisha", "Orissa", "Pondicherry", "Bombay", "Madras", "Calcutta", "Bangalore", "Bengaluru"));
+        for (String n : names) {
+            if (!sb.isEmpty()) sb.append('|');
+            sb.append(Pattern.quote(n).replace(" ", "\\E\\s+\\Q"));
+        }
+        return sb.toString();
+    }
+
+    private boolean isState(String part) {
+        String p = part.replaceAll("[^A-Za-z ]", "").trim();
+        if (p.isEmpty()) return false;
+        for (String s : stateNames) if (s.equalsIgnoreCase(p)) return true;
+        return CITY_NAMES.matcher(p).matches();
     }
 }
