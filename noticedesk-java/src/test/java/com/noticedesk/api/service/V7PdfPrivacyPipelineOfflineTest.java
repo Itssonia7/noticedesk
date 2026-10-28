@@ -11,6 +11,7 @@ import com.noticedesk.api.agent.IssueMatchingAgent.MatchingResult;
 import com.noticedesk.api.agent.NewIssueDraftingAgent;
 import com.noticedesk.api.agent.NewIssueDraftingAgent.NewIssueDraftingResult;
 import com.noticedesk.api.config.AppProperties;
+import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.model.matching.StageTemplate;
 import com.noticedesk.api.service.learned.LearnedLibrary;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
@@ -22,6 +23,7 @@ import com.noticedesk.api.service.matching.ReplyAssemblyService;
 import com.noticedesk.api.service.matching.TemplateFillService;
 import com.noticedesk.api.service.ocr.LocalOcrProvider;
 import com.noticedesk.api.service.privacy.AnonymisationMap;
+import com.noticedesk.api.service.privacy.NoticeAnonymiser;
 import com.noticedesk.api.testsupport.RunCostLedger;
 import com.noticedesk.api.testsupport.TestAppProperties;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -284,6 +286,67 @@ class V7PdfPrivacyPipelineOfflineTest {
         assertNull(off.restorer());
         assertTrue(off.privacyLine().contains("NOTICE_ANONYMISE=off"));
         assertNull(PdfNoticeSteps.saveAnonymised(resultsDir, noticeId + "-off", off, om)[1]);
+    }
+
+    /**
+     * The self-check after anonymisation in the runner: residual 0 in the Privacy line and no flag for a clean text;
+     * with something left (built here from a synthetic "anonymised" text), the Privacy line counts it, the warning
+     * names shapes only, the warn flag {@code warn:anonymiser_residual} is set on the result, and strict mode
+     * (default on) stops the notice before a non-Anthropic provider sees the text while Anthropic calls may proceed.
+     */
+    @Test
+    void residualSelfCheckFlagsAndStrictModeRefusal() {
+        assertTrue(PdfNoticeSteps.strict(null), "NOTICE_ANONYMISE_STRICT defaults to on");
+        assertTrue(PdfNoticeSteps.strict("true"));
+        assertFalse(PdfNoticeSteps.strict("off"));
+        assertFalse(PdfNoticeSteps.strict("FALSE"));
+
+        PdfNoticeSteps.AnonymisedNotice clean = PdfNoticeSteps.anonymise(String.join("\n", PAGE_1) + "\n" + String.join("\n", PAGE_2), true);
+        assertEquals(0, clean.residualCount());
+        assertTrue(clean.privacyLine().endsWith(", residual: 0"), clean.privacyLine());
+        assertNull(clean.residualFlag());
+        assertNull(clean.residualWarning("n"));
+        assertNull(PdfNoticeSteps.residualRefusal(clean, true, "gemini", "anthropic"), "nothing left: gemini triage may run");
+
+        String leftover = "supplier KAPPA WIRELESS NETWORKS, GSTIN 24YYYYY8888Y1Z8, PAN ZZZZZ9999Z, mobile 9876543210";
+        NoticeAnonymiser.Residual residual = NoticeAnonymiser.residualRisks(leftover);
+        assertEquals(4, residual.total(), residual.line());
+        PdfNoticeSteps.AnonymisedNotice dirty = new PdfNoticeSteps.AnonymisedNotice(leftover, new AnonymisationMap(), true, residual);
+        assertEquals(4, dirty.residualCount());
+        assertTrue(dirty.privacyLine().endsWith(", residual: 4 (caps-phrase-3-words, gstin, pan, phone-10-digits)"), dirty.privacyLine());
+        String warning = dirty.residualWarning("scn-001");
+        assertNotNull(warning);
+        assertTrue(warning.startsWith("WARNING: anonymiser residual: 4 (caps-phrase-3-words, gstin, pan, phone-10-digits) for scn-001"), warning);
+        assertTrue(warning.contains(PdfNoticeSteps.FLAG_ANONYMISER_RESIDUAL), warning);
+        for (String value : List.of("KAPPA", "YYYYY", "ZZZZZ", "9876543210")) {
+            assertFalse(warning.contains(value) || dirty.privacyLine().contains(value), "a value leaked: " + value);
+        }
+        DraftCheckResult flag = dirty.residualFlag();
+        assertNotNull(flag);
+        assertEquals(PdfNoticeSteps.CHECK_ANONYMISER_RESIDUAL, flag.checkName());
+        assertEquals("warn", flag.severity());
+        assertFalse(flag.passed());
+        assertEquals(PdfNoticeSteps.FLAG_ANONYMISER_RESIDUAL, flag.details().get("flag"));
+        assertEquals(4, flag.details().get("residual"));
+        assertFalse(flag.details().toString().contains("KAPPA") || flag.details().toString().contains("YYYYY"), flag.details().toString());
+        // the flag travels with the pipeline result and shows in the Flags line
+        DraftingPipelineResult r = new DraftingPipelineResult(null, List.of(), Map.of(), 0, 0, 0, 0, 0, "ok", List.of(), List.of());
+        DraftingPipelineResult withFlag = V7LiveRig.withExtraChecks(r, List.of(flag));
+        assertEquals(List.of(flag), withFlag.checkResults());
+        assertEquals(List.of("FLAG_ANONYMISER_RESIDUAL:warn"), V7LivePipelineRunnerTest.flagList(withFlag.checkResults()));
+        // strict mode: a non-Anthropic provider that would see the text stops the notice; Anthropic may proceed
+        String refusal = PdfNoticeSteps.residualRefusal(dirty, true, "gemini", "anthropic");
+        assertNotNull(refusal);
+        assertTrue(refusal.startsWith("STOPPED: the anonymiser's self-check found residual: 4 ("), refusal);
+        assertTrue(refusal.contains("gemini") && refusal.contains("LLM_PROVIDER_TRIAGE") && refusal.contains("NOTICE_ANONYMISE_STRICT=off"), refusal);
+        assertFalse(refusal.contains("KAPPA") || refusal.contains("YYYYY"), refusal);
+        assertNotNull(PdfNoticeSteps.residualRefusal(dirty, true, "anthropic", "gemini"), "a non-Anthropic primary provider is refused too");
+        assertNull(PdfNoticeSteps.residualRefusal(dirty, true, "anthropic", "anthropic"), "Anthropic calls may proceed (the warn flag is set)");
+        assertNull(PdfNoticeSteps.residualRefusal(dirty, true, "Anthropic", null));
+        assertNull(PdfNoticeSteps.residualRefusal(dirty, false, "gemini", "anthropic"), "NOTICE_ANONYMISE_STRICT=off accepts it explicitly");
+        PdfNoticeSteps.AnonymisedNotice off = PdfNoticeSteps.anonymise(leftover, false);
+        assertEquals(0, off.residualCount());
+        assertNull(PdfNoticeSteps.residualRefusal(off, true, "gemini", "anthropic"), "the anonymiser off is the operator's explicit decision");
     }
 
     @Test

@@ -384,8 +384,43 @@ class NoticeAnonymiserTest {
         NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(plain);
         assertEquals(plain, r.text());
         assertTrue(r.map().isEmpty());
-        assertEquals("Privacy: anonymised GSTINs 0, PANs 0, names 0 (taxpayer 0, other parties 0, persons 0), addresses 0, references 0, other ids 0",
+        assertEquals("Privacy: anonymised GSTINs 0, PANs 0, names 0 (taxpayer 0, other parties 0, persons 0), addresses 0, references 0, other ids 0, residual: 0",
                 r.privacyLine());
+    }
+
+    /**
+     * The self-check after anonymisation: a clean anonymised text gives residual 0 (placeholders never count); a text
+     * with a GSTIN, a split GSTIN, a PAN, an e-mail, a mobile number and an upper-case business phrase left in it is
+     * counted by shape, and the report never carries a value.
+     */
+    @Test
+    void residualRisksCountWhatStillLooksLikeAValueByShapeOnly() {
+        for (String clean : List.of(NoticeAnonymiser.anonymise(NOTICE).text(), NoticeAnonymiser.anonymise("").text(),
+                "Show cause notice under Section 74: ITC of Rs. 9876543210 denied; SUPPLIER 1 TRADERS and NOTICEE COMPANY PRIVATE LIMITED, "
+                        + "GSTIN 27AAAAA0001A1Z1, PAN AAAAA0001A, person1@example.com, 9000000001, GOVERNMENT OF MAHARASHTRA, INPUT TAX CREDIT.")) {
+            NoticeAnonymiser.Residual r = NoticeAnonymiser.residualRisks(clean);
+            assertEquals(0, r.total(), r.line() + "\n" + clean);
+            assertEquals("residual: 0", r.line());
+        }
+        assertTrue(NoticeAnonymiser.anonymise(NOTICE).privacyLine().endsWith(", residual: 0"), NoticeAnonymiser.anonymise(NOTICE).privacyLine());
+        String dirty = """
+                supplier KAPPA WIRELESS NETWORKS with GSTIN 24YYYYY8888Y1Z8 and 29XXXXX7
+                777X1Z7, PAN ZZZZZ9999Z, e-mail accounts@kappa.example, mobile 9876543210, amount Rs. 9123456789.
+                """;
+        NoticeAnonymiser.Residual r = NoticeAnonymiser.residualRisks(dirty);
+        assertEquals(6, r.total(), r.line());
+        assertEquals(1, r.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_GSTIN));
+        assertEquals(1, r.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_SPLIT_GSTIN));
+        assertEquals(1, r.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_PAN));
+        assertEquals(1, r.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_EMAIL));
+        assertEquals(1, r.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_PHONE), "the amount after Rs. is not a phone");
+        assertEquals(1, r.countsByShape().get("caps-phrase-3-words"));
+        assertEquals("residual: 6 (caps-phrase-3-words, email, gstin, gstin-split, pan, phone-10-digits)", r.line());
+        for (String value : List.of("KAPPA", "YYYYY", "XXXXX", "ZZZZZ", "kappa", "9876543210")) {
+            assertFalse(r.line().contains(value) || r.shapes().toString().contains(value), "a value leaked into the report: " + value);
+        }
+        // the anonymiser itself leaves nothing of that text behind
+        assertEquals(0, NoticeAnonymiser.anonymise(dirty).residual().total(), NoticeAnonymiser.anonymise(dirty).text());
     }
 
     private static int count(String text, String needle) {

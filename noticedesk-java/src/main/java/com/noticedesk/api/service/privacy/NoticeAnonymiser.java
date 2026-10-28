@@ -38,15 +38,113 @@ import java.util.regex.Pattern;
  *
  * <p>{@link #deAnonymise} restores every real value (longest placeholder first, case-insensitive, so a model that
  * re-cases "Noticee Company" is still restored). Anonymising an already anonymised text changes nothing.
+ * {@link #residualRisks} is the self-check on the anonymised text: what still looks like a GSTIN, PAN, e-mail, phone
+ * or an upper-case business name, by shape only (never a value), so a run can refuse to send a text that is not clean.
  */
 public final class NoticeAnonymiser {
 
-    /** Anonymised text and its mapping. */
-    public record Result(String text, AnonymisationMap map) {
-        /** "Privacy: anonymised GSTINs 3, PANs 1, names 4 (...), addresses 2, references 2, other ids 1". */
-        public String privacyLine() {
-            return "Privacy: anonymised " + map.summaryLine();
+    /** Anonymised text, its mapping and the self-check on the anonymised text ({@link #residualRisks}). */
+    public record Result(String text, AnonymisationMap map, Residual residual) {
+        public Result(String text, AnonymisationMap map) {
+            this(text, map, residualRisks(text));
         }
+
+        /** "Privacy: anonymised GSTINs 3, PANs 1, names 4 (...), addresses 2, references 2, other ids 1, residual: 0". */
+        public String privacyLine() {
+            return "Privacy: anonymised " + map.summaryLine() + ", " + residual.line();
+        }
+    }
+
+    /**
+     * The self-check after anonymisation: value-shaped tokens still in the anonymised text that are not placeholders,
+     * by shape only (a GSTIN, a split GSTIN, a PAN, an e-mail, a 10-digit phone, an upper-case business phrase of n
+     * words). Never a value: the shapes are safe to log; {@link #total()} is the count.
+     */
+    public record Residual(Map<String, Integer> countsByShape, List<String> shapes) {
+        public static final String SHAPE_GSTIN = "gstin";
+        public static final String SHAPE_SPLIT_GSTIN = "gstin-split";
+        public static final String SHAPE_PAN = "pan";
+        public static final String SHAPE_EMAIL = "email";
+        public static final String SHAPE_PHONE = "phone-10-digits";
+        public static final String SHAPE_CAPS_PHRASE = "caps-phrase";
+
+        public int total() {
+            return shapes.size();
+        }
+
+        /** "residual: 0" or "residual: 3 (caps-phrase-2-words, gstin-split, pan)": counts and shapes, no value. */
+        public String line() {
+            if (shapes.isEmpty()) return "residual: 0";
+            StringBuilder sb = new StringBuilder("residual: ").append(total()).append(" (");
+            boolean first = true;
+            for (Map.Entry<String, Integer> e : countsByShape.entrySet()) {
+                if (!first) sb.append(", ");
+                first = false;
+                sb.append(e.getKey());
+                if (e.getValue() > 1) sb.append(" x").append(e.getValue());
+            }
+            return sb.append(')').toString();
+        }
+    }
+
+    /**
+     * Counts what still looks like a value in {@code anonText}: GSTIN-shaped tokens (whole or split over a break) that
+     * are not GSTIN placeholders, PAN-shaped tokens outside a GSTIN that are not PAN placeholders, e-mail addresses
+     * other than {@code personN@example.com}, 10-digit mobile numbers other than {@code 9000000NNN} (an amount after
+     * "Rs" is not one), and upper-case business phrases outside the stop list (two to six words, a legal-form suffix
+     * set aside). A placeholder's own shape never counts, so a clean anonymised text gives 0.
+     */
+    public static Residual residualRisks(String anonText) {
+        Map<String, Integer> counts = new java.util.TreeMap<>();
+        List<String> shapes = new ArrayList<>();
+        if (anonText == null || anonText.isEmpty()) return new Residual(counts, shapes);
+        String t = anonText;
+        List<int[]> gstinSpans = new ArrayList<>();
+        Matcher m = GSTIN.matcher(t);
+        while (m.find()) {
+            gstinSpans.add(new int[]{m.start(1), m.end(1)});
+            if (!ALREADY_PLACEHOLDER.matcher(m.group(1).toUpperCase(Locale.ROOT)).matches()) note(counts, shapes, Residual.SHAPE_GSTIN);
+        }
+        m = SPLIT_GSTIN.matcher(t);
+        while (m.find()) {
+            String raw = m.group(1);
+            if (raw.length() == 15) continue;
+            String joined = raw.replaceAll("[\\s\\-]", "");
+            if (joined.length() != 15) continue;
+            int s = m.start(1);
+            int e = m.end(1);
+            if (gstinSpans.stream().anyMatch(x -> x[0] < e && s < x[1])) continue;
+            gstinSpans.add(new int[]{s, e});
+            if (!ALREADY_PLACEHOLDER.matcher(joined).matches()) note(counts, shapes, Residual.SHAPE_SPLIT_GSTIN);
+        }
+        m = PAN.matcher(t);
+        while (m.find()) {
+            int s = m.start(1);
+            int e = m.end(1);
+            if (gstinSpans.stream().anyMatch(x -> x[0] <= s && e <= x[1])) continue;
+            if (!ALREADY_PLACEHOLDER.matcher(m.group(1)).matches()) note(counts, shapes, Residual.SHAPE_PAN);
+        }
+        m = EMAIL.matcher(t);
+        while (m.find()) {
+            if (!ALREADY_PLACEHOLDER.matcher(m.group().toLowerCase(Locale.ROOT)).matches()) note(counts, shapes, Residual.SHAPE_EMAIL);
+        }
+        m = PHONE.matcher(t);
+        while (m.find()) {
+            String digits = m.group(1);
+            if (digits.matches("9000000\\d{3}") || t.startsWith("/-", m.end(1))) continue;
+            int from = Math.max(0, m.start(1) - 8);
+            if (t.substring(from, m.start(1)).toLowerCase(Locale.ROOT).matches(".*(?:rs\\.?|inr|₹|rupees)\\s*$")) continue;
+            note(counts, shapes, Residual.SHAPE_PHONE);
+        }
+        for (String core : upperCaseBusinessPhrases(t)) {
+            note(counts, shapes, Residual.SHAPE_CAPS_PHRASE + "-" + core.trim().split("\\s+").length + "-words");
+        }
+        return new Residual(counts, shapes);
+    }
+
+    private static void note(Map<String, Integer> counts, List<String> shapes, String shape) {
+        counts.merge(shape, 1, Integer::sum);
+        shapes.add(shape);
     }
 
     // ---------------------------------------------------------------- placeholders

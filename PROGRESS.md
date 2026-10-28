@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 27-10-2026 (b28: privacy-first PDF path: local text extraction, anonymiser, triage and v7 on the anonymised text, de-anonymised outputs)
+Last updated: 28-10-2026 (b29: anonymiser gaps from a real RFD-08 notice: split GSTINs, vendor names in capitals, the signing officer, and the residual self-check with strict mode)
 
 ---
 
@@ -1084,8 +1084,74 @@ All proved offline with synthetic text (fictional party "ZETA ALLOYS", allow-lis
   proved with a fake runner only; the anonymiser is regex-based (an unusual name layout can survive: read
   `<id>_ocr_anon.txt` once before the first live run).
 
+## (b29) Anonymiser gaps found on a real refund notice; residual self-check and strict mode (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run offline on a real 4-page Maharashtra State GST RFD-08 refund show
+cause notice (digital PDF, PDFBox text layer). The taxpayer name and the whole GSTINs were replaced and the round trip
+was exact, but four kinds of identifying values survived. Each gap is one commit with its own test (synthetic text,
+invented names, allow-listed GSTINs; no live call).
+
+- **Gap 1, split GSTINs** (`13af7db`): the PDF text layer breaks each GSTIN of the Para 2(c) vendor table in two
+  ("27AAACB2" / line end / "894G1ZN"), so the contiguous pattern let four through. The anonymiser now collects every
+  GSTIN whole or split (`SPLIT_GSTIN`: the same structure with an optional break of up to six spaces / line ends /
+  hyphens between any two characters, anchored on the state code and the Z check character, upper case only), replaces
+  a split one by its placeholder written with the same break (`withBreaksOf`: "27AAAAA0\n001A1Z1", so the layout and
+  the line count are unchanged), maps the joined pair too (a model that joins the halves in its output is still
+  restored), and `AnonymisationMap.counts()` counts a split and a whole occurrence of one GSTIN once. The nearest-GSTIN
+  rule for "M/s" names sees split GSTINs. Proved by `gstinsSplitOverALineBreakOrAHyphenAreReplaced`.
+- **Gap 2, vendor names in capitals** (`27f54d5`): eight supplier names survived (the privacy line said "other
+  parties 1") in three layouts: prose with the name before a bracketed "(GSTIN:...)"; "supplier i.e. NAME" with the
+  GSTIN on the next line and "supplier of NAME"; a table whose cells are each on their own line (split GSTIN, blank
+  line, the name in capitals, blank line, amounts), the same vendor twice. New rules in `findBusinessNames`: (6) a name
+  after the word "supplier" / "vendor" / "seller" (optionally "i.e.", "namely", "viz.", "of", "being", "M/s"; upper
+  case, or title case when a GSTIN or its label follows within 60 characters) and after "Trade/Legal Name"
+  (`PARTY_WORD_LABEL`, `TRADE_LEGAL_NAME_LABEL`); (7) the last upper-case business phrase of 2 to 6 words within 200
+  characters before a GSTIN (whole, split or placeholder) with no other GSTIN in between, and an upper-case line of its
+  own within 3 lines before or after a GSTIN in a table block (`findUpperCasePhrasesNearGstins`). A phrase is read with
+  `businessPhraseCore`: words of `BUSINESS_STOP_WORDS` (form, statute, tax, office, designation, table heading, amount,
+  letter and address words: SHOW CAUSE NOTICE, GSTIN, GSTR, ITC, IGST / CGST / SGST, RTP, ARN, DIN, RFD, DRC, ASMT,
+  CENTRAL / STATE TAX, COMMISSIONER, OFFICE OF, GOVERNMENT OF, ACT, RULES, SECTION, PAN, INPUT TAX CREDIT, TOTAL,
+  SR. NO., TRADE / LEGAL NAME, ...) are cut from both ends, a stop word left inside, a State / city name, a placeholder,
+  a lone suffix or trade word ("COMPANY", "POLYMERS" after "SUPPLIER 5") or fewer than two words (one word of five or
+  more letters when a legal-form suffix followed) is not a name. The holder of the taxpayer's GSTIN stays the
+  taxpayer (for the taxpayer's GSTIN only a phrase on its line or the line before counts, the head of a notice being
+  full of upper-case office lines); every other holder is "SUPPLIER n" plus its trailing trade word, every occurrence.
+  Proved by `upperCaseVendorNamesInProseAndTableBlocksAreReplaced` (asserts that no upper-case business phrase
+  outside the stop list survives: `upperCaseBusinessPhrases(anonText)` is empty).
+- **Gap 3, the signing officer** (`a085665`): a person's name on a line of its own next to the designation line
+  survived. `findSignatureNames`: a name on its own line within two lines of a designation line (`DESIGNATION_LINE`:
+  "Dy. Commissioner of State Tax", "State Tax Officer", "(Proper Officer)", "Assistant Commissioner (ST), Mumbai"),
+  after "Sd/-" / "Sd." / "Signed by" / "Digitally signed by" / "Signature" on the same or the next line (brackets and an
+  honorific set aside), or right before a designation on one line ("Sunita Gaikwad, State Tax Officer") -> "PERSON n",
+  numbered in text order, every occurrence; the designation, the office line ("Mumbai Nodal Division 3"), place and
+  date stay (`readsAsPersonName`: two to four capitalised words, none a designation, office, form, place or trade word).
+  Proved by `personNamesInTheSignatureBlockAreReplaced`.
+- **Gap 4, the self-check** (this commit): `NoticeAnonymiser.residualRisks(anonText)` -> `Residual` counts what still
+  looks like a value in the anonymised text, by shape only: `gstin`, `gstin-split`, `pan` (outside a GSTIN), `email`,
+  `phone-10-digits` (not an amount after "Rs"), `caps-phrase-N-words` (an upper-case business phrase outside the stop
+  list); a placeholder's own shape never counts, so a clean text gives 0. `Result.residual()` is computed with every
+  anonymisation and `privacyLine()` ends with ", residual: 0" (or "residual: 3 (caps-phrase-2-words, gstin-split,
+  pan)"). The PDF runner prints it in the Privacy line; with residual > 0 it prints a WARNING with the shapes (never a
+  value) and sets the warn flag `warn:anonymiser_residual` on the notice (check row `FLAG_ANONYMISER_RESIDUAL`, added
+  to the pipeline result's check results by `V7LiveRig.withExtraChecks`, so it shows in the "Flags:" line and the
+  summary); with `NOTICE_ANONYMISE_STRICT` (default true) it REFUSES to send the text to a non-Anthropic provider (the
+  gemini triage, or a non-Anthropic primary provider) and stops the notice with "STOPPED: the anonymiser's self-check
+  found residual: n (...) ... No model call was made for this notice" (status `STOPPED (anonymiser residual n,
+  NOTICE_ANONYMISE_STRICT on)`, the run goes on to the next PDF); Anthropic calls proceed with the flag set.
+  `NOTICE_ANONYMISE_STRICT=off` accepts the residual explicitly. Gemini triage logic is unchanged. Proved by
+  `NoticeAnonymiserTest.residualRisksCountWhatStillLooksLikeAValueByShapeOnly` and
+  `V7PdfPrivacyPipelineOfflineTest.residualSelfCheckFlagsAndStrictModeRefusal` (settings, Privacy line, warning
+  and flag without values, the flag on the result, every refusal / proceed case).
+- **Docs**: README (`NOTICE_ANONYMISE_STRICT`), `docs/PRODUCTION-CONFIG.md` 2b (env var, the "residual" field of the
+  Privacy line and the STOPPED message), `docs/PRIVATE_DATA.md` (step 2: the self-check and strict mode).
+- Not done: a live run on the RFD-08 notice after these fixes (no key here); the anonymiser stays regex-based, so the
+  residual self-check is the guard: read `<id>_ocr_anon.txt` whenever the Privacy line shows residual > 0.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **611 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b29), the Spring context test included (local Postgres 16).
+  Per gap: 607 after gap 1, 608 after gap 2, 609 after gap 3, 611 after gap 4.
 - Offline unit suite (`mvn test`): **606 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 27-10-2026 after (b28), the Spring context test included (local Postgres 16).
   Before the change the suite on `102c4c2` was 587 tests, 0 failures, 2 skipped (re-run the same day).
@@ -1125,8 +1191,9 @@ All proved offline with synthetic text (fictional party "ZETA ALLOYS", allow-lis
    on notices 01, 04, 06, 11, 10 (`V7_LIVE_NOTICES`). Set `LLM_MODEL_MATCHING`,
    `LLM_MODEL_PARTIAL_DRAFTING`, `LLM_MODEL_NEW_ISSUE`, `LLM_MODEL_HIGH_STAKES`, `INDIANKANOON_API_TOKEN`.
    For a real PDF use the (b28) privacy path (`docs/PRODUCTION-CONFIG.md` 2b): after the first run read
-   `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` once to confirm nothing identifying survived the anonymiser, and
-   install `tesseract-ocr` before a scanned PDF.
+   `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` once to confirm nothing identifying survived the anonymiser (the
+   Privacy line's "residual: n" is the (b29) self-check: 0 expected; a residual stops the notice under
+   `NOTICE_ANONYMISE_STRICT` before any non-Anthropic call), and install `tesseract-ocr` before a scanned PDF.
 2. **CA-approved content**: real issue cards, reply templates and stage templates (prayer, filing
    checklist). All current templates are marked "[DEV - not CA reviewed]". Approved content goes in
    `$PRIVATE_SEED_DIR`, not the repo (see `docs/PRIVATE_DATA.md`).

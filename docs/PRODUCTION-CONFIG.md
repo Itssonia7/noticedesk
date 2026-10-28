@@ -151,7 +151,7 @@ may reach gemini (or any model it does not have to). The PDF runner therefore ne
 | Step | What runs | Where |
 |---|---|---|
 | 1. text | `OCR_PROVIDER=local` (default): PDFBox reads the text layer; a scanned PDF goes through the system `tesseract` (eng) page by page; without tesseract the run fails with "scanned PDF needs tesseract or a paid OCR provider; refusing to send raw bytes to a free-tier model" | laptop only, cost 0 |
-| 2. anonymise | `NOTICE_ANONYMISE=on` (default): GSTINs (state code kept), PANs, TAN / CIN / IEC / Aadhaar / bank account / IFSC, phones, e-mails, PIN codes, ARN / DIN / reference numbers (same shape, so the DIN defect check still works), the taxpayer ("NOTICEE COMPANY", suffix kept), other parties ("SUPPLIER n TRADERS"), persons ("PERSON n"), street addresses ("ADDRESS n", city and State kept). Amounts, dates, periods, sections, forms, officer designations, rates, HSN and invoice numbers stay | laptop only; `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` + `<id>_anon_map.json` |
+| 2. anonymise | `NOTICE_ANONYMISE=on` (default): GSTINs (state code kept; a GSTIN split over a line break or a hyphen by the PDF text layer too, with the break kept), PANs, TAN / CIN / IEC / Aadhaar / bank account / IFSC, phones, e-mails, PIN codes, ARN / DIN / reference numbers (same shape, so the DIN defect check still works), the taxpayer ("NOTICEE COMPANY", suffix kept), other parties ("SUPPLIER n TRADERS": after "M/s", a label or the word "supplier" / "vendor", next to a GSTIN, the last upper-case name before a GSTIN, an upper-case line near a GSTIN in a table block), persons ("PERSON n", the signing officer next to the designation line or after "Sd/-" included), street addresses ("ADDRESS n", city and State kept). Amounts, dates, periods, sections, forms, officer designations, office lines, rates, HSN and invoice numbers stay. Self-check: `residual: n` in the Privacy line (what still looks like a GSTIN / PAN / e-mail / phone / upper-case business name, shapes only) | laptop only; `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` + `<id>_anon_map.json` |
 | 3. triage | `DocumentParsingAgent` on the anonymised text, file name `notice.pdf`; provider `LLM_PROVIDER_TRIAGE` (default `anthropic`, the primary provider; `gemini` allowed because it sees placeholders only), model `LLM_MODEL_TRIAGE` (else `LLM_MODEL_PARSING`, else the `model-parsing` default) | model call, anonymised text |
 | 4. v7 pipeline | shortlist, matching, template variables, writers, citation check on the anonymised text; the learned library stores the anonymised text only | model calls, anonymised text |
 | 5. outputs | restored before saving: `<id>_draft.txt`, `<id>_draft.docx`, `<id>_summary.txt`; `<id>_draft_anon.txt` keeps what the models saw; the console report lines are restored too | `$PRIVATE_SEED_DIR/results/` |
@@ -160,12 +160,21 @@ Guards: a non-local `OCR_PROVIDER` with the anonymiser on is refused (`NOTICE_AN
 real text, and that is an explicit decision); `PRIVATE_SEED_DIR` must be set and outside any git working tree (the
 mapping holds the real identifiers); the commit hook and `.gitignore` reject `*_anon_map.json`, `*_ocr_anon.txt`,
 `*_draft_anon.txt` and `results/*_draft.*`. The notice id is the PDF's file name: name PDFs neutrally (`scn-001.pdf`).
+Residual: when the self-check finds anything left (`residual: n` > 0) the runner prints a `WARNING: anonymiser
+residual: n (...)` line with token shapes only (never a value), sets the warn flag `warn:anonymiser_residual` on the
+notice (check row `FLAG_ANONYMISER_RESIDUAL`, in the "Flags:" line and the summary), and with
+`NOTICE_ANONYMISE_STRICT=on` (default) stops the notice before any non-Anthropic provider sees the text:
+`STOPPED: the anonymiser's self-check found residual: n (...) ... No model call was made for this notice` (status
+`STOPPED (anonymiser residual n, NOTICE_ANONYMISE_STRICT on)`; the run goes on to the next PDF). Anthropic calls
+proceed with the flag set. Read `<id>_ocr_anon.txt`, fix the anonymiser, set `LLM_PROVIDER_TRIAGE=anthropic`, or set
+`NOTICE_ANONYMISE_STRICT=off` to accept it explicitly.
 
 ### Env vars
 
 ```bash
 OCR_PROVIDER=local              # local (default) | gemini (refused unless NOTICE_ANONYMISE=off)
 NOTICE_ANONYMISE=on             # on (default) | off
+NOTICE_ANONYMISE_STRICT=on      # on (default): a residual stops the notice before a non-Anthropic call | off
 PRIVATE_SEED_DIR=$HOME/noticedesk-private   # pdf/ in, results/ out (required)
 V7_PDF_NOTICES=scn-001.pdf      # comma list under $PRIVATE_SEED_DIR/pdf, or absolute paths
 LLM_PROVIDER_TRIAGE=anthropic   # anthropic (default) | gemini
@@ -193,6 +202,7 @@ export ENABLE_E2E_TESTS=true
 export V7_PDF_NOTICES=scn-001.pdf
 export OCR_PROVIDER=local                 # default; shown here so nobody switches it on by accident
 export NOTICE_ANONYMISE=on                # default
+export NOTICE_ANONYMISE_STRICT=on         # default: residual > 0 stops the notice before any non-Anthropic call
 
 export ANTHROPIC_API_KEY=sk-ant-...
 export LLM_MODEL_MATCHING=claude-sonnet-5-5           # priced in application.yml
@@ -214,8 +224,10 @@ ls -l "$PRIVATE_SEED_DIR/results/"       # scn-001_ocr_anon.txt, scn-001_anon_ma
 ```
 
 What to read in the console: `OCR: provider=local model=pdfbox pages=N chars=... cost INR 0.0000`, one
-`Privacy: anonymised GSTINs a, PANs b, names c (...), addresses d, references e, other ids f` line per notice (counts
-only), `Triage: document_type=...`, then the usual v7 report lines (restored) and the paths of the saved files.
+`Privacy: anonymised GSTINs a, PANs b, names c (...), addresses d, references e, other ids f, residual: r` line per
+notice (counts only; `residual: 0` expected, anything else comes with a WARNING line naming token shapes and, under
+strict mode, a STOPPED line), `Triage: document_type=...`, then the usual v7 report lines (restored) and the paths of
+the saved files.
 
 ---
 

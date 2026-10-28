@@ -12,6 +12,7 @@ import com.noticedesk.api.agent.PartialDraftingAgent;
 import com.noticedesk.api.agent.ShortlistTitleAgent;
 import com.noticedesk.api.agent.TemplateVariableAgent;
 import com.noticedesk.api.config.AppProperties;
+import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.service.learned.LearnedLibrary;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmFactory;
@@ -280,6 +281,15 @@ final class V7LiveRig {
         return runNotice(noticeId, label, docType, ocr, expectedStatus, extraLines, preNoticeInr, null);
     }
 
+    /** The same result with {@code extra} check rows appended to its check results (a result without rows gets them). */
+    static DraftingPipelineResult withExtraChecks(DraftingPipelineResult r, List<DraftCheckResult> extra) {
+        List<DraftCheckResult> checks = new ArrayList<>(r.checkResults() != null ? r.checkResults() : List.of());
+        checks.addAll(extra);
+        return new DraftingPipelineResult(r.draft(), r.citations(), r.citationSummary(), r.ragHitCount(), r.diskCacheHitCount(),
+                r.opusCallCount(), r.totalInputTokens(), r.totalOutputTokens(), r.stopReason(), r.paragraphSourceMap(), checks,
+                r.aiIssueSections());
+    }
+
     /**
      * As {@link #runNotice(String, String, String, String, String, List, BigDecimal)}; with a {@code restorer} (the
      * anonymiser's de-anonymise function) {@code ocr} is the ANONYMISED text, the pipeline, the learned library and
@@ -289,6 +299,17 @@ final class V7LiveRig {
      */
     NoticeOutcome runNotice(String noticeId, String label, String docType, String ocr, String expectedStatus,
                             List<String> extraLines, BigDecimal preNoticeInr, Function<String, String> restorer) throws Exception {
+        return runNotice(noticeId, label, docType, ocr, expectedStatus, extraLines, preNoticeInr, restorer, List.of());
+    }
+
+    /**
+     * As {@link #runNotice(String, String, String, String, String, List, BigDecimal, Function)}; {@code extraChecks}
+     * are check rows set before the pipeline (the anonymiser's residual warn flag) and are added to the result's
+     * check results, so they show in the "Flags:" line and travel with the result.
+     */
+    NoticeOutcome runNotice(String noticeId, String label, String docType, String ocr, String expectedStatus,
+                            List<String> extraLines, BigDecimal preNoticeInr, Function<String, String> restorer,
+                            List<DraftCheckResult> extraChecks) throws Exception {
         BigDecimal pre = preNoticeInr != null ? preNoticeInr : BigDecimal.ZERO;
         // the notice cap covers what this notice already spent before the pipeline (OCR, triage)
         props.getLlm().setMaxCostInrPerNotice(noticeCap.subtract(pre).max(BigDecimal.ZERO).doubleValue());
@@ -343,6 +364,7 @@ final class V7LiveRig {
             BigDecimal spent = ledger.totalInrSince(callCheckpoint).add(pre);
             return new NoticeOutcome("ABORTED", spent, true, e.getMessage(), null, null);
         }
+        if (extraChecks != null && !extraChecks.isEmpty()) result = withExtraChecks(result, extraChecks);
 
         // Model cost per notice from every billed call (failed attempts and retries included)
         double matchingInr = ledger.totalInrSince(callCheckpoint, "matching").doubleValue();

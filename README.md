@@ -138,9 +138,15 @@ copy-paste laptop block in [`docs/PRODUCTION-CONFIG.md`](docs/PRODUCTION-CONFIG.
 - `OCR_PROVIDER=local` (default) — the PDF text layer through PDFBox; a scanned PDF through the system `tesseract`
   command (`apt install tesseract-ocr tesseract-ocr-eng`), refused with a clear message when it is not installed.
   Nothing is sent to any model. `gemini` (the free-tier key) is refused unless `NOTICE_ANONYMISE=off`.
-- `NOTICE_ANONYMISE=on` (default) — GSTINs, PANs, names, addresses, reference numbers and other ids become same-shape
-  placeholders before triage and the v7 pipeline; the outputs are restored before saving. `off` sends the real text
-  (only with an explicit decision to do so).
+- `NOTICE_ANONYMISE=on` (default) — GSTINs (also split over a line break), PANs, names (the taxpayer, vendors printed
+  in capitals, the signing officer), addresses, reference numbers and other ids become same-shape placeholders before
+  triage and the v7 pipeline; the outputs are restored before saving. `off` sends the real text (only with an explicit
+  decision to do so).
+- `NOTICE_ANONYMISE_STRICT=on` (default) — the anonymiser's self-check counts what still looks like a GSTIN, PAN,
+  e-mail, phone or an upper-case business name in the anonymised text (`residual: n` in the Privacy line, token shapes
+  only, never a value). A residual sets the warn flag `warn:anonymiser_residual` on the notice; with strict mode on the
+  notice is stopped before any non-Anthropic provider (gemini triage) sees the text. `off` accepts the residual
+  explicitly.
 - `PRIVATE_SEED_DIR` (required) — `pdf/` holds the notices (`V7_PDF_NOTICES=a.pdf,b.pdf`), `results/` receives
   `<id>_ocr_anon.txt`, `<id>_anon_map.json`, `<id>_draft_anon.txt`, `<id>_draft.txt`, `<id>_draft.docx`, `<id>_summary.txt`.
 - `LLM_PROVIDER_TRIAGE=anthropic` (default) / `LLM_MODEL_TRIAGE=` (default `LLM_MODEL_PARSING`, else the

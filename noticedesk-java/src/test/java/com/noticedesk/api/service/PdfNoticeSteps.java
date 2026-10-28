@@ -2,6 +2,7 @@ package com.noticedesk.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.agent.DocumentParsingAgent;
+import com.noticedesk.api.model.matching.DraftCheckResult;
 import com.noticedesk.api.service.llm.ApiUsageLogService;
 import com.noticedesk.api.service.llm.LlmResponse;
 import com.noticedesk.api.service.ocr.LocalOcrProvider;
@@ -16,8 +17,10 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.Function;
@@ -41,6 +44,16 @@ final class PdfNoticeSteps {
     static final String DEFAULT_OCR_PROVIDER = LocalOcrProvider.NAME;
     /** Env: "off" switches the anonymiser off (and accepts a non-local OCR provider); anything else = on. */
     static final String ANONYMISE_ENV = "NOTICE_ANONYMISE";
+    /**
+     * Env: with the anonymiser's self-check finding anything left in the text (residual > 0), "off" lets a
+     * non-Anthropic provider (gemini triage) see the text anyway; the default (true) refuses and stops the notice.
+     */
+    static final String STRICT_ENV = "NOTICE_ANONYMISE_STRICT";
+    /** The warn flag set on a notice whose anonymised text still carries value-shaped tokens (shapes only, never a value). */
+    static final String FLAG_ANONYMISER_RESIDUAL = "warn:anonymiser_residual";
+    static final String CHECK_ANONYMISER_RESIDUAL = "FLAG_ANONYMISER_RESIDUAL";
+    /** The provider whose calls may proceed with a residual under strict mode (the paid, no-training Anthropic API). */
+    static final String TRUSTED_PROVIDER = "anthropic";
 
     // ---------------------------------------------------------------- privacy settings
 
@@ -54,6 +67,11 @@ final class PdfNoticeSteps {
         if (envValue == null || envValue.isBlank()) return true;
         String v = envValue.trim().toLowerCase(Locale.ROOT);
         return !(v.equals("off") || v.equals("false") || v.equals("0") || v.equals("no"));
+    }
+
+    /** True unless {@code NOTICE_ANONYMISE_STRICT} is explicitly "off" / "false" / "0" (same spellings as the anonymiser switch). */
+    static boolean strict(String envValue) {
+        return anonymise(envValue);
     }
 
     /**
@@ -180,7 +198,7 @@ final class PdfNoticeSteps {
      * The anonymised notice: the text every model call sees, the mapping (real values, kept only under
      * {@code $PRIVATE_SEED_DIR/results}) and the restorer applied to every output before it is saved.
      */
-    record AnonymisedNotice(String text, AnonymisationMap map, boolean on) {
+    record AnonymisedNotice(String text, AnonymisationMap map, boolean on, NoticeAnonymiser.Residual residual) {
         /** Restores the real values in {@code s}; identity when the anonymiser is off. */
         String restore(String s) {
             return on ? NoticeAnonymiser.deAnonymise(s, map) : s;
@@ -190,16 +208,66 @@ final class PdfNoticeSteps {
             return on ? this::restore : null;
         }
 
+        /** Counts of replaced values and the self-check's residual count (shapes only); never a value. */
         String privacyLine() {
-            return on ? "Privacy: anonymised " + map.summaryLine() : "Privacy: NOTICE_ANONYMISE=off, the real text was used";
+            return on ? "Privacy: anonymised " + map.summaryLine() + ", " + residual.line() : "Privacy: NOTICE_ANONYMISE=off, the real text was used";
+        }
+
+        /** What the self-check found, as token shapes (never values), or 0 when the text is clean or the anonymiser is off. */
+        int residualCount() {
+            return on && residual != null ? residual.total() : 0;
+        }
+
+        /**
+         * The warn flag for a notice whose anonymised text still carries value-shaped tokens, as a failed check row
+         * (check {@code FLAG_ANONYMISER_RESIDUAL}, severity warn, details: the flag, the count and the shapes); null
+         * when there is nothing left or the anonymiser is off.
+         */
+        DraftCheckResult residualFlag() {
+            if (residualCount() == 0) return null;
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("flag", FLAG_ANONYMISER_RESIDUAL);
+            details.put("residual", residual.total());
+            details.put("shapes", residual.countsByShape());
+            return new DraftCheckResult(CHECK_ANONYMISER_RESIDUAL, "warn", false, details);
+        }
+
+        /** "WARNING: anonymiser residual 2 (caps-phrase-3-words, pan): ...", or null when there is nothing left. */
+        String residualWarning(String noticeId) {
+            if (residualCount() == 0) return null;
+            return "WARNING: anonymiser " + residual.line() + " for " + noticeId + " - token shapes only, values are never printed; "
+                    + "read " + noticeId + "_ocr_anon.txt under $PRIVATE_SEED_DIR/results before trusting the run; flag "
+                    + FLAG_ANONYMISER_RESIDUAL + " set";
         }
     }
 
     /** Anonymises the OCR text (identity with the same text and an empty map when {@code on} is false). */
     static AnonymisedNotice anonymise(String ocrText, boolean on) {
-        if (!on) return new AnonymisedNotice(ocrText, new AnonymisationMap(), false);
+        if (!on) return new AnonymisedNotice(ocrText, new AnonymisationMap(), false, null);
         NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(ocrText);
-        return new AnonymisedNotice(r.text(), r.map(), true);
+        return new AnonymisedNotice(r.text(), r.map(), true, r.residual());
+    }
+
+    /**
+     * Why the notice must stop before any model call, or null: the self-check found something left in the anonymised
+     * text ({@code residual > 0}), strict mode is on ({@code NOTICE_ANONYMISE_STRICT}, default true) and one of the
+     * providers that would see the text is not Anthropic (the free-tier gemini triage, or a non-Anthropic primary
+     * provider). Anthropic calls may proceed (the warn flag is set on the notice instead).
+     */
+    static String residualRefusal(AnonymisedNotice a, boolean strict, String triageProvider, String primaryProvider) {
+        if (a == null || !a.on() || a.residualCount() == 0 || !strict) return null;
+        List<String> untrusted = new ArrayList<>();
+        for (String p : new String[]{triageProvider, primaryProvider}) {
+            if (p != null && !p.isBlank() && !TRUSTED_PROVIDER.equalsIgnoreCase(p.trim()) && !untrusted.contains(p.trim().toLowerCase(Locale.ROOT))) {
+                untrusted.add(p.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        if (untrusted.isEmpty()) return null;
+        return "STOPPED: the anonymiser's self-check found " + a.residual().line() + " in the anonymised text and "
+                + STRICT_ENV + " is on: refusing to send it to the non-Anthropic provider " + String.join(", ", untrusted)
+                + " (" + (untrusted.contains(triageProvider != null ? triageProvider.trim().toLowerCase(Locale.ROOT) : "") ? "LLM_PROVIDER_TRIAGE" : "LLM_PROVIDER_PRIMARY")
+                + "). Read <id>_ocr_anon.txt under $PRIVATE_SEED_DIR/results (shapes above, never values), fix the anonymiser, "
+                + "set LLM_PROVIDER_TRIAGE=anthropic, or set " + STRICT_ENV + "=off to accept it explicitly. No model call was made for this notice.";
     }
 
     /**

@@ -30,7 +30,10 @@ import static org.junit.jupiter.api.Assertions.fail;
  *       {@code NOTICE_ANONYMISE=off} is set explicitly;</li>
  *   <li>anonymise ({@code NoticeAnonymiser}, default on): GSTINs / PANs / names / addresses / reference numbers become
  *       same-shape placeholders; the anonymised text goes to {@code $PRIVATE_SEED_DIR/results/<notice-id>_ocr_anon.txt}
- *       and the mapping to {@code <notice-id>_anon_map.json} (never inside the repository);</li>
+ *       and the mapping to {@code <notice-id>_anon_map.json} (never inside the repository). The anonymiser's self-check
+ *       counts what still looks like a value ("residual: n" in the Privacy line, shapes only); a residual sets the warn
+ *       flag {@code warn:anonymiser_residual} on the notice and, with {@code NOTICE_ANONYMISE_STRICT} (default on),
+ *       stops the notice before any non-Anthropic provider (gemini triage) sees the text;</li>
  *   <li>triage on the anonymised text ({@code DocumentParsingAgent}; provider {@code LLM_PROVIDER_TRIAGE}, default the
  *       primary Anthropic provider, model {@code LLM_MODEL_TRIAGE}, else {@code LLM_MODEL_PARSING}, else application.yml);</li>
  *   <li>the v7 pipeline on the anonymised text (shortlist, matching, writers, citation check; the learned library stores
@@ -57,6 +60,7 @@ public class V7PdfPipelineRunnerTest {
         // privacy settings first: no file is read and no call is made when they refuse the run
         String ocrProviderName = PdfNoticeSteps.ocrProviderName(env(PdfNoticeSteps.OCR_PROVIDER_ENV));
         boolean anonymise = PdfNoticeSteps.anonymise(env(PdfNoticeSteps.ANONYMISE_ENV));
+        boolean strict = PdfNoticeSteps.strict(env(PdfNoticeSteps.STRICT_ENV));
         String refusal = PdfNoticeSteps.privacyRefusal(ocrProviderName, anonymise);
         if (refusal != null) fail(refusal);
         File resultsDir = PdfNoticeSteps.privateResultsDir(env("PRIVATE_SEED_DIR"));
@@ -114,9 +118,10 @@ public class V7PdfPipelineRunnerTest {
         }
         DocumentParsingAgent parsingAgent = new DocumentParsingAgent(rig.llmFactory, new IdentityService(null), rig.props, rig.om);
         ApiUsageLogService usage = rig.usageLogService;
-        System.out.printf("OCR: provider=%s%s | anonymise=%s | triage=%s:%s | results=%s%n", ocrProvider.getName(),
-                ocrModel != null ? " model=" + ocrModel : "", anonymise ? "on" : "OFF (NOTICE_ANONYMISE=off)", triageProvider, parsingModel,
-                resultsDir.getAbsolutePath());
+        System.out.printf("OCR: provider=%s%s | anonymise=%s | strict=%s | triage=%s:%s | results=%s%n", ocrProvider.getName(),
+                ocrModel != null ? " model=" + ocrModel : "", anonymise ? "on" : "OFF (NOTICE_ANONYMISE=off)",
+                strict ? "on (a residual stops the notice before any non-Anthropic call)" : "OFF (NOTICE_ANONYMISE_STRICT=off)",
+                triageProvider, parsingModel, resultsDir.getAbsolutePath());
 
         if (guard.smoke()) {
             pdfs = pdfs.subList(0, 1);
@@ -171,6 +176,19 @@ public class V7PdfPipelineRunnerTest {
             System.out.println(privacyLine);
             System.out.println("Saved anonymised text to: " + saved[0].getAbsolutePath()
                     + (saved[1] != null ? " (mapping: " + saved[1].getAbsolutePath() + ")" : ""));
+            // the self-check: anything value-shaped left in the anonymised text is logged by shape (never a value),
+            // flagged on the notice, and with strict mode on stops the notice before a non-Anthropic provider sees it
+            String residualWarning = anon.residualWarning(noticeId);
+            if (residualWarning != null) System.out.println(residualWarning);
+            String residualRefusal = PdfNoticeSteps.residualRefusal(anon, strict, triageProvider, rig.props.getLlm().getProviderPrimary());
+            if (residualRefusal != null) {
+                System.out.println(residualRefusal);
+                statusByNotice.put(noticeId, "STOPPED (anonymiser residual " + anon.residualCount() + ", " + PdfNoticeSteps.STRICT_ENV + " on)");
+                if (guard.smoke()) break;
+                continue;
+            }
+            List<com.noticedesk.api.model.matching.DraftCheckResult> extraChecks = anon.residualFlag() != null
+                    ? List.of(anon.residualFlag()) : List.of();
 
             // (3) the document_type label, from the anonymised text
             PdfNoticeSteps.TriageStep triage;
@@ -194,7 +212,7 @@ public class V7PdfPipelineRunnerTest {
 
             // (4) the v7 pipeline on the anonymised text; (5) outputs restored before saving
             V7LiveRig.NoticeOutcome outcome = rig.runNotice(noticeId, pdf.getName(), triage.documentType(), anon.text(),
-                    "none (PDF notice, not scored)", List.of(ocrLine, privacyLine, triageLine), pre, anon.restorer());
+                    "none (PDF notice, not scored)", List.of(ocrLine, privacyLine, triageLine), pre, anon.restorer(), extraChecks);
             totalInr = totalInr.add(outcome.spentInr());
             statusByNotice.put(noticeId, outcome.status());
             if (outcome.abortReason() != null) {

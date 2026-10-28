@@ -74,9 +74,16 @@ SPRING_PROFILES_ACTIVE=private-seed mvn -f noticedesk-java/pom.xml spring-boot:r
      kept), the taxpayer's name ("NOTICEE COMPANY", legal-form suffix kept), other parties ("SUPPLIER n TRADERS"),
      persons ("PERSON n") and the street part of addresses ("ADDRESS n"; city and State kept) become same-shape
      placeholders. Amounts, dates, periods, sections, form names, officer designations, rates, HSN and invoice
-     numbers stay. The anonymised text goes to `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt`, the reversible mapping
-     to `<id>_anon_map.json` (real values: only there, never in a git working tree, never logged; the console gets a
-     `Privacy:` line with counts only);
+     numbers stay. A GSTIN the PDF text layer split over a line break is replaced with the break kept; vendor names
+     printed in capitals (before a GSTIN, after "supplier" / "vendor", on their own line in a table block) and the
+     signing officer next to the designation line are replaced too. The anonymised text goes to
+     `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt`, the reversible mapping to `<id>_anon_map.json` (real values: only
+     there, never in a git working tree, never logged; the console gets a `Privacy:` line with counts only). The
+     anonymiser then checks its own output (`residual: n` in the Privacy line: what still looks like a GSTIN, PAN,
+     e-mail, phone or an upper-case business name, reported by token shape, never by value); a residual sets the
+     warn flag `warn:anonymiser_residual` on the notice and, with `NOTICE_ANONYMISE_STRICT` (default on), stops the
+     notice before any non-Anthropic provider (the free-tier gemini triage) sees the text; Anthropic calls proceed
+     with the flag set;
   3. triage (`DocumentParsingAgent`) and the whole v7 pipeline run on the anonymised text; the learned library stores
      the anonymised text only; the file name sent to the triage model is `notice.pdf`, not the PDF's name;
   4. the outputs are **de-anonymised before saving**: `<id>_draft_anon.txt` (as the models produced it),
