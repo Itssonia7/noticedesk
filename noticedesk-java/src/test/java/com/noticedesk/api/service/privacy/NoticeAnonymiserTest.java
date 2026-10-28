@@ -605,6 +605,136 @@ class NoticeAnonymiserTest {
     }
 
     /**
+     * The vendor that survived a real RFD-08 after (b31): a name wrapped over THREE cell lines in the row layout. The
+     * row holds its first two words, the next line starts with the GSTIN remainder and holds "AND WORD WORD" before
+     * the reason text goes on, and the legal suffix "LIMITED" stands at the start of the line after that. The row name
+     * and its whole continuation are ONE party: one "SUPPLIER n" (the row's), the continuation "SUPPLIER n CONTD",
+     * only the legal suffix kept, never a second placeholder inside the continuation and never a surviving capital
+     * word. Also: a continuation of more than four tokens with a digit and "PRIVATE" at its end, a form word inside a
+     * row's name ("COBALT SUPPLY AND SERVICES"), the same name in prose with the row's placeholder; the self-check
+     * reports 0; the round trip is exact; a second pass changes nothing.
+     */
+    @Test
+    void aNameWrappedOverThreeCellLinesIsOneParty() {
+        String text = """
+                GOVERNMENT OF MAHARASHTRA
+                FORM GST RFD-08
+                To,
+                M/s ZETA ALLOYS PRIVATE LIMITED
+                GSTIN: 27ZZZZZ9999Z1Z9
+                2. (c) The following inward supplies are ineligible:
+                Sr. GSTIN Trade/Legal Name Invoice value IGST CGST SGST Cess Reason
+                8 24YYYYY8 KESTREL HOLLOW 56789 0 5111 5111 0 Return not filed by the
+                888Y1Z8 SUPPLIER for the period
+                9 29XXXXX7 MARLIN QUARTZ AND 76259 0 1111 1111 0 These invoices do not
+                777X1Z7 PEBBLE VANTAGE match in furtherance
+                LIMITED of the refund claim.
+                10 36UUUUU4 TALON FERRIC 12345 0 1111 1111 0 These invoices do not
+                444U1Z4 AND GRANITE HARBOUR match in furtherance
+                LIMITED of the refund claim.
+                11 24YYYYY8 KESTREL HOLLOW 4321 0 411 411 0 Invoice not uploaded by the
+                888Y1Z8 SUPPLIER in GSTR-1
+                12 33WWWWW6 COBALT SUPPLY AND 4321 0 411 411 0 Invoice not uploaded by the
+                666W1Z6 SERVICES match in furtherance
+                LIMITED of the refund claim.
+                13 07VVVVV5 ONYX RIDGE 7 12345 0 1111 1111 0 These invoices do not
+                555V1Z5 AND SABLE CREST 2 PRIVATE match in furtherance
+                LIMITED of the refund claim.
+                TOTAL 166280
+                3. The supplier Talon Ferric and Granite Harbour Limited, the supplier Marlin Quartz and Pebble Vantage Limited and the supplier Cobalt Supply and Services Limited have not replied.
+                Dy. Commissioner of State Tax
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        String lower = a.toLowerCase(Locale.ROOT);
+        for (String real : List.of("zeta alloys", "kestrel", "hollow", "marlin", "quartz", "pebble", "vantage", "talon", "ferric", "granite", "harbour",
+                "cobalt", "onyx", "ridge", "sable", "crest", "ZZZZZ", "YYYYY", "XXXXX", "UUUUU", "WWWWW", "VVVVV", "888Y1Z8", "777X1Z7", "444U1Z4",
+                "666W1Z6", "555V1Z5")) {
+            assertFalse(lower.contains(real.toLowerCase(Locale.ROOT)), "survived: " + real + "\n" + a);
+        }
+        assertTrue(a.contains("\n8 24AAAAA0 SUPPLIER 1 56789 0 5111 5111 0 Return not filed by the\n002A1Z2 SUPPLIER for the period\n"),
+                "a form word after the remainder is not a continuation\n" + a);
+        assertTrue(a.contains("\n9 29AAAAA0 SUPPLIER 2 AND 76259 0 1111 1111 0 These invoices do not\n003A1Z3 SUPPLIER 2 CONTD match in furtherance\nLIMITED of the refund claim.\n"),
+                "a name wrapped over three lines with the connector on the row: one party, the legal suffix kept\n" + a);
+        assertTrue(a.contains("\n10 36AAAAA0 SUPPLIER 3 12345 0 1111 1111 0 These invoices do not\n004A1Z4 AND SUPPLIER 3 CONTD match in furtherance\nLIMITED of the refund claim.\n"),
+                "a name wrapped over three lines with the connector after the remainder: one party, the legal suffix kept\n" + a);
+        assertTrue(a.contains("\n11 24AAAAA0 SUPPLIER 1 4321 0 411 411 0 Invoice not uploaded by the\n002A1Z2 SUPPLIER in GSTR-1\n"),
+                "the same vendor in a second row\n" + a);
+        assertTrue(a.contains("\n12 33AAAAA0 SUPPLIER 4 AND 4321 0 411 411 0 Invoice not uploaded by the\n005A1Z5 SERVICES match in furtherance\nLIMITED of the refund claim.\n"),
+                "a form word inside a row's name does not unmake it; the trade word and the legal suffix stay\n" + a);
+        assertTrue(a.contains("\n13 07AAAAA0 SUPPLIER 5 7 12345 0 1111 1111 0 These invoices do not\n006A1Z6 AND SUPPLIER 5 CONTD PRIVATE match in furtherance\nLIMITED of the refund claim.\n"),
+                "a continuation of five tokens with a digit inside and the legal form split over two lines\n" + a);
+        assertTrue(a.contains("The supplier Supplier 3 Limited, the supplier Supplier 2 Limited and the supplier Supplier 4 Services Limited have not replied."),
+                "the wrapped names in one piece in prose: the row's placeholder\n" + a);
+        assertFalse(a.contains("SUPPLIER 6"), "no second placeholder inside a continuation\n" + a);
+        assertEquals(text.lines().count(), a.lines().count(), "the line layout is unchanged");
+        assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases(a), a);
+        assertEquals(0, r.residual().total(), r.residual().line() + "\n" + a);
+        assertTrue(r.privacyLine().contains("GSTINs 6") && r.privacyLine().contains("other parties 5") && r.privacyLine().endsWith("residual: 0"), r.privacyLine());
+        assertEquals("PEBBLE VANTAGE", r.map().valueOf("SUPPLIER 2 CONTD"));
+        assertEquals("GRANITE HARBOUR", r.map().valueOf("SUPPLIER 3 CONTD"));
+        assertEquals("SABLE CREST 2", r.map().valueOf("SUPPLIER 5 CONTD"));
+        assertEquals("COBALT SUPPLY AND SERVICES", r.map().valueOf("SUPPLIER 4 SERVICES"));
+        assertEquals("Marlin Quartz and Pebble Vantage", r.map().valueOf("Supplier 2"));
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        NoticeAnonymiser.Result twice = NoticeAnonymiser.anonymise(a);
+        assertEquals(a, twice.text(), "a second pass changes nothing");
+        assertTrue(twice.map().isEmpty(), twice.map().summaryLine());
+        // the same shape with the legal form split "PRIVATE" / "LIMITED" over the remainder line and the line after
+        String pvt = """
+                1 29XXXXX7 MARLIN QUARTZ AND 76259 0 1111 1111 0 These invoices do not
+                777X1Z7 PEBBLE VANTAGE PRIVATE match in furtherance
+                LIMITED of the refund claim.
+                """;
+        NoticeAnonymiser.Result p = NoticeAnonymiser.anonymise(pvt);
+        assertEquals("""
+                1 29AAAAA0 SUPPLIER 1 AND 76259 0 1111 1111 0 These invoices do not
+                001A1Z1 SUPPLIER 1 CONTD PRIVATE match in furtherance
+                LIMITED of the refund claim.
+                """, p.text());
+        assertEquals(0, p.residual().total(), p.residual().line());
+        assertEquals(pvt, NoticeAnonymiser.deAnonymise(p.text(), p.map()));
+    }
+
+    /**
+     * The self-check never counts a form phrase or the tail of a placeholder: the legal form, a trade word, "INDIA" or
+     * a connector that directly follows a "SUPPLIER n" / "NOTICEE COMPANY" placeholder (or another such word) in a
+     * table row or in prose, "PRIVATE LIMITED" on a line of its own, "SHOW CAUSE NOTICE" and officer designations. A
+     * capital word that is none of these still counts, after a placeholder too.
+     */
+    @Test
+    void residualRisksNeverCountFormWordsOrTheTailOfAPlaceholder() {
+        for (String clean : List.of(
+                "1 24AAAAA0 SUPPLIER 9 LTD 12345 1111 0 0 0 Goods received by the\n002A1Z2 after cancellation of",
+                "1 24AAAAA0002A1Z2 SUPPLIER 9 LIMITED 12345 0 0 0 Reason",
+                "1 24AAAAA0002A1Z2 SUPPLIER 9 PVT LTD 12345 0 0 0 Reason",
+                "1 24AAAAA0002A1Z2 SUPPLIER 9 INDIA LIMITED 12345 0 0 0 Reason",
+                "1 24AAAAA0002A1Z2 SUPPLIER 9 TRADERS AND CO 12345 0 0 0 Reason",
+                "1 27AAAAA0001A1Z1 NOTICEE COMPANY INDIA PRIVATE LIMITED 12345 0 0 0 Reason",
+                "9 29AAAAA0 SUPPLIER 2 AND 76259 0 1111 1111 0 These invoices do not\n003A1Z3 SUPPLIER 2 CONTD match in furtherance\nLIMITED of the refund claim.",
+                "10 36AAAAA0 SUPPLIER 3 12345 0 1111 1111 0 These invoices do not\n004A1Z4 AND SUPPLIER 3 CONTD match in furtherance\nLIMITED of the refund claim.",
+                "The supplier SUPPLIER 9 INDIA LIMITED and M/s SUPPLIER 2 TRADERS AND CO have not replied; SUPPLIER 1 PRIVATE LIMITED is non-existent.",
+                "M/s NOTICEE COMPANY\nPRIVATE LIMITED\nGSTIN: 27AAAAA0001A1Z1",
+                "SHOW CAUSE NOTICE\nFORM GST RFD-08\nPRIVATE LIMITED\nOFFICE OF THE DY. COMMISSIONER OF STATE TAX\nDY. COMMISSIONER OF STATE TAX\nSTATE TAX OFFICER\n(PROPER OFFICER)\nASSISTANT COMMISSIONER (ST)",
+                "SUPPLIER 1 LTD, SUPPLIER 2 LLP, SUPPLIER 3 CORPORATION, SUPPLIER 4 ENTERPRISES, SUPPLIER 5 INDUSTRIES, SUPPLIER 6 CO, SUPPLIER 7 & SONS")) {
+            NoticeAnonymiser.Residual r = NoticeAnonymiser.residualRisks(clean);
+            assertEquals("residual: 0", r.line(), clean);
+        }
+        // a genuinely surviving capital word still counts, after a placeholder too
+        assertEquals("residual: 1 (caps-word-in-row)", NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 SUPPLIER 1 ORBIT 12345 0 0 0 Reason").line(),
+                "a capital word after a placeholder that is not a legal form, trade word or connector");
+        assertEquals(1, NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 SUPPLIER 1 LTD ORBIT 12345 0 0 0 Reason").total(),
+                "a capital word after the legal suffix of a placeholder");
+        assertEquals("residual: 1 (caps-word-in-row)", NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 ORBIT 12345 0 0 0 Reason").line());
+        assertEquals("residual: 1 (caps-word-in-row)", NoticeAnonymiser.residualRisks("1 24AAAAA0 ORBIT 3 LTD 1,00,000.50 0 Reason").line());
+        assertEquals("residual: 1 (caps-phrase-2-words)", NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 ORBIT TRADERS 12345 0 0 0 Reason").line());
+        assertEquals(1, NoticeAnonymiser.residualRisks("The supplier SUPPLIER 1 ORBIT LIMITED has not replied.").total(),
+                "an identifying word between a placeholder and its legal suffix in prose");
+        assertEquals(1, NoticeAnonymiser.residualRisks("9 29AAAAA0 SUPPLIER 2 AND 76259 0 1111 1111 0 These invoices do not\n003A1Z3 PEBBLE VANTAGE match in furtherance\nLIMITED of").total(),
+                "a continuation that survived whole");
+    }
+
+    /**
      * The signature block at the end: the signing officer's name on a line of its own next to the designation line,
      * after "Sd/-", in brackets, or before a designation on one line ("..., State Tax Officer") -> "PERSON n"; the
      * designation, the office line, place and date stay.

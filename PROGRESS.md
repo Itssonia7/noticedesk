@@ -1250,7 +1250,57 @@ remainders and the name survived, and the self-check reported only one "caps-phr
   a throwaway probe on `51355ae`).
 - Not done: the live run on the RFD-08 notice after this fix (no key here); the anonymiser stays regex-based.
 
+## (b32) Anonymiser: a name wrapped over three cell lines is one party; the self-check never counts a placeholder's tail (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b31): 11 GSTINs and 11 names
+hidden, exact round trip, two small things left, both in the Para 2(c) vendor table (one row per line, the GSTIN cell
+wrapped to the next line). One commit, two tests (synthetic rows, invented names, allow-listed GSTINs; no live call).
+
+- **A name wrapped over THREE cell lines** (masked: "9 99AAAAA9 SUPPLIER 10 76259 ... These invoices do not\n0010A1ZA
+  AND SUPPLIER 9 AAAAA match in furtherance\nLIMITED of"): the row holds the first two words, the line of the GSTIN
+  remainder holds "AND WORD WORD" before the reason text, and the legal suffix "LIMITED" starts the line after that.
+  The continuation was split into two placeholders and one capital word survived. `findRowNames` now reads, after a
+  paired remainder at a line start, EVERY token up to the first lower-case word as the continuation (capital words,
+  connectors, 1 to 2 digit tokens and legal-form words; the four-token cap `ROW_CONTINUATION_MAX_WORDS` is gone; a
+  trailing form word such as "SUPPLIER" is still the reason text unless a legal-form word ends the run), and when the
+  line after that starts with legal-form / trade words or "INDIA" followed by lower-case text ("LIMITED of the refund
+  claim", "PRIVATE LIMITED of ...") those words are the end of the name too (`NAME_TAIL_WORDS`). The row name plus its
+  continuation is ONE party: the row piece "SUPPLIER n" (the row's number), the identifying words on the remainder
+  line "SUPPLIER n CONTD" (never crossing to the line after), only the legal suffix / trade word kept
+  ("SUPPLIER 2 AND 76259 ...\n003A1Z3 SUPPLIER 2 CONTD match ...\nLIMITED of"); the whole name is mapped under the
+  row's placeholder, so a prose "Marlin Quartz and Pebble Vantage Limited" becomes "Supplier 2 Limited". A row's name
+  is read by its position (between the GSTIN token and the first amount), so a form word inside it no longer unmakes
+  it (`readsAsRowName`: at least one identifying word of three or more letters, no placeholder, not a State / city;
+  "COBALT SUPPLY AND SERVICES" -> "SUPPLIER 4 SERVICES"). Proved by `aNameWrappedOverThreeCellLinesIsOneParty` (the
+  exact three-line shape with the connector on the row and with it after the remainder, a five-token continuation
+  with a digit inside and "PRIVATE" / "LIMITED" split over two lines, the form-word-inside row, the same vendor in a
+  second row, the prose spellings, no second placeholder, residual 0, `upperCaseBusinessPhrases` empty, exact round
+  trip, second pass unchanged). Before the fix the five-token continuation lost its digit, "PRIVATE" was taken into
+  the placeholder and the form-word row survived whole.
+- **Self-check false positives** (`residualRisks`): "caps-word-in-row" was reported for the tail kept after a
+  placeholder and "caps-phrase-2-words" for a wrapped continuation / "PRIVATE LIMITED" on a line of its own. Now (1) a
+  legal-form word, trade word, "INDIA", connector or "CONTD" that directly follows a "SUPPLIER n" / "NOTICEE COMPANY"
+  placeholder, or another such word, is never residual, in a table row (`PLACEHOLDER_TAIL_WORDS`, the row scan tracks
+  the placeholder's tail: "SUPPLIER 9 LTD", "SUPPLIER 9 INDIA LIMITED", "SUPPLIER 9 TRADERS AND CO", "NOTICEE COMPANY
+  INDIA PRIVATE LIMITED") and in prose (an upper-case run of nothing but such words right after a placeholder,
+  `isPlaceholderTail`); (2) an upper-case run of nothing but legal-form words and connectors is not a business phrase
+  (`readsAsBusinessPhrase`: "PRIVATE LIMITED" on the line after "M/s NOTICEE COMPANY"), which also stops the To-block
+  rule from taking such a line for a second taxpayer name; form phrases and designations ("SHOW CAUSE NOTICE", "DY.
+  COMMISSIONER OF STATE TAX", "STATE TAX OFFICER", "(PROPER OFFICER)") were never counted (stop words) and are now
+  asserted. A genuinely surviving capital word still counts, after a placeholder too ("SUPPLIER 1 ORBIT 12345",
+  "SUPPLIER 1 LTD ORBIT", "SUPPLIER 1 ORBIT LIMITED" in prose, a continuation that survived whole). Proved by
+  `residualRisksNeverCountFormWordsOrTheTailOfAPlaceholder`.
+- Known limit (unchanged from (b30)): a wrapped name without a trade word shares its bare placeholder between the row
+  piece and the whole name, so a model's lone "SUPPLIER 2" restores the row piece ("MARLIN QUARTZ"), and a prose
+  mention of the whole name in CAPITALS restores to the row piece as well (the title-case spelling restores exactly).
+- Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shapes
+  above; the anonymiser stays regex-based.
+
 ## (c) Verification
+
+- Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b32), the Spring context test included (no Postgres in the
+  container).
 
 - Offline unit suite (`mvn test`): **615 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 28-10-2026 after (b31), the Spring context test included (no Postgres in the

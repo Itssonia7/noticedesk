@@ -170,24 +170,65 @@ public final class NoticeAnonymiser {
         List<int[]> phraseSpans = new ArrayList<>();
         for (int[] run : capsRuns(t)) {
             String core = businessPhraseCore(t.substring(run[0], run[1]));
-            if (core == null) continue;
+            if (core == null || isPlaceholderTail(t, run[0], run[1])) continue;
             phraseSpans.add(run);
             note(counts, shapes, Residual.SHAPE_CAPS_PHRASE + "-" + core.trim().split("\\s+").length + "-words");
         }
         // a capital word on its own between a table row's GSTIN token and the row's first amount: a one-word vendor
-        // name left behind (a word of a counted phrase, a placeholder, a form / legal-form / trade word never counts)
+        // name left behind (a word of a counted phrase, a placeholder, a form / legal-form / trade word never counts,
+        // nor the legal form, trade word, "INDIA" or connector that follows a placeholder or another such word)
         Matcher row = ROW_START.matcher(t);
         while (row.find()) {
             int lineEnd = t.indexOf('\n', row.end());
             if (lineEnd < 0) lineEnd = t.length();
-            for (int[] tok : tokensOf(t, row.end(), lineEnd)) {
+            List<int[]> toks = tokensOf(t, row.end(), lineEnd);
+            boolean tail = false;
+            for (int i = 0; i < toks.size(); i++) {
+                int[] tok = toks.get(i);
                 String w = t.substring(tok[0], tok[1]);
                 if (ROW_AMOUNT.matcher(w).matches() || !isRowNameToken(w)) break;
+                int placeholderEnd = placeholderTokensAt(t, toks, i);
+                if (placeholderEnd > i) {
+                    i = placeholderEnd - 1;
+                    tail = true;
+                    continue;
+                }
+                String u = w.toUpperCase(Locale.ROOT).replaceAll("[.,;:]+$", "");
+                if (tail && (PLACEHOLDER_TAIL_WORDS.contains(u) || ROW_SMALL_NUMBER.matcher(u).matches())) continue;
+                tail = false;
                 if (overlapsAny(phraseSpans, tok[0], tok[1]) || !isLoneCapitalWord(w)) continue;
                 note(counts, shapes, Residual.SHAPE_CAPS_WORD_IN_ROW);
             }
         }
         return new Residual(counts, shapes);
+    }
+
+    /**
+     * The index after the name placeholder that starts at token {@code i} ("SUPPLIER 9", "NOTICEE COMPANY",
+     * "NOTICEE COMPANY 2"), or {@code i} when none starts there.
+     */
+    private static int placeholderTokensAt(String t, List<int[]> toks, int i) {
+        String w = t.substring(toks.get(i)[0], toks.get(i)[1]);
+        if (w.equals(PARTY_PLACEHOLDER) && i + 1 < toks.size() && t.substring(toks.get(i + 1)[0], toks.get(i + 1)[1]).matches("\\d{1,3}")) return i + 2;
+        if (w.equals("NOTICEE") && i + 1 < toks.size() && t.substring(toks.get(i + 1)[0], toks.get(i + 1)[1]).equals("COMPANY")) {
+            int next = i + 2;
+            if (next < toks.size() && t.substring(toks.get(next)[0], toks.get(next)[1]).matches("\\d{1,3}")) next++;
+            return next;
+        }
+        return i;
+    }
+
+    /**
+     * True when the upper-case run [start, end) is the tail of a name placeholder on its line: it directly follows
+     * "SUPPLIER n" / "NOTICEE COMPANY" and holds nothing but legal-form, trade, "INDIA" and connector words
+     * ("SUPPLIER 9 INDIA LIMITED", "SUPPLIER 2 TRADERS AND CO").
+     */
+    private static boolean isPlaceholderTail(String t, int start, int end) {
+        for (String w : t.substring(start, end).trim().split("\\s+")) {
+            if (!PLACEHOLDER_TAIL_WORDS.contains(w.toUpperCase(Locale.ROOT).replaceAll("[.,;:]+$", ""))) return false;
+        }
+        int lineStart = t.lastIndexOf('\n', start - 1) + 1;
+        return PLACEHOLDER_BEFORE.matcher(t.substring(lineStart, start)).find();
     }
 
     /** True for a capital word of four or more letters that is not a form, connector, legal-form or trade word (a placeholder's words are such words). */
@@ -368,12 +409,23 @@ public final class NoticeAnonymiser {
     /** An amount in a table row: three or more digits, or digits with commas / a decimal point ("1,00,000", "12345.50"). */
     private static final Pattern ROW_AMOUNT = Pattern.compile("\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d+)?|\\d{3,}(?:\\.\\d+)?|\\d+\\.\\d+");
     private static final int ROW_NAME_MAX_WORDS = 6;
-    /** Tokens right after a paired GSTIN remainder at the next line's start: the rest of a name that wrapped ("AND DIAMONDS 1 INDIA"). */
-    private static final int ROW_CONTINUATION_MAX_WORDS = 4;
     /** Legal-form words on their own ("PRIVATE", "LIMITED", "LLP"): never a one-word vendor name in the self-check. */
     private static final Set<String> LEGAL_FORM_WORDS = Set.of("PRIVATE", "PUBLIC", "LIMITED", "LTD", "PVT", "LLP", "OPC", "HUF",
             "PROPRIETORSHIP", "PROPRIETOR", "PROP", "PARTNERSHIP", "FIRM", "INC", "CORPORATION", "CORPN", "CORP", "COMPANY", "CO",
             "SONS", "BROS", "BROTHERS", "CONCERN");
+    /**
+     * The words a wrapped name's last cell line may hold on its own ("LIMITED of ...", "PRIVATE LIMITED"): the legal
+     * form, the generic trade words a placeholder keeps, "INDIA". Such a line start, followed by lower-case text,
+     * belongs to the name that wrapped over the two lines before it.
+     */
+    private static final Set<String> NAME_TAIL_WORDS;
+    /**
+     * Words that may stand after a "SUPPLIER n" / "NOTICEE COMPANY" placeholder, or after one another, without being
+     * a name: the legal form, a trade word, "INDIA", a connector, "CONTD". Never residual in the self-check.
+     */
+    private static final Set<String> PLACEHOLDER_TAIL_WORDS;
+    /** The text right before an upper-case run that makes it the tail of a placeholder: "SUPPLIER 9 " or "NOTICEE COMPANY 2 ". */
+    private static final Pattern PLACEHOLDER_BEFORE = Pattern.compile("(?:SUPPLIER \\d{1,3}|NOTICEE COMPANY(?: \\d{1,3})?)[ \\t]+$");
     /** The placeholder of the wrapped part of a name: "SUPPLIER 3 CONTD" (the first part is "SUPPLIER 3"). */
     private static final String CONTINUATION_SUFFIX = "CONTD";
     /** Where a business name ends. */
@@ -403,6 +455,16 @@ public final class NoticeAnonymiser {
             "modern", "new", "standard", "united", "royal", "super", "star", "shree", "shri", "sri", "om", "jai", "the",
             "central", "state", "city", "metro", "bharat", "hindustan", "prime", "classic", "golden", "silver", "best",
             "quality", "perfect", "supreme", "apex", "alpha", "omega", "delta", "sigma");
+
+    static {
+        Set<String> tail = new java.util.HashSet<>(LEGAL_FORM_WORDS);
+        for (String w : TRADE_WORDS) tail.add(w.toUpperCase(Locale.ROOT));
+        tail.add("INDIA");
+        NAME_TAIL_WORDS = Set.copyOf(tail);
+        tail.addAll(CONNECTOR_WORDS);
+        tail.add(CONTINUATION_SUFFIX);
+        PLACEHOLDER_TAIL_WORDS = Set.copyOf(tail);
+    }
 
     private static final Pattern HONORIFIC = Pattern.compile(
             "(?i)\\b(?:Shri|Smt|Sri|Shrimati|Kumari|Mr|Mrs|Ms|Miss|Dr)\\.?\\s+"
@@ -1091,7 +1153,8 @@ public final class NoticeAnonymiser {
             replaceCore(core, base.get(core), kind, 4);
         }
         // a name that wrapped in a table row: the part on the row -> "SUPPLIER n", the identifying words of the part
-        // after the GSTIN remainder -> "SUPPLIER n CONTD" (connectors, the trade word and the legal form stay)
+        // after the GSTIN remainder -> "SUPPLIER n CONTD" (connectors, the trade word and the legal form stay; the
+        // legal form at the start of the line after is never replaced); one party, one number
         for (WrappedName w : wrappedNames) {
             String ph = base.get(w.core());
             if (ph == null) continue;
@@ -1100,8 +1163,8 @@ public final class NoticeAnonymiser {
             add(w.start(), w.end(), bare, AnonymisationMap.KIND_PARTY_NAME, 3);
             String[] coreWords = w.core().split(" ");
             int from = w.phraseWords();
-            int to = Math.min(coreWords.length, from + w.contTokens().size());
-            while (from < to && CONNECTOR_WORDS.contains(coreWords[from])) from++;
+            int to = Math.min(coreWords.length, from + w.contOnLine());
+            while (from < to && (CONNECTOR_WORDS.contains(coreWords[from]) || ROW_SMALL_NUMBER.matcher(coreWords[from]).matches())) from++;
             while (to > from && TRADE_WORDS.contains(coreWords[to - 1].toLowerCase(Locale.ROOT))) to--;
             if (from < to) {
                 int s = w.contTokens().get(from - w.phraseWords())[0];
@@ -1114,8 +1177,11 @@ public final class NoticeAnonymiser {
 
     // ---------------------------------------------------------------- table rows read as one line
 
-    /** A name that wrapped in a table row: its part on the row [start, end), its part after the GSTIN remainder (tokens). */
-    private record WrappedName(String core, String coreAsWritten, int start, int end, int phraseWords, List<int[]> contTokens) {}
+    /**
+     * A name that wrapped in a table row: its part on the row [start, end), its part after the GSTIN remainder
+     * (tokens; the first {@code contOnLine} of them on the remainder's line, the rest at the start of the line after).
+     */
+    private record WrappedName(String core, String coreAsWritten, int start, int end, int phraseWords, List<int[]> contTokens, int contOnLine) {}
 
     /** The name spans of table rows (the phrase rules leave them alone). */
     private final List<int[]> rowNameSpans = new ArrayList<>();
@@ -1132,10 +1198,15 @@ public final class NoticeAnonymiser {
      * and apostrophe allowed inside, and a token of one or two digits between capital words is part of the name
      * ("ORBIT 3 LTD"); the name runs from the first capital word after the GSTIN to the last capital word before the
      * first amount (trailing connectors and digits stay in the text). When the GSTIN wrapped (its remainder starts a
-     * later line), up to four tokens right after the remainder, before the first lower-case word, are the rest of the
-     * name, a digit token inside included ("AND DIAMONDS 1 INDIA"; a trailing form word such as "SUPPLIER" is not).
-     * The holder of the taxpayer's GSTIN is the taxpayer; every other one is another party. A wrapped name is
-     * replaced piece by piece ({@link WrappedName}); the taxpayer's own wrapped name is left to the core rule.
+     * later line), EVERY token right after the remainder up to the first lower-case word is the rest of the name:
+     * capital words, connectors, digit tokens and legal-form words ("AND DIAMONDS 1 INDIA", "PEBBLE VANTAGE PRIVATE";
+     * a trailing form word such as "SUPPLIER" is the reason text, unless a legal-form word ends the run), and when the
+     * line after that starts with legal-form / trade words followed by lower-case text ("LIMITED of ...") those words
+     * are the end of the name too ({@link #NAME_TAIL_WORDS}). A row's name is read by its position (between the GSTIN
+     * token and the first amount), so a form word inside it ("GRANITE SUPPLY AND SERVICES") does not unmake it
+     * ({@link #readsAsRowName}). The holder of the taxpayer's GSTIN is the taxpayer; every other one is another party.
+     * A wrapped name is replaced piece by piece ({@link WrappedName}): one party, one "SUPPLIER n"; the taxpayer's own
+     * wrapped name is left to the core rule.
      */
     private void findRowNames() {
         Matcher m = ROW_START.matcher(text);
@@ -1157,12 +1228,26 @@ public final class NoticeAnonymiser {
             int nameStart = toks.get(first)[0];
             int nameEnd = toks.get(n - 1)[1];   // the span replaced: trailing connectors and digits stay in the text
             List<int[]> cont = new ArrayList<>();
+            int contOnLine = 0;
             if (hit != null && hit.paired()) {
-                List<int[]> ct = tokens(hit.remEnd(), lineBounds(hit.remEnd())[1]);
+                int[] remLine = lineBounds(hit.remEnd());
+                List<int[]> ct = tokens(hit.remEnd(), remLine[1]);
                 int c = 0;
-                while (c < ct.size() && c < ROW_CONTINUATION_MAX_WORDS && isRowNameToken(token(ct.get(c)))) c++;
-                while (c > 0 && (isRowNameTrailer(token(ct.get(c - 1))) || BUSINESS_STOP_WORDS.contains(token(ct.get(c - 1))))) c--;
+                while (c < ct.size() && isRowNameToken(token(ct.get(c)))) c++;
+                // the run ends with the legal form: all of it is the name; else a trailing form word is the reason text
+                if (!(c > 0 && LEGAL_FORM_WORDS.contains(token(ct.get(c - 1)).replaceAll("[.,]+$", "")))) {
+                    while (c > 0 && (isRowNameTrailer(token(ct.get(c - 1))) || BUSINESS_STOP_WORDS.contains(token(ct.get(c - 1))))) c--;
+                }
                 cont.addAll(ct.subList(0, c));
+                contOnLine = c;
+                // "LIMITED of the refund claim" at the start of the line after: the end of the name
+                if (c > 0 && remLine[1] < text.length()) {
+                    int[] nextLine = lineBounds(remLine[1] + 1);
+                    List<int[]> nt = tokens(nextLine[0], nextLine[1]);
+                    int k = 0;
+                    while (k < nt.size() && NAME_TAIL_WORDS.contains(token(nt.get(k)).replaceAll("[.,]+$", ""))) k++;
+                    if (k > 0 && (k == nt.size() || Character.isLowerCase(token(nt.get(k)).charAt(0)))) cont.addAll(nt.subList(0, k));
+                }
             }
             // a name that did not wrap is what stands between the first and the last capital word; a wrapped one
             // keeps its trailing connector so that the pieces join ("NOVA GEMS &" + "ASSOCIATES")
@@ -1171,20 +1256,41 @@ public final class NoticeAnonymiser {
             BusinessName b = split(full.toString());
             if (b == null) continue;
             String core = b.core();
-            boolean oneWord = !core.contains(" ");
-            if (!readsAsBusinessPhrase(core, oneWord || !b.suffix().isEmpty())) continue;
+            if (!readsAsRowName(core)) continue;
             boolean taxpayer = hit != null && hit.joined().equals(taxpayerGstin);
             String upper = core.toUpperCase(Locale.ROOT);
             coreIsTaxpayer.putIfAbsent(upper, taxpayer);
             rowNameAt.putIfAbsent(upper, nameStart);
             rowNameSpans.add(new int[]{nameStart, nameEnd});
             if (!cont.isEmpty()) {
-                rowNameSpans.add(new int[]{cont.get(0)[0], cont.get(cont.size() - 1)[1]});
+                if (contOnLine > 0) rowNameSpans.add(new int[]{cont.get(0)[0], cont.get(contOnLine - 1)[1]});
+                if (cont.size() > contOnLine) rowNameSpans.add(new int[]{cont.get(contOnLine)[0], cont.get(cont.size() - 1)[1]});
                 if (!taxpayer && core.length() > phrase.length()) {
-                    wrappedNames.add(new WrappedName(upper, core, nameStart, nameEnd, rowWords, cont));
+                    wrappedNames.add(new WrappedName(upper, core, nameStart, nameEnd, rowWords, cont, contOnLine));
                 }
             }
         }
+    }
+
+    /**
+     * True when {@code core}, read between a table row's GSTIN token and its first amount, is a name: no placeholder,
+     * not a State / city, and at least one identifying word (three or more letters, not a form, connector, legal-form
+     * or trade word). A form word inside ("GRANITE SUPPLY AND SERVICES") is allowed: the row's position reads the name.
+     */
+    static boolean readsAsRowName(String core) {
+        if (core == null || core.isBlank()) return false;
+        if (PLACEHOLDER_NAME_PREFIX.matcher(core).find() || ALREADY_PLACEHOLDER.matcher(core).matches()) return false;
+        String[] words = core.trim().split("\\s+");
+        if (words.length > NAME_MAX_WORDS) return false;
+        boolean identifying = false;
+        for (String w : words) {
+            String u = w.toUpperCase(Locale.ROOT).replaceAll("[^A-Z]", "");
+            if (u.length() < 3 || BUSINESS_STOP_WORDS.contains(u) || CONNECTOR_WORDS.contains(u) || LEGAL_FORM_WORDS.contains(u)
+                    || TRADE_WORDS.contains(u.toLowerCase(Locale.ROOT))) continue;
+            identifying = true;
+        }
+        if (!identifying) return false;
+        return !STATE_OR_CITY.matcher(core.replaceAll("[^A-Za-z ]", "").trim()).matches();
     }
 
     /** A token of a row's name: a capital word ({@link #ROW_NAME_WORD}) or one to two digits between such words. */
@@ -1476,6 +1582,12 @@ public final class NoticeAnonymiser {
         if (words.length < 2 && !(suffixed && core.replaceAll("[^A-Za-z]", "").length() >= 5)) return false;
         if (words.length < 2 && LEGAL_SUFFIX.matcher(" " + core).find()) return false;   // "COMPANY" alone is a suffix word
         if (words.length < 2 && TRADE_WORDS.contains(core.toLowerCase(Locale.ROOT))) return false;   // "POLYMERS" after "SUPPLIER 5"
+        boolean allForm = true;   // "PRIVATE LIMITED" on a line of its own is a legal form, not a name
+        for (String w : words) {
+            String u = w.toUpperCase(Locale.ROOT).replaceAll("[.,;:]+$", "");
+            if (!LEGAL_FORM_WORDS.contains(u) && !CONNECTOR_WORDS.contains(u)) allForm = false;
+        }
+        if (allForm) return false;
         int letters = 0;
         for (String w : words) {
             String u = w.toUpperCase(Locale.ROOT).replaceAll("[,;:]+$", "");
