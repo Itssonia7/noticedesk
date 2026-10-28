@@ -1296,8 +1296,49 @@ wrapped to the next line). One commit, two tests (synthetic rows, invented names
 - Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shapes
   above; the anonymiser stays regex-based.
 
+## (b33) Anonymiser: a one-word trade name in a table row is the party (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b32): everything hidden except
+ONE vendor whose trade name is a single capital word in the row layout (masked: "9 99AAAAA99 AAAAAA 9999999 999999 9
+9 9 Aaaaa-9 aaaaaaaaa aa": row number, 9-character GSTIN lead, one capital word of six letters, the amounts). The
+self-check reported it correctly ("caps-word-in-row"), so strict mode refused the run. One commit, one test (synthetic
+rows, invented names, allow-listed GSTINs; no live call).
+
+- **Cause** (found with a throwaway probe on `439e6b6`, not the one first assumed): the row rule DID read the word as
+  the holder's name (`readsAsRowName` accepts one identifying word of three or more letters), but `replaceCore`
+  replaces a one-word core on its own only when it has five or more letters and is not in `COMMON_WORDS` ("UNITED",
+  "GOLDEN", "MODERN", "BHARAT", ...); otherwise only together with a legal-form suffix, and the row has none. So a
+  six-letter common word (or any word of three or four letters) survived in the row with "SUPPLIER n" mapped to
+  nothing. A second thing the probe showed: the same word written "M/s Word" in the prose near the header GSTIN was
+  classified as the TAXPAYER by the nearest-GSTIN guess of the "M/s" rule (rule 3), and `putIfAbsent` let that guess
+  win over the row's GSTIN, so the row read "NOTICEE COMPANY 2".
+- **Fix** (`findRowNames`, `replaceCore`): a SINGLE capital word between the row's GSTIN token and the first amount,
+  without a legal suffix on the row (`rowSingleWords`), is the holder's whole name: "SUPPLIER n" with no suffix, and
+  every whole-word occurrence of the word in the text is replaced, case-insensitively ("M/s Orbitex" -> "M/s Supplier
+  1", "Orbitex" -> "Supplier 1", "ORBITEX" -> "SUPPLIER 1"; "unitedly" is not "UNITED"), whatever its length or
+  commonness. A legal-form, connector, form or trade word alone is not a party as before (`readsAsRowName`: "LIMITED"
+  alone stays and gets no placeholder), and a tail word alone ("INDIA") is skipped (`NAME_TAIL_WORDS`), so "GOVERNMENT
+  OF INDIA" is never touched. A one-word name with its suffix on the row ("ORB LTD") keeps the existing rule (name
+  plus suffix: "SUPPLIER 3 LTD", the prose "M/s Orb Ltd" -> "M/s Supplier 3 Ltd"). The row's complete GSTIN (whole or
+  paired) now overrides an "M/s ..." guess from the prose for any row name (`guessedCores`: only rule 3's guesses,
+  never a name read next to the taxpayer's GSTIN, after a "Legal Name" label or in the To block), so the word is the
+  other holder's. `firstOccurrence` (placeholder numbering by first appearance) matches whole words now ("ORB" is not
+  found inside "Orbitex").
+- Proved by `aOneWordRowNameIsAParty` (a one-word name "ORBITEX", a common word "UNITED" and a three-letter word "ZUV"
+  each alone in a row; "M/s Orbitex" near the header GSTIN, "Orbitex" and "United" in title case and "ORBITEX" in
+  capitals in prose; "LIMITED" alone in a row left as it is with no placeholder; "ORB LTD" with the suffix; residual 0;
+  `upperCaseBusinessPhrases` empty; exact round trip; second pass unchanged; the un-anonymised rows report
+  "caps-word-in-row x2" and never the legal-form word; "INDIA" alone in a row leaves "GOVERNMENT OF INDIA" alone).
+  Before the fix the same input left "UNITED" and "ZUV" in their rows (residual 2) and wrote "NOTICEE COMPANY 2" for
+  "ORBITEX".
+- Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shape
+  above; the anonymiser stays regex-based.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **618 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b33), the Spring context test included (no Postgres in the
+  container).
 - Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 28-10-2026 after (b32), the Spring context test included (no Postgres in the
   container).

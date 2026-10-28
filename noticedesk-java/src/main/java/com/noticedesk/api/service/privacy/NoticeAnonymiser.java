@@ -1087,6 +1087,7 @@ public final class NoticeAnonymiser {
             if (nearest != null) taxpayer = nearest.equals(taxpayerGstin);
             else taxpayer = b.start() < NoticeHeaderFacts.HEAD_CHARS && !coreIsTaxpayer.containsValue(true);
             coreIsTaxpayer.put(upper, taxpayer);
+            guessedCores.add(upper);
         }
         // 4. the addressee line after "To,"
         m = TO_LINE.matcher(text);
@@ -1188,6 +1189,14 @@ public final class NoticeAnonymiser {
     private final List<WrappedName> wrappedNames = new ArrayList<>();
     /** Upper-cased core -> where it first stands in a table row (a wrapped name has no contiguous occurrence). */
     private final Map<String, Integer> rowNameAt = new HashMap<>();
+    /**
+     * Upper-cased one-word names read in a table row without a legal suffix ("ORBITEX", "UNITED"): the row's
+     * position makes the word a name, so every whole-word occurrence of it is replaced, whatever its length or
+     * commonness ({@link #replaceCore}).
+     */
+    private final Set<String> rowSingleWords = new java.util.HashSet<>();
+    /** Upper-cased cores of "M/s ..." names whose holder was GUESSED from the nearest GSTIN in the prose (rule 3). */
+    private final Set<String> guessedCores = new java.util.HashSet<>();
     /** {kind, placeholder, value} mapped after the spans (a wrapped name in one piece). */
     private final List<String[]> extraMappings = new ArrayList<>();
 
@@ -1204,7 +1213,13 @@ public final class NoticeAnonymiser {
      * line after that starts with legal-form / trade words followed by lower-case text ("LIMITED of ...") those words
      * are the end of the name too ({@link #NAME_TAIL_WORDS}). A row's name is read by its position (between the GSTIN
      * token and the first amount), so a form word inside it ("GRANITE SUPPLY AND SERVICES") does not unmake it
-     * ({@link #readsAsRowName}). The holder of the taxpayer's GSTIN is the taxpayer; every other one is another party.
+     * ({@link #readsAsRowName}). A SINGLE capital word of three or more letters in that position, without a legal
+     * suffix, is the holder's whole name ("ORBITEX", a common word such as "UNITED" included; never a legal-form,
+     * connector, form, trade or tail word such as "LIMITED" or "INDIA"): it maps to "SUPPLIER n" and every whole-word
+     * occurrence of it in the text is replaced, "M/s Orbitex" in prose included ({@link #rowSingleWords}); a one-word
+     * name with its suffix on the row ("ORB LTD") is the name plus suffix as before. The holder of the taxpayer's
+     * GSTIN is the taxpayer; every other one is another party: the row's complete GSTIN overrides an "M/s ..." guess
+     * from the nearest GSTIN in the prose ({@link #guessedCores}), never a name read from the header or a label.
      * A wrapped name is replaced piece by piece ({@link WrappedName}): one party, one "SUPPLIER n"; the taxpayer's own
      * wrapped name is left to the core rule.
      */
@@ -1259,6 +1274,15 @@ public final class NoticeAnonymiser {
             if (!readsAsRowName(core)) continue;
             boolean taxpayer = hit != null && hit.joined().equals(taxpayerGstin);
             String upper = core.toUpperCase(Locale.ROOT);
+            boolean singleWord = cont.isEmpty() && b.suffix().isEmpty() && !upper.contains(" ");
+            if (singleWord && NAME_TAIL_WORDS.contains(upper)) continue;   // "INDIA" alone is a name's tail, not a name
+            if (singleWord) rowSingleWords.add(upper);
+            // the row's complete GSTIN says whose name this is: an "M/s ..." name guessed as the taxpayer's from the
+            // nearest GSTIN in the prose is this other holder's (a name read next to the taxpayer's GSTIN or after a
+            // "Legal Name" label is never a guess and stays)
+            if (!taxpayer && hit != null && taxpayerGstin != null && hit.joined().length() == 15 && guessedCores.contains(upper)) {
+                coreIsTaxpayer.put(upper, false);
+            }
             coreIsTaxpayer.putIfAbsent(upper, taxpayer);
             rowNameAt.putIfAbsent(upper, nameStart);
             rowNameSpans.add(new int[]{nameStart, nameEnd});
@@ -1333,22 +1357,28 @@ public final class NoticeAnonymiser {
         return ph;
     }
 
-    /** Index of the first occurrence of {@code core} (case-insensitive, any whitespace), or the text length. */
+    /** Index of the first occurrence of {@code core} (case-insensitive, whole words, any whitespace), or the text length. */
     private int firstOccurrence(String core) {
-        StringBuilder re = new StringBuilder("(?i)");
+        StringBuilder re = new StringBuilder("(?i)" + NB);
         String[] words = core.trim().split("\\s+");
         for (int i = 0; i < words.length; i++) {
             if (i > 0) re.append("\\s+");
             re.append(Pattern.quote(words[i]));
         }
+        re.append(NA);
         Matcher m = Pattern.compile(re.toString()).matcher(text);
         return m.find() ? m.start() : text.length();
     }
 
-    /** Adds a span for every occurrence of {@code core} (case-insensitive, whole words; spaces match any whitespace). */
+    /**
+     * Adds a span for every occurrence of {@code core} (case-insensitive, whole words; spaces match any whitespace).
+     * A one-word core is replaced on its own when it has five or more letters and is not a common word, or when a
+     * table row read it as a name ({@link #rowSingleWords}); else only together with its legal-form suffix.
+     */
     private void replaceCore(String core, String placeholder, String kind, int priority) {
         String[] words = core.trim().split("\\s+");
-        boolean bareAllowed = words.length >= 2 || (core.length() >= 5 && !COMMON_WORDS.contains(core.toLowerCase(Locale.ROOT)));
+        boolean bareAllowed = words.length >= 2 || rowSingleWords.contains(core.toUpperCase(Locale.ROOT))
+                || (core.length() >= 5 && !COMMON_WORDS.contains(core.toLowerCase(Locale.ROOT)));
         StringBuilder re = new StringBuilder("(?i)" + NB + "(");
         for (int i = 0; i < words.length; i++) {
             if (i > 0) re.append("\\s+");

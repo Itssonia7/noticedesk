@@ -697,6 +697,92 @@ class NoticeAnonymiserTest {
     }
 
     /**
+     * The vendor that survived a real RFD-08 after (b32): a trade name that is ONE capital word in the row layout
+     * (masked "9 99AAAAA99 AAAAAA 9999999 ..."), with no legal suffix on the row. The single word between the row's
+     * GSTIN token and its first amount is the holder's whole name: "SUPPLIER n" without a suffix, every whole-word
+     * occurrence replaced case-insensitively ("M/s Orbitex" and "Orbitex" in prose), a common word ("UNITED", which
+     * the bare-word rule would otherwise keep until a suffix follows) and a three-letter word included; "M/s Orbitex"
+     * near the header GSTIN is no longer taken for the taxpayer, the row's complete GSTIN decides. A legal-form word
+     * alone ("LIMITED") is not a party and is left as it is; a one-word name with its suffix on the row ("ORB LTD") is
+     * the name plus suffix as before. The self-check reports 0 afterwards; the round trip is exact; a second pass
+     * changes nothing.
+     */
+    @Test
+    void aOneWordRowNameIsAParty() {
+        String text = """
+                GOVERNMENT OF MAHARASHTRA
+                FORM GST RFD-08
+                To,
+                M/s ZETA ALLOYS PRIVATE LIMITED
+                GSTIN: 27ZZZZZ9999Z1Z9
+                2. (a) The supplier M/s Orbitex has not filed GSTR-3B; the invoices of Orbitex and of United are ineligible.
+                   (c) The following inward supplies are ineligible:
+                Sr. GSTIN Trade/Legal Name Invoice value IGST CGST SGST Cess Reason
+                1 24YYYYY88 ORBITEX 1234567 222222 0 0 0 Goods-1 received by
+                88Y1Z8 after cancellation of
+                2 29XXXXX77 UNITED 1234567 222222 0 0 0 Goods-1 received by
+                77X1Z7 after cancellation of
+                3 36UUUUU44 LIMITED 1234567 222222 0 0 0 Goods-1 received by
+                44U1Z4 after cancellation of
+                4 33WWWWW66 ORB LTD 1234567 222222 0 0 0 Goods-1 received by
+                66W1Z6 after cancellation of
+                5 07VVVVV55 ZUV 1234567 222222 0 0 0 Goods-1 received by
+                55V1Z5 after cancellation of
+                TOTAL 6172835
+                3. M/s Orb Ltd has not replied; ZUV has not replied either; the unitedly filed replies of ORBITEX are on record.
+                Dy. Commissioner of State Tax
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        String lower = a.toLowerCase(Locale.ROOT);
+        for (String real : List.of("zeta alloys", "orbitex", "united ", "zuv", "orb ltd", "ZZZZZ", "YYYYY", "XXXXX", "UUUUU", "WWWWW", "VVVVV",
+                "88Y1Z8", "77X1Z7", "44U1Z4", "66W1Z6", "55V1Z5")) {
+            assertFalse(lower.contains(real.toLowerCase(Locale.ROOT)), "survived: " + real + "\n" + a);
+        }
+        assertTrue(a.contains("The supplier M/s Supplier 1 has not filed GSTR-3B; the invoices of Supplier 1 and of Supplier 2 are ineligible."),
+                "the one-word names in prose, title case, \"M/s\" or not: the row's placeholder, no second taxpayer\n" + a);
+        assertTrue(a.contains("\n1 24AAAAA00 SUPPLIER 1 1234567 222222 0 0 0 Goods-1 received by\n02A1Z2 after cancellation of\n"),
+                "a single capital word between the GSTIN token and the first amount is the whole name\n" + a);
+        assertTrue(a.contains("\n2 29AAAAA00 SUPPLIER 2 1234567 222222 0 0 0 Goods-1 received by\n03A1Z3 after cancellation of\n"),
+                "a common word alone in that position is a name too\n" + a);
+        assertTrue(a.contains("\n3 36AAAAA00 LIMITED 1234567 222222 0 0 0 Goods-1 received by\n04A1Z4 after cancellation of\n"),
+                "a legal-form word alone is not a party\n" + a);
+        assertTrue(a.contains("\n4 33AAAAA00 SUPPLIER 3 LTD 1234567 222222 0 0 0 Goods-1 received by\n05A1Z5 after cancellation of\n"),
+                "a one-word name with its suffix: the existing rule, name plus suffix\n" + a);
+        assertTrue(a.contains("\n5 07AAAAA00 SUPPLIER 4 1234567 222222 0 0 0 Goods-1 received by\n06A1Z6 after cancellation of\n"),
+                "a three-letter word alone is a name\n" + a);
+        assertTrue(a.contains("3. M/s Supplier 3 Ltd has not replied; SUPPLIER 4 has not replied either; the unitedly filed replies of SUPPLIER 1 are on record."),
+                "whole words only: \"unitedly\" is not the name; capitals keep the capital placeholder\n" + a);
+        assertFalse(a.contains("NOTICEE COMPANY 2") || a.contains("Noticee Company 2"), "no second taxpayer\n" + a);
+        assertFalse(a.contains("SUPPLIER 5"), "the legal-form word alone got no placeholder\n" + a);
+        assertEquals(text.lines().count(), a.lines().count(), "the line layout is unchanged");
+        assertEquals("ORBITEX", r.map().valueOf("SUPPLIER 1"));
+        assertEquals("Orbitex", r.map().valueOf("Supplier 1"));
+        assertEquals("UNITED", r.map().valueOf("SUPPLIER 2"));
+        assertEquals("ORB", r.map().valueOf("SUPPLIER 3"));
+        assertEquals("ZUV", r.map().valueOf("SUPPLIER 4"));
+        assertEquals(6, r.map().count(AnonymisationMap.KIND_GSTIN), r.map().summaryLine());
+        assertTrue(r.privacyLine().contains("other parties 4") && r.privacyLine().endsWith("residual: 0"), r.privacyLine());
+        assertEquals(0, r.residual().total(), r.residual().line() + "\n" + a);
+        assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases(a), a);
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        NoticeAnonymiser.Result twice = NoticeAnonymiser.anonymise(a);
+        assertEquals(a, twice.text(), "a second pass changes nothing");
+        assertTrue(twice.map().isEmpty(), twice.map().summaryLine());
+        // the same rows un-anonymised: the self-check reports the two one-word names and the three-letter word, never
+        // the legal-form word alone (a word of fewer than four letters is below the self-check's threshold)
+        String rows = """
+                1 24AAAAA0002A1Z2 ORBITEX 1234567 222222 0 0 0 Goods-1 received by
+                2 29AAAAA0003A1Z3 UNITED 1234567 222222 0 0 0 Goods-1 received by
+                3 36AAAAA0004A1Z4 LIMITED 1234567 222222 0 0 0 Goods-1 received by
+                """;
+        assertEquals("residual: 2 (caps-word-in-row x2)", NoticeAnonymiser.residualRisks(rows).line());
+        // a tail word alone in a row is not a name: nothing is replaced anywhere else in the text
+        NoticeAnonymiser.Result india = NoticeAnonymiser.anonymise("GOVERNMENT OF INDIA\n1 24YYYYY8888Y1Z8 INDIA 1234567 0 0 0 Reason\n");
+        assertEquals("GOVERNMENT OF INDIA\n1 24AAAAA0001A1Z1 INDIA 1234567 0 0 0 Reason\n", india.text());
+    }
+
+    /**
      * The self-check never counts a form phrase or the tail of a placeholder: the legal form, a trade word, "INDIA" or
      * a connector that directly follows a "SUPPLIER n" / "NOTICEE COMPANY" placeholder (or another such word) in a
      * table row or in prose, "PRIVATE LIMITED" on a line of its own, "SHOW CAUSE NOTICE" and officer designations. A
