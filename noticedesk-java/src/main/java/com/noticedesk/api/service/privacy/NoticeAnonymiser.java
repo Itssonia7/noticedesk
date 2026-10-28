@@ -26,8 +26,9 @@ import java.util.regex.Pattern;
  * taxpayer's legal / trade name ("NOTICEE COMPANY", the legal-form suffix such as "Private Limited" stays in the text),
  * other parties' names ("SUPPLIER n", a trailing trade word such as "Traders" kept in the placeholder; found after
  * "M/s", after a label or the word "supplier" / "vendor", in the cell next to another GSTIN, as the last upper-case
- * business phrase before a GSTIN, or as an upper-case line of its own near a GSTIN in a table block; form, statute,
- * office and heading words never count as a name), person names after Shri / Smt / Mr / Ms / Proprietor / Director /
+ * business phrase before a GSTIN, as an upper-case line of its own near a GSTIN in a table block, or as the capitals
+ * phrase after the GSTIN of a table row read as one line, wrapped to the next line or not; form, statute, office and
+ * heading words never count as a name, "AND" / "&" / "OF" inside a name never end it), person names after Shri / Smt / Mr / Ms / Proprietor / Director /
  * Partner / Authorised signatory ("PERSON n"), and the street / building part of addresses ("ADDRESS n"; the city and
  * the State are kept for jurisdiction). A GSTIN split over a line break or a hyphen by a PDF text layer is replaced
  * with the break kept; a GSTIN whose leading fragment and remainder stand a table row apart (the text layer reads a
@@ -283,6 +284,7 @@ public final class NoticeAnonymiser {
             "SCRUTINY", "INSPECTION", "SEARCH", "SEIZURE", "DETENTION", "ATTACHMENT", "CANCELLATION", "SUSPENSION", "REVOCATION",
             "COMPOSITION", "EXEMPTION", "EXPORT", "IMPORT", "LUT", "BOND", "ZERO", "RATED", "INVERTED", "DUTY", "STRUCTURE",
             "REJECTION", "SANCTION", "GRANT", "ISSUE", "ISSUANCE", "DISALLOWANCE", "DENIAL", "SUPPLY", "SUPPLIES", "INWARD", "OUTWARD",
+            "GOODS", "PURCHASE", "PURCHASES", "SALE", "SALES", "RAW", "MATERIALS", "CONTD", "CONTD.",
             // offices and designations
             "CENTRAL", "STATE", "GOVERNMENT", "GOVT", "GOVT.", "OFFICE", "DEPARTMENT", "DEPT", "DEPT.", "MINISTRY", "FINANCE",
             "REVENUE", "COMMISSIONER", "COMMISSIONERATE", "DY", "DY.", "DEPUTY", "ASST", "ASST.", "ASSISTANT", "JOINT", "ADDL",
@@ -309,6 +311,21 @@ public final class NoticeAnonymiser {
             "AREA", "ESTATE", "PLOT", "SECTOR", "PHASE", "COMPLEX", "TOWER", "FLOOR", "ROAD", "STREET", "LANE", "NAGAR", "MARG",
             "COLONY", "OPP", "OPP.", "NEAR", "BEHIND", "DIST", "DIST.", "DISTRICT", "TALUKA", "TEHSIL", "PIN", "PINCODE", "POST",
             "VILLAGE", "CITY", "TOWN", "BUILDING", "BLDG", "BLDG.", "HOUSE", "OFFICE.", "WING", "GALA", "SHOP", "UNIT.");
+    /** Words that join the parts of a business name ("GOLD AND DIAMONDS", "GEMS & ASSOCIATES"): never the end of a phrase. */
+    static final Set<String> CONNECTOR_WORDS = Set.of("&", "AND", "OF");
+    /**
+     * A vendor table row as a PDF text layer reads it, on one line: the row number, the GSTIN token (whole, a
+     * placeholder, or the leading fragment of a GSTIN wrapped to the next line), then the name printed in capitals.
+     */
+    private static final Pattern ROW_START = Pattern.compile(
+            "(?m)^[ \\t]*\\d{1,3}[.)]?[ \\t]+(?:M/s\\.?[ \\t]+)?(\\d{2}[A-Z]{5}(?:\\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]|\\d{0,4}))" + NA + "[ \\t]+");
+    /** A word of a name in capitals in a table row: letters with '.', '-', apostrophe (a single letter allowed), or '&'. */
+    private static final Pattern ROW_NAME_WORD = Pattern.compile("[A-Z][A-Z.\\-']*|&");
+    private static final int ROW_NAME_MAX_WORDS = 6;
+    /** Capital words right after a paired GSTIN remainder at the next line's start: the rest of a name that wrapped. */
+    private static final int ROW_CONTINUATION_MAX_WORDS = 3;
+    /** The placeholder of the wrapped part of a name: "SUPPLIER 3 CONTD" (the first part is "SUPPLIER 3"). */
+    private static final String CONTINUATION_SUFFIX = "CONTD";
     /** Where a business name ends. */
     private static final Pattern NAME_END = Pattern.compile(
             "(?i)[\\n\\r(\\[\\],;|:]|\\s[-–]\\s|\\bGSTIN\\b|\\bGST\\s*(?:No|Registration|IN)\\b|\\bPAN\\b|\\bhaving\\b|\\bbearing\\b"
@@ -596,6 +613,10 @@ public final class NoticeAnonymiser {
         splitGstins.forEach((joined, placeholder) -> {
             if (!joined.equals(placeholder)) map.add(AnonymisationMap.KIND_GSTIN, placeholder, joined);
         });
+        // a name that wrapped in a table row is mapped whole too (a model writes it in one piece)
+        for (String[] e : extraMappings) {
+            if (!e[1].equals(e[2])) map.add(e[0], e[1], e[2]);
+        }
         return sb.toString();
     }
 
@@ -985,14 +1006,16 @@ public final class NoticeAnonymiser {
         }
         // 6. names introduced by the word "supplier" / "vendor" (no colon) and by "Trade/Legal Name"
         findWordLabelledNames();
-        // 7. an upper-case business phrase before a GSTIN (whole, split or placeholder) and an upper-case line of its
+        // 7. a table row read as one line: the name in capitals after the row's GSTIN token, wrapped or not
+        findRowNames();
+        // 8. an upper-case business phrase before a GSTIN (whole, split or placeholder) and an upper-case line of its
         //    own near a GSTIN in a table block: the holder of that GSTIN
         findUpperCasePhrasesNearGstins();
         // placeholders numbered in the order the names first appear in the text (the legal name read by the header
         // facts stays "NOTICEE COMPANY" without a number)
         List<String> ordered = new ArrayList<>(coreIsTaxpayer.keySet());
         Map<String, Integer> firstAt = new HashMap<>();
-        for (String core : ordered) firstAt.put(core, firstOccurrence(core));
+        for (String core : ordered) firstAt.put(core, Math.min(firstOccurrence(core), rowNameAt.getOrDefault(core, Integer.MAX_VALUE)));
         ordered.sort(Comparator.comparingInt((String c) -> firstAt.get(c)));
         String legalCore = coreIsTaxpayer.isEmpty() ? null : coreIsTaxpayer.keySet().iterator().next();
         int taxpayerN = 0;
@@ -1017,6 +1040,106 @@ public final class NoticeAnonymiser {
             String kind = coreIsTaxpayer.get(core) ? AnonymisationMap.KIND_TAXPAYER_NAME : AnonymisationMap.KIND_PARTY_NAME;
             replaceCore(core, base.get(core), kind, 4);
         }
+        // a name that wrapped in a table row: the part on the row -> "SUPPLIER n", the identifying words of the part
+        // after the GSTIN remainder -> "SUPPLIER n CONTD" (connectors, the trade word and the legal form stay)
+        for (WrappedName w : wrappedNames) {
+            String ph = base.get(w.core());
+            if (ph == null) continue;
+            Matcher bm = Pattern.compile("^(?:" + PARTY_PLACEHOLDER + " \\d+|" + TAXPAYER_PLACEHOLDER + "(?: \\d+)?)").matcher(ph);
+            String bare = bm.find() ? bm.group() : ph;
+            add(w.start(), w.end(), bare, AnonymisationMap.KIND_PARTY_NAME, 3);
+            String[] coreWords = w.core().split(" ");
+            int from = w.phraseWords();
+            int to = Math.min(coreWords.length, from + w.contTokens().size());
+            while (from < to && CONNECTOR_WORDS.contains(coreWords[from])) from++;
+            while (to > from && TRADE_WORDS.contains(coreWords[to - 1].toLowerCase(Locale.ROOT))) to--;
+            if (from < to) {
+                int s = w.contTokens().get(from - w.phraseWords())[0];
+                int e = w.contTokens().get(to - 1 - w.phraseWords())[1];
+                add(s, e, bare + " " + CONTINUATION_SUFFIX, AnonymisationMap.KIND_PARTY_NAME, 3);
+            }
+            extraMappings.add(new String[]{AnonymisationMap.KIND_PARTY_NAME, ph, w.coreAsWritten()});
+        }
+    }
+
+    // ---------------------------------------------------------------- table rows read as one line
+
+    /** A name that wrapped in a table row: its part on the row [start, end), its part after the GSTIN remainder (tokens). */
+    private record WrappedName(String core, String coreAsWritten, int start, int end, int phraseWords, List<int[]> contTokens) {}
+
+    /** The name spans of table rows (the phrase rules leave them alone). */
+    private final List<int[]> rowNameSpans = new ArrayList<>();
+    private final List<WrappedName> wrappedNames = new ArrayList<>();
+    /** Upper-cased core -> where it first stands in a table row (a wrapped name has no contiguous occurrence). */
+    private final Map<String, Integer> rowNameAt = new HashMap<>();
+    /** {kind, placeholder, value} mapped after the spans (a wrapped name in one piece). */
+    private final List<String[]> extraMappings = new ArrayList<>();
+
+    /**
+     * In a line that starts with a row number and a GSTIN token (whole, placeholder or leading fragment), the capitals
+     * phrase after the GSTIN that ends before the first amount (a token of three or more digits) is the holder's
+     * name: one to six words of capitals, "&", "AND", "OF", '.', '-' and apostrophe allowed inside (trailing
+     * connectors stay in the text). When the GSTIN wrapped (its remainder starts a later line), up to three capital
+     * words right after the remainder, before the first lower-case word, are the rest of the name (a trailing form
+     * word such as "SUPPLIER" is not). The holder of the taxpayer's GSTIN is the taxpayer; every other one is another
+     * party. A wrapped name is replaced piece by piece ({@link WrappedName}); the taxpayer's own wrapped name is left
+     * to the core rule.
+     */
+    private void findRowNames() {
+        Matcher m = ROW_START.matcher(text);
+        while (m.find()) {
+            GstinHit hit = null;
+            for (GstinHit h : gstinHits) if (h.start() == m.start(1)) hit = h;
+            List<int[]> toks = tokens(m.end(), lineBounds(m.end())[1]);
+            int n = 0;
+            while (n < toks.size() && n < ROW_NAME_MAX_WORDS && ROW_NAME_WORD.matcher(token(toks.get(n))).matches()) n++;
+            if (n == 0 || n < toks.size() && token(toks.get(n)).replaceAll("\\D", "").length() < 3) continue;
+            int rowWords = n;   // the whole phrase on the row, a trailing connector included ("NOVA GEMS &")
+            String phrase = text.substring(toks.get(0)[0], toks.get(n - 1)[1]).replaceAll("\\s+", " ");
+            while (n > 0 && CONNECTOR_WORDS.contains(token(toks.get(n - 1)))) n--;
+            if (n == 0) continue;
+            int nameStart = toks.get(0)[0];
+            int nameEnd = toks.get(n - 1)[1];   // the span replaced: trailing connectors stay in the text
+            List<int[]> cont = new ArrayList<>();
+            if (hit != null && hit.paired()) {
+                List<int[]> ct = tokens(hit.remEnd(), lineBounds(hit.remEnd())[1]);
+                int c = 0;
+                while (c < ct.size() && c < ROW_CONTINUATION_MAX_WORDS && ROW_NAME_WORD.matcher(token(ct.get(c))).matches()) c++;
+                while (c > 0 && (CONNECTOR_WORDS.contains(token(ct.get(c - 1))) || BUSINESS_STOP_WORDS.contains(token(ct.get(c - 1))))) c--;
+                cont.addAll(ct.subList(0, c));
+            }
+            StringBuilder full = new StringBuilder(phrase);
+            for (int[] t : cont) full.append(' ').append(token(t));
+            BusinessName b = split(full.toString());
+            if (b == null) continue;
+            String core = b.core();
+            boolean oneWord = !core.contains(" ");
+            if (!readsAsBusinessPhrase(core, oneWord || !b.suffix().isEmpty())) continue;
+            boolean taxpayer = hit != null && hit.joined().equals(taxpayerGstin);
+            String upper = core.toUpperCase(Locale.ROOT);
+            coreIsTaxpayer.putIfAbsent(upper, taxpayer);
+            rowNameAt.putIfAbsent(upper, nameStart);
+            rowNameSpans.add(new int[]{nameStart, nameEnd});
+            if (!cont.isEmpty()) {
+                rowNameSpans.add(new int[]{cont.get(0)[0], cont.get(cont.size() - 1)[1]});
+                if (!taxpayer && core.length() > phrase.length()) {
+                    wrappedNames.add(new WrappedName(upper, core, nameStart, nameEnd, rowWords, cont));
+                }
+            }
+        }
+    }
+
+    /** [start, end) of every whitespace-separated token of the text between {@code from} and {@code to}. */
+    private List<int[]> tokens(int from, int to) {
+        List<int[]> out = new ArrayList<>();
+        Matcher m = Pattern.compile("\\S+").matcher(text);
+        m.region(from, to);
+        while (m.find()) out.add(new int[]{m.start(), m.end()});
+        return out;
+    }
+
+    private String token(int[] span) {
+        return text.substring(span[0], span[1]);
     }
 
     /** "SUPPLIER n", with the core's trailing trade word kept ("SUPPLIER n TRADERS"); one per distinct core. */
@@ -1122,17 +1245,14 @@ public final class NoticeAnonymiser {
             //     GSTIN in between; for the taxpayer's GSTIN only on its line or the line before (the head of a notice
             //     is full of upper-case office lines, and the taxpayer's name is read by the header rules anyway)
             int from = Math.max(0, g.start() - PHRASE_BEFORE_GSTIN_CHARS);
-            int regionStart = Math.max(0, Math.max(text.lastIndexOf('\n', from), from - 120));
-            Matcher m = ALL_CAPS_RUN.matcher(text);
-            m.useTransparentBounds(true);
-            m.region(regionStart, g.start());
             int[] last = null;
             String lastCore = null;
-            while (m.find()) {
-                if (m.end(1) < from) continue;
-                String core = businessPhraseCore(m.group(1));
+            for (int[] run : capsRuns()) {
+                if (run[1] < from || run[1] > g.start()) continue;
+                if (overlapsAny(rowNameSpans, run[0], run[1])) continue;   // a table row's name: read by the row rule
+                String core = businessPhraseCore(text.substring(run[0], run[1]));
                 if (core == null) continue;
-                last = new int[]{m.start(1), m.end(1)};
+                last = run;
                 lastCore = core;
             }
             if (last != null) {
@@ -1153,7 +1273,7 @@ public final class NoticeAnonymiser {
             for (int i = 0; i < PHRASE_LINES_AROUND_GSTIN && at < text.length(); i++) {
                 int[] line = lineBounds(at);
                 if (lineHasAnotherGstin(line, g)) break;
-                String core = upperCaseLineCore(text.substring(line[0], line[1]));
+                String core = overlapsAny(rowNameSpans, line[0], line[1]) ? null : upperCaseLineCore(text.substring(line[0], line[1]));
                 if (core != null) coreIsTaxpayer.putIfAbsent(core.toUpperCase(Locale.ROOT), taxpayer);
                 at = line[1] + 1;
             }
@@ -1161,7 +1281,7 @@ public final class NoticeAnonymiser {
             for (int i = 0; i < PHRASE_LINES_AROUND_GSTIN && at >= 0; i++) {
                 int[] line = lineBounds(at);
                 if (lineHasAnotherGstin(line, g)) break;
-                String core = upperCaseLineCore(text.substring(line[0], line[1]));
+                String core = overlapsAny(rowNameSpans, line[0], line[1]) ? null : upperCaseLineCore(text.substring(line[0], line[1]));
                 if (core != null) coreIsTaxpayer.putIfAbsent(core.toUpperCase(Locale.ROOT), taxpayer);
                 at = line[0] - 1;
             }
@@ -1181,10 +1301,46 @@ public final class NoticeAnonymiser {
     static List<String> upperCaseBusinessPhrases(String text) {
         List<String> out = new ArrayList<>();
         if (text == null) return out;
+        for (int[] run : capsRuns(text)) {
+            String core = businessPhraseCore(text.substring(run[0], run[1]));
+            if (core != null) out.add(core);
+        }
+        return out;
+    }
+
+    private List<int[]> capsRunsCache;
+
+    private List<int[]> capsRuns() {
+        if (capsRunsCache == null) capsRunsCache = capsRuns(text);
+        return capsRunsCache;
+    }
+
+    /**
+     * [start, end) of every upper-case run ({@link #ALL_CAPS_RUN}); a run that starts with a connector word ("AND
+     * DIAMONDS") is joined to the capital words right before it on the same line ("X GOLD", a single letter included),
+     * so a connector never starts a phrase of its own.
+     */
+    static List<int[]> capsRuns(String text) {
+        List<int[]> out = new ArrayList<>();
         Matcher m = ALL_CAPS_RUN.matcher(text);
         while (m.find()) {
-            String core = businessPhraseCore(m.group(1));
-            if (core != null) out.add(core);
+            int start = m.start(1);
+            int end = m.end(1);
+            String first = m.group(1).split("\\s+")[0];
+            if (CONNECTOR_WORDS.contains(first.toUpperCase(Locale.ROOT))) {
+                int s = start;
+                while (true) {
+                    int p = s;
+                    while (p > 0 && (text.charAt(p - 1) == ' ' || text.charAt(p - 1) == '\t')) p--;
+                    if (p == s) break;
+                    int w = p;
+                    while (w > 0 && (Character.isUpperCase(text.charAt(w - 1)) || ".-'".indexOf(text.charAt(w - 1)) >= 0)) w--;
+                    if (w == p || !Character.isUpperCase(text.charAt(w)) || w > 0 && Character.isLetterOrDigit(text.charAt(w - 1))) break;
+                    s = w;
+                }
+                start = s;
+            }
+            out.add(new int[]{start, end});
         }
         return out;
     }
@@ -1207,8 +1363,9 @@ public final class NoticeAnonymiser {
 
     /**
      * The business core of an upper-case run, or null when the run is a heading / form phrase: form, statute, office,
-     * table and address words are cut from both ends; a run with such a word left inside, a State or city name, a
-     * placeholder, or fewer than two words (after the legal-form suffix is set aside) is not a name.
+     * table and address words are cut from both ends; a run with such a word left inside (a connector "AND" / "&" /
+     * "OF" between name words is fine), a State or city name, a placeholder, or fewer than two words (after the
+     * legal-form suffix is set aside) is not a name.
      */
     static String businessPhraseCore(String run) {
         if (run == null || PLACEHOLDER_NAME_PREFIX.matcher(run.trim()).find()) return null;   // "NOTICEE COMPANY PRIVATE LIMITED"
@@ -1217,7 +1374,10 @@ public final class NoticeAnonymiser {
         while (!words.isEmpty() && isStopOrEmpty(words.get(0))) words.remove(0);
         while (!words.isEmpty() && isStopOrEmpty(words.get(words.size() - 1))) words.remove(words.size() - 1);
         if (words.size() < 2 || words.size() > 6) return null;
-        for (String w : words) if (BUSINESS_STOP_WORDS.contains(w.toUpperCase(Locale.ROOT))) return null;
+        for (String w : words) {
+            String u = w.toUpperCase(Locale.ROOT);
+            if (BUSINESS_STOP_WORDS.contains(u) && !CONNECTOR_WORDS.contains(u)) return null;   // "GOLD AND DIAMONDS" is one name
+        }
         String name = String.join(" ", words);
         BusinessName b = split(name);
         if (b == null) return null;
@@ -1247,7 +1407,7 @@ public final class NoticeAnonymiser {
         int letters = 0;
         for (String w : words) {
             String u = w.toUpperCase(Locale.ROOT).replaceAll("[,;:]+$", "");
-            if (BUSINESS_STOP_WORDS.contains(u)) return false;
+            if (BUSINESS_STOP_WORDS.contains(u) && !CONNECTOR_WORDS.contains(u)) return false;
             letters += w.replaceAll("[^A-Za-z]", "").length();
         }
         if (letters < 4) return false;

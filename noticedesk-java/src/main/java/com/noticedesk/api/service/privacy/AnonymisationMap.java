@@ -81,15 +81,23 @@ public final class AnonymisationMap {
         return e != null ? e.value() : null;
     }
 
+    /** "SUPPLIER 3", "SUPPLIER 3 TRADERS", "SUPPLIER 3 CONTD": the pieces of one other party share its number. */
+    private static final java.util.regex.Pattern PARTY_NUMBER = java.util.regex.Pattern.compile("(?i)^supplier \\d+");
+
     /**
      * Distinct real values per kind (case-insensitive), e.g. two spellings of one name count once; a GSTIN or PAN
-     * split over a line break counts once with its joined form.
+     * split over a line break counts once with its joined form; the pieces of an other party's name that wrapped in
+     * a table row count once with the name (the same "SUPPLIER n").
      */
     public Map<String, Integer> counts() {
         Map<String, java.util.Set<String>> distinct = new TreeMap<>();
         for (Entry e : entries) {
             String v = e.value().toLowerCase(Locale.ROOT);
             if (KIND_GSTIN.equals(e.kind()) || KIND_PAN.equals(e.kind())) v = v.replaceAll("[\\s\\-]", "");
+            if (KIND_PARTY_NAME.equals(e.kind())) {
+                java.util.regex.Matcher m = PARTY_NUMBER.matcher(e.placeholder());
+                if (m.find()) v = m.group().toLowerCase(Locale.ROOT);
+            }
             distinct.computeIfAbsent(e.kind(), k -> new java.util.HashSet<>()).add(v);
         }
         Map<String, Integer> out = new TreeMap<>();

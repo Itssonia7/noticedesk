@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 28-10-2026 (b29: anonymiser gaps from a real RFD-08 notice: split GSTINs, vendor names in capitals, the signing officer, and the residual self-check with strict mode)
+Last updated: 28-10-2026 (b30: anonymiser on the RFD-08 vendor table as PDFBox reads it: GSTIN fragments a row apart, vendor names in the row layout, names that wrap, connectors inside a name)
 
 ---
 
@@ -1147,8 +1147,70 @@ invented names, allow-listed GSTINs; no live call).
 - Not done: a live run on the RFD-08 notice after these fixes (no key here); the anonymiser stays regex-based, so the
   residual self-check is the guard: read `<id>_ocr_anon.txt` whenever the Privacy line shows residual > 0.
 
+## (b30) Anonymiser on the RFD-08 vendor table as PDFBox reads it: fragments a row apart, row-layout names (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b29): four GSTIN fragments and
+five vendor names still survived, and the self-check did not count the fragments. The cause is PDFBox's reading order
+for the Para 2(c) vendor table: each table ROW comes out on ONE line, and the GSTIN cell wraps so that its second half
+lands at the START of the next line, about 60 characters away (far beyond the six-character break the (b29) split rule
+allows). Three row shapes (masked: A capital, a lower case, 9 digit): "9 99AAAAA9 NAME NAME 99999 9 9999 9999 9 Reason
+start\n999A9AA AAAAAAA reason goes on" (the first 8 characters, the last 7 on the next line); "9 99AAAAA99 NAME NAME &
+999999 ...\n99A9AA ASSOCIATES-like ..." (9 + 6, the name's last word after the remainder); "9 99AAAAA NAME NAME 99999
+...\n9999A9AA AND WORD ..." (7 + 8, two more name words after the remainder). A name "X GOLD AND DIAMONDS"-like was half
+replaced ("AND DIAMONDS" survived). Two commits, each with its test (synthetic rows, invented names, allow-listed
+GSTINs; no live call).
+
+- **Step 1, fragments a row apart** (`4ad17df`): `scanFragments` pairs a leading fragment (`LEADING_FRAGMENT`:
+  `\d{2}[A-Z]{5}\d{0,4}`, 7 to 11 characters as a token of its own, outside the whole / split GSTINs already found)
+  with the characters that complete the 15-character GSTIN structure at the START of one of the next 3 lines (after
+  optional whitespace; first line first), such that leading + remainder is a structurally valid GSTIN. The pair is one
+  `GstinHit` (`paired()`: [start, end) on the lead, [remStart, remEnd) on the remainder), so the nearest-GSTIN and
+  phrase rules see it. Both pieces are replaced by the same placeholder split at the same position ("24AAAAA0" /
+  "002A1Z2", kind `gstin_fragment`), the joined value is mapped under `gstin` (counted once: "GSTINs n" counts
+  distinct GSTINs), and the same real GSTIN split differently elsewhere maps to the same placeholder. The leading
+  placeholder is the same for every GSTIN of a State ("24AAAAA00" for two vendors of Gujarat), so `deAnonymise`
+  first restores every fragment pair in the text from its joined value and only then runs the token pass: the round
+  trip is exact. A leading fragment or a line-start remainder (`LONE_REMAINDER`: 6 to 8 characters) that pairs with
+  nothing still carries the PAN letters / digits: replaced by the fragment shape ("24AAAAA1", "002A1Z2", the digits
+  carrying a sequence) under `gstin_fragment`; a placeholder-shaped fragment is left alone (idempotence).
+  `residualRisks` counts an unpaired fragment as `gstin-fragment` and a surviving real pair as `gstin-split`. Proved by
+  `gstinFragmentsARowApartArePairedAndReplaced` (the three row shapes, two GSTINs of one State, the same GSTIN split
+  8 + 7 and 9 + 6, zero fragments survive, exact round trip also of the joined form, second pass unchanged, the
+  unpaired case counted / replaced / restored). `.githooks/allowed_ids.txt` gained the placeholder `24AAAAA0005A1Z5`.
+- **Step 2, vendor names in the row layout** (this commit): `findRowNames` (rule 7 of `findBusinessNames`, before the
+  phrase rules): in a line that starts with a row number and a GSTIN token (`ROW_START`: whole, placeholder or leading
+  fragment), the capitals phrase that FOLLOWS the GSTIN and ends before the first amount (a token of 3+ digits) is the
+  holder's name: 1 to 6 words of capitals, "&", "AND", "OF", '.', '-', apostrophe (`ROW_NAME_WORD`); trailing
+  connectors stay in the text. The holder of the taxpayer's GSTIN is the taxpayer, every other one "SUPPLIER n" plus
+  its trailing trade word, every occurrence of the phrase (a second row, the prose). When the GSTIN wrapped (a paired
+  remainder), 1 to 3 capital words right after the remainder, before the first lower-case word, are the rest of the
+  name (`ROW_CONTINUATION_MAX_WORDS`; a trailing form word such as "SUPPLIER" is not); the full name is one core
+  (numbered where the row stands: `rowNameAt`), the prose occurrence gets the whole placeholder ("SUPPLIER 3
+  ASSOCIATES"), and the wrapped occurrence is replaced piece by piece (`WrappedName`): the part on the row ->
+  "SUPPLIER 3", the identifying words after the remainder -> "SUPPLIER 3 CONTD" (connectors, the trade word and the
+  legal form stay: "SUPPLIER 3 & 234567 ... \n04A1Z4 ASSOCIATES"); the whole name is mapped too (`extraMappings`, a
+  model writes it in one piece), and `AnonymisationMap.counts()` counts the pieces once with the name (the same
+  "SUPPLIER n"). The phrase rules (8) leave a row's name spans alone. Connectors: "AND" / "&" / "OF" inside a capitals
+  phrase never end it (`CONNECTOR_WORDS` are exempt from the inner stop-word test in `businessPhraseCore` and
+  `readsAsBusinessPhrase`: "LUNAR GOLD AND DIAMONDS" is one name), and an upper-case run that starts with a connector
+  is joined to the capital words before it on the same line (`capsRuns`, used by `upperCaseBusinessPhrases` and the
+  phrase-before-GSTIN rule). Stop list extended with GOODS, PURCHASE(S), SALE(S), RAW, MATERIALS ("GOODS AND
+  SERVICES", "PURCHASE OF RAW MATERIALS" are not names) and CONTD. The taxpayer's own wrapped name is left to the core
+  rule (its bare placeholder is the legal name's). Proved by `vendorNamesInTableRowsReadAsOneLineAreReplaced` (the
+  three row shapes, a wrapped two-line name, the same name in prose and in a second row, the connector case, form
+  words in capitals kept, `residualRisks` 0, `upperCaseBusinessPhrases(anonText)` empty, exact round trip, second
+  pass unchanged).
+- Known limit: a wrapped name without a trade word shares its bare placeholder between the row piece and the whole
+  name ("SUPPLIER 4" restores "COSMIC DRIP", "SUPPLIER 4 CONTD" restores "FITTINGS"; a model's "SUPPLIER 4" alone
+  restores the first part). The anonymiser stays regex-based: read `<id>_ocr_anon.txt` whenever the Privacy line shows
+  residual > 0.
+- Not done: the live run on the RFD-08 notice after these fixes (no key here).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **613 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b30), the Spring context test included (no Postgres in the
+  container: its scheduler logs one "Failed to obtain JDBC Connection" line, the test passes). 612 after step 1.
 - Offline unit suite (`mvn test`): **611 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 28-10-2026 after (b29), the Spring context test included (local Postgres 16).
   Per gap: 607 after gap 1, 608 after gap 2, 609 after gap 3, 611 after gap 4.

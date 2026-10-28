@@ -279,7 +279,7 @@ class NoticeAnonymiserTest {
         assertTrue(a.contains("GSTIN: 27AAAAA0001A1Z1"), a);
         assertTrue(a.contains("\n1 24AAAAA0 ") && a.contains("\n002A1Z2 SUPPLIER after cancellation of\n"), "shape 1: 8 + 7\n" + a);
         assertTrue(a.contains("\n2 29AAAAA00 ") && a.contains("\n03A1Z3 ASSOCIATES for the period"), "shape 2: 9 + 6\n" + a);
-        assertTrue(a.contains("\n3 36AAAAA ") && a.contains("\n0004A1Z4 AND FITTINGS as per"), "shape 3: 7 + 8\n" + a);
+        assertTrue(a.contains("\n3 36AAAAA ") && a.contains("\n0004A1Z4 AND "), "shape 3: 7 + 8\n" + a);
         assertTrue(a.contains("\n4 24AAAAA00 ") && a.contains("\n05A1Z5 SUPPLIER in GSTR-1"), "a second GSTIN of the same State\n" + a);
         assertTrue(a.contains("\n5 24AAAAA00 ") && a.contains("\n02A1Z2 SUPPLIER after cancellation\n"), "the same GSTIN split differently: the same placeholder\n" + a);
         assertEquals(text.lines().count(), a.lines().count(), "the line layout is unchanged");
@@ -408,6 +408,87 @@ class NoticeAnonymiserTest {
         assertTrue(r.privacyLine().contains("other parties 5"), r.privacyLine());
         assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
         assertEquals(a, NoticeAnonymiser.anonymise(a).text(), "a second pass changes nothing");
+    }
+
+    /**
+     * Vendor names in the Para 2(c) table as PDFBox reads it (each row one line, the GSTIN wrapped to the next line):
+     * the capitals phrase after the row's GSTIN token up to the first amount is the holder's name, every occurrence
+     * (a name repeated in a second row, the same name in prose); a name that wraps (its last words right after the
+     * GSTIN remainder at the next line's start) is replaced piece by piece ("SUPPLIER 3" / "SUPPLIER 3 CONTD", the
+     * trade word stays); "AND" / "&" / "OF" inside a capitals phrase never end it ("LUNAR GOLD AND DIAMONDS" is one
+     * name); a capitals form word after the remainder ("SUPPLIER") is not a name; the self-check reports 0 and no
+     * capitals phrase of two or more words outside the stop list survives; the round trip is exact.
+     */
+    @Test
+    void vendorNamesInTableRowsReadAsOneLineAreReplaced() {
+        String text = """
+                GOVERNMENT OF MAHARASHTRA
+                OFFICE OF THE DY. COMMISSIONER OF STATE TAX, MUMBAI NODAL DIVISION 3
+                FORM GST RFD-08
+                To,
+                M/s ZETA ALLOYS PRIVATE LIMITED
+                GSTIN: 27ZZZZZ9999Z1Z9
+                1. M/s Zeta Alloys Private Limited (the claimant) has claimed a refund of INPUT TAX CREDIT on inward supplies.
+                2. (a) The supplier of LUNAR GOLD AND DIAMONDS (GSTIN:24CCCCC2222C1Z5) has not filed GSTR-3B.
+                   (c) The following inward supplies are ineligible:
+                Sr. GSTIN Trade/Legal Name Invoice value IGST CGST SGST Cess Reason
+                1 24YYYYY8 ORBIT TRADERS 12345 0 1111 1111 0 Goods received by the
+                888Y1Z8 SUPPLIER after cancellation of
+                its registration
+                certificate.
+                2 29XXXXX77 NOVA GEMS & 234567 0 21111 21111 0 Return not filed by the
+                77X1Z7 ASSOCIATES for the period in question
+                3 36UUUUU COSMIC DRIP 34567 0 3111 3111 0 Supplier is non-existent at
+                4444U1Z4 AND FITTINGS as per field visit
+                4 24CCCCC22 LUNAR GOLD AND DIAMONDS 45678 0 4111 4111 0 Invoice not uploaded by the
+                22C1Z5 SUPPLIER in GSTR-1
+                5 24YYYYY88 ORBIT TRADERS 5678 0 511 511 0 Goods received by the
+                88Y1Z8 SUPPLIER after cancellation
+                TOTAL 102235
+                3. The supplier NOVA GEMS & ASSOCIATES is also non-existent; the purchase of GOODS AND SERVICES is denied.
+                Dy. Commissioner of State Tax
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        String lower = a.toLowerCase(Locale.ROOT);
+        for (String name : List.of("zeta alloys", "orbit", "nova gems", "cosmic", "drip", "fittings", "lunar", "gold and diamonds", "diamonds",
+                "ZZZZZ", "YYYYY", "XXXXX", "UUUUU", "CCCCC", "888Y1Z8", "77X1Z7", "4444U1Z4", "22C1Z5", "88Y1Z8")) {
+            assertFalse(lower.contains(name.toLowerCase(Locale.ROOT)), "survived: " + name + "\n" + a);
+        }
+        assertTrue(a.contains("M/s NOTICEE COMPANY PRIVATE LIMITED\nGSTIN: 27AAAAA0001A1Z1"), a);
+        assertTrue(a.contains("The supplier of SUPPLIER 1 (GSTIN:24AAAAA0002A1Z2) has not filed"), "connectors inside a capitals phrase\n" + a);
+        assertTrue(a.contains("\n1 24AAAAA0 SUPPLIER 2 TRADERS 12345 0 1111 1111 0 Goods received by the\n003A1Z3 SUPPLIER after cancellation of\n"),
+                "row shape 1: the name up to the first amount, the form word after the remainder stays\n" + a);
+        assertTrue(a.contains("\n2 29AAAAA00 SUPPLIER 3 & 234567 0 21111 21111 0 Return not filed by the\n04A1Z4 ASSOCIATES for the period in question\n"),
+                "row shape 2: a name that wraps before its trade word\n" + a);
+        assertTrue(a.contains("\n3 36AAAAA SUPPLIER 4 34567 0 3111 3111 0 Supplier is non-existent at\n0005A1Z5 AND SUPPLIER 4 CONTD as per field visit\n"),
+                "row shape 3: the wrapped words are the rest of the name\n" + a);
+        assertTrue(a.contains("\n4 24AAAAA00 SUPPLIER 1 45678 0 4111 4111 0 Invoice not uploaded by the\n02A1Z2 SUPPLIER in GSTR-1\n"),
+                "the same name as in prose: the same placeholder\n" + a);
+        assertTrue(a.contains("\n5 24AAAAA00 SUPPLIER 2 TRADERS 5678 0 511 511 0 Goods received by the\n03A1Z3 SUPPLIER after cancellation\n"),
+                "a name repeated in a second row\n" + a);
+        assertTrue(a.contains("The supplier SUPPLIER 3 ASSOCIATES is also non-existent; the purchase of GOODS AND SERVICES is denied."),
+                "the wrapped name in one piece in prose; a form phrase with a connector is not a name\n" + a);
+        assertFalse(a.contains("NOTICEE COMPANY 2"), "no vendor is mistaken for the taxpayer\n" + a);
+        for (String kept : List.of("GOVERNMENT OF MAHARASHTRA", "OFFICE OF THE DY. COMMISSIONER OF STATE TAX, MUMBAI NODAL DIVISION 3",
+                "Sr. GSTIN Trade/Legal Name Invoice value IGST CGST SGST Cess Reason", "TOTAL 102235", "Dy. Commissioner of State Tax")) {
+            assertTrue(a.contains(kept), "lost: " + kept + "\n" + a);
+        }
+        assertEquals(text.lines().count(), a.lines().count(), "the line layout is unchanged");
+        assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases(a), a);
+        assertEquals(0, r.residual().total(), r.residual().line() + "\n" + a);
+        assertTrue(r.privacyLine().contains("other parties 4") && r.privacyLine().endsWith("residual: 0"), r.privacyLine());
+        // exact round trip, the wrapped name in one piece too
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        assertEquals("reply on NOVA GEMS & ASSOCIATES, LUNAR GOLD AND DIAMONDS and COSMIC DRIP AND FITTINGS",
+                NoticeAnonymiser.deAnonymise("reply on SUPPLIER 3 ASSOCIATES, SUPPLIER 1 and SUPPLIER 4 AND SUPPLIER 4 CONTD", r.map()));
+        assertEquals("NOVA GEMS", r.map().valueOf("SUPPLIER 3"));
+        assertEquals("FITTINGS", r.map().valueOf("SUPPLIER 4 CONTD"));
+        assertEquals(a, NoticeAnonymiser.anonymise(a).text(), "a second pass changes nothing");
+        // "AND" / "&" / "OF" inside a capitals phrase: one name (a single letter in front carries nothing and is set aside)
+        assertEquals(List.of("LUNAR GOLD AND DIAMONDS", "NOVA GEMS & ASSOCIATES", "GOLD AND DIAMONDS"),
+                NoticeAnonymiser.upperCaseBusinessPhrases("supplier LUNAR GOLD AND DIAMONDS, NOVA GEMS & ASSOCIATES and X GOLD AND DIAMONDS"));
+        assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases("GOODS AND SERVICES TAX, OFFICE OF THE COMMISSIONER, REFUND OF INPUT TAX CREDIT"));
     }
 
     /**
