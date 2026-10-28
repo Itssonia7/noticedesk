@@ -176,17 +176,18 @@ public final class NoticeAnonymiser {
         }
         // a capital word on its own between a table row's GSTIN token and the row's first amount: a one-word vendor
         // name left behind (a word of a counted phrase, a placeholder, a form / legal-form / trade word never counts,
-        // nor the legal form, trade word, "INDIA" or connector that follows a placeholder or another such word)
+        // nor the legal form, trade word, "INDIA" or connector that follows a placeholder or another such word); the
+        // name ends where the amount block starts, whatever the digit count of the first amount ("ORBITEX 68 10 0")
         Matcher row = ROW_START.matcher(t);
         while (row.find()) {
             int lineEnd = t.indexOf('\n', row.end());
             if (lineEnd < 0) lineEnd = t.length();
             List<int[]> toks = tokensOf(t, row.end(), lineEnd);
+            int nameEnd = rowNameTokenCount(t, toks, Integer.MAX_VALUE);
             boolean tail = false;
-            for (int i = 0; i < toks.size(); i++) {
+            for (int i = 0; i < nameEnd; i++) {
                 int[] tok = toks.get(i);
                 String w = t.substring(tok[0], tok[1]);
-                if (ROW_AMOUNT.matcher(w).matches() || !isRowNameToken(w)) break;
                 int placeholderEnd = placeholderTokensAt(t, toks, i);
                 if (placeholderEnd > i) {
                     i = placeholderEnd - 1;
@@ -404,10 +405,16 @@ public final class NoticeAnonymiser {
             "(?m)^[ \\t]*\\d{1,3}[.)]?[ \\t]+(?:M/s\\.?[ \\t]+)?(\\d{2}[A-Z]{5}(?:\\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]|\\d{0,4}))" + NA + "[ \\t]+");
     /** A word of a name in capitals in a table row: letters with '.', '-', apostrophe (a single letter allowed), or '&'. */
     private static final Pattern ROW_NAME_WORD = Pattern.compile("[A-Z][A-Z.\\-']*|&");
-    /** A token of one or two digits between the capital words of a row's name ("ORBIT 3 LTD"): part of the name, never an amount. */
+    /**
+     * A token of one or two digits inside a row's name ("ORBIT 3 LTD"): part of the name only when a capital word
+     * follows it ({@link #rowNameTokenCount}); followed by another number it is the first amount of the row.
+     */
     private static final Pattern ROW_SMALL_NUMBER = Pattern.compile("\\d{1,2}");
-    /** An amount in a table row: three or more digits, or digits with commas / a decimal point ("1,00,000", "12345.50"). */
-    private static final Pattern ROW_AMOUNT = Pattern.compile("\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d+)?|\\d{3,}(?:\\.\\d+)?|\\d+\\.\\d+");
+    /**
+     * An amount in a table row: a numeric token of any length, digits with optional commas / a decimal point ("68",
+     * "0", "12345", "1,00,000.50"). Where the name ends and the amounts begin is decided by {@link #rowNameTokenCount}.
+     */
+    private static final Pattern ROW_AMOUNT = Pattern.compile("\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?");
     private static final int ROW_NAME_MAX_WORDS = 6;
     /** Legal-form words on their own ("PRIVATE", "LIMITED", "LLP"): never a one-word vendor name in the self-check. */
     private static final Set<String> LEGAL_FORM_WORDS = Set.of("PRIVATE", "PUBLIC", "LIMITED", "LTD", "PVT", "LLP", "OPC", "HUF",
@@ -1202,11 +1209,13 @@ public final class NoticeAnonymiser {
 
     /**
      * In a line that starts with a row number and a GSTIN token (whole, placeholder or leading fragment), the capitals
-     * phrase after the GSTIN that ends before the first amount ({@link #ROW_AMOUNT}: three or more digits, or digits
-     * with commas / a decimal point) is the holder's name: one to six tokens of capitals, "&", "AND", "OF", '.', '-'
-     * and apostrophe allowed inside, and a token of one or two digits between capital words is part of the name
-     * ("ORBIT 3 LTD"); the name runs from the first capital word after the GSTIN to the last capital word before the
-     * first amount (trailing connectors and digits stay in the text). When the GSTIN wrapped (its remainder starts a
+     * phrase after the GSTIN that ends before the first amount ({@link #ROW_AMOUNT}: a numeric token of any length,
+     * commas / a decimal point allowed) is the holder's name: one to six tokens of capitals, "&", "AND", "OF", '.',
+     * '-' and apostrophe allowed inside, and a token of one or two digits is part of the name only when a capital word
+     * follows it ("ORBIT 3 LTD"); followed by another number it is the first amount, whatever its digit count
+     * ("ORBITEX 68 10 0 0 0": the name is "ORBITEX"; {@link #rowNameTokenCount}). The name runs from the first
+     * capital word after the GSTIN to the last capital word before the first amount (trailing connectors stay in the
+     * text). When the GSTIN wrapped (its remainder starts a
      * later line), EVERY token right after the remainder up to the first lower-case word is the rest of the name:
      * capital words, connectors, digit tokens and legal-form words ("AND DIAMONDS 1 INDIA", "PEBBLE VANTAGE PRIVATE";
      * a trailing form word such as "SUPPLIER" is the reason text, unless a legal-form word ends the run), and when the
@@ -1229,8 +1238,7 @@ public final class NoticeAnonymiser {
             GstinHit hit = null;
             for (GstinHit h : gstinHits) if (h.start() == m.start(1)) hit = h;
             List<int[]> toks = tokens(m.end(), lineBounds(m.end())[1]);
-            int n = 0;
-            while (n < toks.size() && n < ROW_NAME_MAX_WORDS && isRowNameToken(token(toks.get(n)))) n++;
+            int n = rowNameTokenCount(text, toks, ROW_NAME_MAX_WORDS);
             // the name must be followed by an amount (or fill the line)
             if (n == 0 || n < toks.size() && !ROW_AMOUNT.matcher(token(toks.get(n))).matches()) continue;
             int first = 0;
@@ -1320,6 +1328,30 @@ public final class NoticeAnonymiser {
     /** A token of a row's name: a capital word ({@link #ROW_NAME_WORD}) or one to two digits between such words. */
     private static boolean isRowNameToken(String token) {
         return ROW_NAME_WORD.matcher(token).matches() || ROW_SMALL_NUMBER.matcher(token).matches();
+    }
+
+    /**
+     * The number of leading tokens of {@code toks} (spans in {@code t}, at most {@code max}) that make up a row's
+     * name: the longest prefix that ends with a capital word. A capital word ({@link #ROW_NAME_WORD}: a legal-form
+     * word, a connector and "&" included) is always part of it; a token of one or two digits only when the next token
+     * is a capital word ("ALPHA 3 LTD"). A digit token followed by another number, or ending the line, starts the
+     * amount block whatever its digit count ("ORBITEX 68 10 0 0 0" -> 1; "ALPHA 3 LTD 1234567" -> 3), and a token of
+     * three or more digits, a number with commas / a decimal point or a lower-case word ends the name as before.
+     */
+    private static int rowNameTokenCount(String t, List<int[]> toks, int max) {
+        int n = 0;
+        while (n < toks.size() && n < max) {
+            String w = t.substring(toks.get(n)[0], toks.get(n)[1]);
+            if (ROW_NAME_WORD.matcher(w).matches()) {
+                n++;
+            } else if (ROW_SMALL_NUMBER.matcher(w).matches() && n + 1 < toks.size()
+                    && ROW_NAME_WORD.matcher(t.substring(toks.get(n + 1)[0], toks.get(n + 1)[1])).matches()) {
+                n++;
+            } else {
+                break;
+            }
+        }
+        return n;
     }
 
     /** A connector or a small number at the end of a row's name: not part of it (stays in the text). */

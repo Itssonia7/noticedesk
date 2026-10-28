@@ -1334,6 +1334,39 @@ rows, invented names, allow-listed GSTINs; no live call).
 - Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shape
   above; the anonymiser stays regex-based.
 
+## (b34) Anonymiser: a row's name ends where the amount block starts, whatever the digit count (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b33): everything hidden except
+ONE vendor row whose amounts are tiny (masked: "9 99AAAAA9 AAAAAA 99 99 9 9 9 Aaaaa aaaaaaaa aa aaa": row number,
+8-character GSTIN lead, a one-word trade name of six letters, invoice value and IGST of two digits each, then "0 0 0",
+the reason text). The self-check reported it correctly ("caps-word-in-row" 1), so strict mode refused the run. One
+commit, one test (synthetic rows, invented names, allow-listed GSTINs; no live call).
+
+- **Cause**: the (b31) rule "a token of one or two digits between capital words is part of the name; an amount is
+  three or more digits" made the name run into "99 99 9 9 9" (every amount of the row is one or two digits), so no
+  amount followed the name, the row rule did not fire and the word survived. A side effect, as in (b33): the same word
+  written "M/s Word" near the header GSTIN was taken for a second taxpayer by the nearest-GSTIN guess, because the row
+  never overrode it.
+- **Fix** (`rowNameTokenCount`, shared by `findRowNames` and `residualRisks`): a row's name is the longest prefix of
+  the tokens after the GSTIN token that ends with a capital word (a legal-form word, a connector and "&" included). A
+  token of one or two digits is part of the name ONLY when the next token is a capital word ("VORTEX 3 LTD"); when
+  the next token is numeric (digits, with or without commas / a decimal point) or the line ends there, the amount
+  block has started, whatever the digit count ("QUILLON 68 10 0 0 0" -> the name is "QUILLON", the amounts stay;
+  "TALON 3 12 0 0 0" -> "TALON", "3" is the first amount). `ROW_AMOUNT` is now a numeric token of any length (the
+  "must be followed by an amount" check accepts "68"). Trailing connectors stay in the text as before; a trailing
+  digit can no longer enter the name. Every other (b31)–(b33) behaviour is unchanged: the digit inside "ORBIT 3 LTD",
+  the wrapped continuations, the one-word names, the placeholder tails in the self-check.
+- Proved by `aRowNameEndsWhereTheAmountBlockStartsWhateverTheDigitCount` (the exact row shape with the invented
+  one-word name "QUILLON" and amounts "68 10 0 0 0"; "VORTEX 3 LTD" before a seven-digit amount still keeps its
+  digit; the two-word name "KESTREL HOLLOW" before "45 8 0 0 0"; "TALON 3 12 0 0 0"; the prose spellings
+  "M/s Quillon", "Vortex 3 Ltd", "Kestrel Hollow" take the row's placeholders; residual 0; `upperCaseBusinessPhrases`
+  empty; exact round trip; second pass unchanged; the self-check reports the un-anonymised one-word and two-word
+  names before two-digit amounts and 0 for a placeholder, with or without its suffix, before them). Before the fix the
+  same input wrote "NOTICEE COMPANY 2" for "M/s Quillon" and left "TALON" in its row (checked by running the new test
+  against `733153f`).
+- Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shape
+  above; the anonymiser stays regex-based.
+
 ## (c) Verification
 
 - Offline unit suite (`mvn test`): **618 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run

@@ -783,6 +783,79 @@ class NoticeAnonymiserTest {
     }
 
     /**
+     * The vendor that survived a real RFD-08 after (b33): a one-word trade name in the row layout whose amounts are
+     * tiny (masked "9 99AAAAA9 AAAAAA 99 99 9 9 9 Aaaaa ..."): invoice value and IGST of two digits each, then "0 0 0".
+     * The (b31) rule took every token of one or two digits for part of the name, so the name ran into the amounts, no
+     * amount followed it, the row rule did not fire and the word survived (the self-check reported it correctly). Now
+     * a small number is part of the name only when a capital word follows it ("VORTEX 3 LTD"); followed by another
+     * number it is the first amount, whatever its digit count. A one-word name, a two-word name and a name with a
+     * digit inside each get their placeholder before two-digit amounts; "VORTEX 3 LTD" before a seven-digit amount
+     * still keeps its digit; the self-check reports 0; the round trip is exact; a second pass changes nothing.
+     */
+    @Test
+    void aRowNameEndsWhereTheAmountBlockStartsWhateverTheDigitCount() {
+        String text = """
+                GOVERNMENT OF MAHARASHTRA
+                FORM GST RFD-08
+                To,
+                M/s ZETA ALLOYS PRIVATE LIMITED
+                GSTIN: 27ZZZZZ9999Z1Z9
+                2. (a) The supplier M/s Quillon has not filed GSTR-3B; Vortex 3 Ltd and Kestrel Hollow have not replied.
+                   (c) The following inward supplies are ineligible:
+                Sr. GSTIN Trade/Legal Name Invoice value IGST CGST SGST Cess Reason
+                1 24YYYYY8 QUILLON 68 10 0 0 0 Goods received by
+                888Y1Z8 after cancellation of
+                2 29XXXXX7 VORTEX 3 LTD 1234567 222222 0 0 0 Goods received by
+                777X1Z7 after cancellation of
+                3 36UUUUU4 KESTREL HOLLOW 45 8 0 0 0 Goods received by
+                444U1Z4 after cancellation of
+                4 33WWWWW6 TALON 3 12 0 0 0 Goods received by
+                666W1Z6 after cancellation of
+                TOTAL 1234680
+                Dy. Commissioner of State Tax
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        String lower = a.toLowerCase(Locale.ROOT);
+        for (String real : List.of("zeta alloys", "quillon", "vortex", "kestrel", "hollow", "talon", "ZZZZZ", "YYYYY", "XXXXX", "UUUUU", "WWWWW",
+                "888Y1Z8", "777X1Z7", "444U1Z4", "666W1Z6")) {
+            assertFalse(lower.contains(real.toLowerCase(Locale.ROOT)), "survived: " + real + "\n" + a);
+        }
+        assertTrue(a.contains("\n1 24AAAAA0 SUPPLIER 1 68 10 0 0 0 Goods received by\n002A1Z2 after cancellation of\n"),
+                "a one-word name before two-digit amounts: the amounts stay, the name is the party\n" + a);
+        assertTrue(a.contains("\n2 29AAAAA0 SUPPLIER 2 LTD 1234567 222222 0 0 0 Goods received by\n003A1Z3 after cancellation of\n"),
+                "a small number followed by a capital word is still inside the name\n" + a);
+        assertTrue(a.contains("\n3 36AAAAA0 SUPPLIER 3 45 8 0 0 0 Goods received by\n004A1Z4 after cancellation of\n"),
+                "a two-word name before two-digit amounts\n" + a);
+        assertTrue(a.contains("\n4 33AAAAA0 SUPPLIER 4 3 12 0 0 0 Goods received by\n005A1Z5 after cancellation of\n"),
+                "a small number followed by another number is the first amount, whatever its digit count\n" + a);
+        assertTrue(a.contains("The supplier M/s Supplier 1 has not filed GSTR-3B; Supplier 2 Ltd and Supplier 3 have not replied."),
+                "the prose spellings take the row's placeholder\n" + a);
+        assertEquals(text.lines().count(), a.lines().count(), "the line layout is unchanged");
+        assertEquals("QUILLON", r.map().valueOf("SUPPLIER 1"));
+        assertEquals("VORTEX 3", r.map().valueOf("SUPPLIER 2"));
+        assertEquals("KESTREL HOLLOW", r.map().valueOf("SUPPLIER 3"));
+        assertEquals("TALON", r.map().valueOf("SUPPLIER 4"));
+        assertEquals(5, r.map().count(AnonymisationMap.KIND_GSTIN), r.map().summaryLine());
+        assertTrue(r.privacyLine().contains("other parties 4") && r.privacyLine().endsWith("residual: 0"), r.privacyLine());
+        assertEquals(0, r.residual().total(), r.residual().line() + "\n" + a);
+        assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases(a), a);
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        NoticeAnonymiser.Result twice = NoticeAnonymiser.anonymise(a);
+        assertEquals(a, twice.text(), "a second pass changes nothing");
+        assertTrue(twice.map().isEmpty(), twice.map().summaryLine());
+        // the self-check draws the same boundary: a surviving name before two-digit amounts is reported, a
+        // placeholder (with or without its suffix) before them is not
+        assertEquals("residual: 1 (caps-word-in-row)", NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 QUILLON 68 10 0 0 0 Goods received by").line());
+        assertEquals("residual: 1 (caps-phrase-2-words)", NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 KESTREL HOLLOW 45 8 0 0 0 Goods received by").line());
+        for (String clean : List.of("1 24AAAAA0002A1Z2 SUPPLIER 1 68 10 0 0 0 Goods received by",
+                "1 24AAAAA0002A1Z2 SUPPLIER 2 LTD 68 10 0 0 0 Goods received by",
+                "1 24AAAAA0002A1Z2 SUPPLIER 4 3 12 0 0 0 Goods received by")) {
+            assertEquals("residual: 0", NoticeAnonymiser.residualRisks(clean).line(), clean);
+        }
+    }
+
+    /**
      * The self-check never counts a form phrase or the tail of a placeholder: the legal form, a trade word, "INDIA" or
      * a connector that directly follows a "SUPPLIER n" / "NOTICEE COMPANY" placeholder (or another such word) in a
      * table row or in prose, "PRIVATE LIMITED" on a line of its own, "SHOW CAUSE NOTICE" and officer designations. A
