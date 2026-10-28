@@ -41,8 +41,9 @@ import java.util.regex.Pattern;
  *
  * <p>{@link #deAnonymise} restores every real value (longest placeholder first, case-insensitive, so a model that
  * re-cases "Noticee Company" is still restored). Anonymising an already anonymised text changes nothing.
- * {@link #residualRisks} is the self-check on the anonymised text: what still looks like a GSTIN, PAN, e-mail, phone
- * or an upper-case business name, by shape only (never a value), so a run can refuse to send a text that is not clean.
+ * {@link #residualRisks} is the self-check on the anonymised text: what still looks like a GSTIN (whole, split, a
+ * leading fragment or a remainder), PAN, e-mail, phone, an upper-case business name or a capital word on its own in a
+ * table row, by shape only (never a value), so a run can refuse to send a text that is not clean.
  */
 public final class NoticeAnonymiser {
 
@@ -60,18 +61,23 @@ public final class NoticeAnonymiser {
 
     /**
      * The self-check after anonymisation: value-shaped tokens still in the anonymised text that are not placeholders,
-     * by shape only (a GSTIN, a split GSTIN, a PAN, an e-mail, a 10-digit phone, an upper-case business phrase of n
-     * words). Never a value: the shapes are safe to log; {@link #total()} is the count.
+     * by shape only (a GSTIN, a split GSTIN, a leading GSTIN fragment, a GSTIN remainder, a PAN, an e-mail, a 10-digit
+     * phone, an upper-case business phrase of n words, a capital word on its own in a table row). Never a value: the
+     * shapes are safe to log; {@link #total()} is the count.
      */
     public record Residual(Map<String, Integer> countsByShape, List<String> shapes) {
         public static final String SHAPE_GSTIN = "gstin";
         public static final String SHAPE_SPLIT_GSTIN = "gstin-split";
-        /** A leading GSTIN fragment (state code, PAN letters, digits) or a remainder at a line start that pairs with nothing. */
-        public static final String SHAPE_GSTIN_FRAGMENT = "gstin-fragment";
+        /** A leading GSTIN fragment (state code, the five PAN letters, up to four digits) with real letters, paired with a remainder or not. */
+        public static final String SHAPE_GSTIN_LEAD = "gstin-lead";
+        /** A GSTIN remainder at a line start (digits, PAN letter, entity, Z, check) with real characters, paired with a lead or not. */
+        public static final String SHAPE_GSTIN_REMAINDER = "gstin-remainder";
         public static final String SHAPE_PAN = "pan";
         public static final String SHAPE_EMAIL = "email";
         public static final String SHAPE_PHONE = "phone-10-digits";
         public static final String SHAPE_CAPS_PHRASE = "caps-phrase";
+        /** A capital word of four or more letters on its own between a table row's GSTIN token and its first amount: a one-word vendor name left behind. */
+        public static final String SHAPE_CAPS_WORD_IN_ROW = "caps-word-in-row";
 
         public int total() {
             return shapes.size();
@@ -96,8 +102,11 @@ public final class NoticeAnonymiser {
      * Counts what still looks like a value in {@code anonText}: GSTIN-shaped tokens (whole or split over a break) that
      * are not GSTIN placeholders, PAN-shaped tokens outside a GSTIN that are not PAN placeholders, e-mail addresses
      * other than {@code personN@example.com}, 10-digit mobile numbers other than {@code 9000000NNN} (an amount after
-     * "Rs" is not one), and upper-case business phrases outside the stop list (two to six words, a legal-form suffix
-     * set aside). A placeholder's own shape never counts, so a clean anonymised text gives 0.
+     * "Rs" is not one), upper-case business phrases outside the stop list (two to six words, a legal-form suffix
+     * set aside), a leading GSTIN fragment or a line-start remainder with real characters (paired a row apart or
+     * not: each piece counts on its own), and a capital word of four or more letters standing on its own between a
+     * table row's GSTIN token and its first amount (a one-word vendor name; form, legal-form, trade and connector
+     * words never count). A placeholder's own shape never counts, so a clean anonymised text gives 0.
      */
     public static Residual residualRisks(String anonText) {
         Map<String, Integer> counts = new java.util.TreeMap<>();
@@ -122,18 +131,22 @@ public final class NoticeAnonymiser {
             gstinSpans.add(new int[]{s, e});
             if (!ALREADY_PLACEHOLDER.matcher(joined).matches()) note(counts, shapes, Residual.SHAPE_SPLIT_GSTIN);
         }
-        // a GSTIN whose leading fragment and remainder stand a table row apart; a fragment that pairs with nothing
+        // a GSTIN whose leading fragment and remainder stand a table row apart, and a fragment that pairs with
+        // nothing: each piece with real characters counts on its own (a lead left next to a placeholder remainder too)
         FragmentScan scan = scanFragments(t, gstinSpans);
+        List<int[]> leads = new ArrayList<>(scan.unpairedLeads());
+        List<int[]> remainders = new ArrayList<>(scan.unpairedRemainders());
         for (FragmentPair p : scan.pairs()) {
             gstinSpans.add(new int[]{p.leadStart(), p.leadEnd()});
             gstinSpans.add(new int[]{p.remStart(), p.remEnd()});
-            if (!ALREADY_PLACEHOLDER.matcher(p.joined()).matches()) note(counts, shapes, Residual.SHAPE_SPLIT_GSTIN);
+            leads.add(new int[]{p.leadStart(), p.leadEnd()});
+            remainders.add(new int[]{p.remStart(), p.remEnd()});
         }
-        for (int[] f : scan.unpairedLeads()) {
-            if (!FRAGMENT_LEAD_PLACEHOLDER.matcher(t.substring(f[0], f[1])).matches()) note(counts, shapes, Residual.SHAPE_GSTIN_FRAGMENT);
+        for (int[] f : leads) {
+            if (!FRAGMENT_LEAD_PLACEHOLDER.matcher(t.substring(f[0], f[1])).matches()) note(counts, shapes, Residual.SHAPE_GSTIN_LEAD);
         }
-        for (int[] f : scan.unpairedRemainders()) {
-            if (!FRAGMENT_REMAINDER_PLACEHOLDER.matcher(t.substring(f[0], f[1])).matches()) note(counts, shapes, Residual.SHAPE_GSTIN_FRAGMENT);
+        for (int[] f : remainders) {
+            if (!FRAGMENT_REMAINDER_PLACEHOLDER.matcher(t.substring(f[0], f[1])).matches()) note(counts, shapes, Residual.SHAPE_GSTIN_REMAINDER);
         }
         m = PAN.matcher(t);
         while (m.find()) {
@@ -154,10 +167,35 @@ public final class NoticeAnonymiser {
             if (t.substring(from, m.start(1)).toLowerCase(Locale.ROOT).matches(".*(?:rs\\.?|inr|₹|rupees)\\s*$")) continue;
             note(counts, shapes, Residual.SHAPE_PHONE);
         }
-        for (String core : upperCaseBusinessPhrases(t)) {
+        List<int[]> phraseSpans = new ArrayList<>();
+        for (int[] run : capsRuns(t)) {
+            String core = businessPhraseCore(t.substring(run[0], run[1]));
+            if (core == null) continue;
+            phraseSpans.add(run);
             note(counts, shapes, Residual.SHAPE_CAPS_PHRASE + "-" + core.trim().split("\\s+").length + "-words");
         }
+        // a capital word on its own between a table row's GSTIN token and the row's first amount: a one-word vendor
+        // name left behind (a word of a counted phrase, a placeholder, a form / legal-form / trade word never counts)
+        Matcher row = ROW_START.matcher(t);
+        while (row.find()) {
+            int lineEnd = t.indexOf('\n', row.end());
+            if (lineEnd < 0) lineEnd = t.length();
+            for (int[] tok : tokensOf(t, row.end(), lineEnd)) {
+                String w = t.substring(tok[0], tok[1]);
+                if (ROW_AMOUNT.matcher(w).matches() || !isRowNameToken(w)) break;
+                if (overlapsAny(phraseSpans, tok[0], tok[1]) || !isLoneCapitalWord(w)) continue;
+                note(counts, shapes, Residual.SHAPE_CAPS_WORD_IN_ROW);
+            }
+        }
         return new Residual(counts, shapes);
+    }
+
+    /** True for a capital word of four or more letters that is not a form, connector, legal-form or trade word (a placeholder's words are such words). */
+    private static boolean isLoneCapitalWord(String token) {
+        String u = token.toUpperCase(Locale.ROOT).replaceAll("[.,;:]+$", "");
+        if (u.replaceAll("[^A-Z]", "").length() < 4) return false;
+        if (BUSINESS_STOP_WORDS.contains(u) || CONNECTOR_WORDS.contains(u) || LEGAL_FORM_WORDS.contains(u)) return false;
+        return !TRADE_WORDS.contains(u.toLowerCase(Locale.ROOT));
     }
 
     private static void note(Map<String, Integer> counts, List<String> shapes, String shape) {
@@ -175,10 +213,14 @@ public final class NoticeAnonymiser {
     /** A name that starts with one of this anonymiser's name placeholders is never treated as a real name. */
     private static final Pattern PLACEHOLDER_NAME_PREFIX = Pattern.compile(
             "(?i)^(?:NOTICEE COMPANY|SUPPLIER \\d+|PERSON \\d+|ADDRESS \\d+)(?![A-Za-z0-9])");
-    /** A value that is already a placeholder of this anonymiser is left as it is (idempotence). */
+    /**
+     * A value that is already a placeholder of this anonymiser is left as it is (idempotence). The PAN / GSTIN
+     * placeholder letters are exactly "AAAAA": a real PAN, or the GSTIN holding it, whose four digits happen to start
+     * with 0 is a value, never a placeholder.
+     */
     private static final Pattern ALREADY_PLACEHOLDER = Pattern.compile(
             "(?i)^(?:NOTICEE COMPANY(?: \\d+)?|SUPPLIER \\d+(?: [A-Z]+)?|PERSON \\d+|ADDRESS \\d+|person\\d+@example\\.com"
-            + "|[A-Z]{5}0\\d{3}[A-Z]|\\d{2}[A-Z]{5}0\\d{3}[A-Z][0-9A-Z]Z[0-9A-Z]|AAAA0\\d{4}A|U00000AA0000AAA\\d{6}"
+            + "|AAAAA0\\d{3}A|\\d{2}AAAAA0\\d{3}A[0-9A-Z]Z[0-9A-Z]|AAAA0\\d{4}A|U00000AA0000AAA\\d{6}"
             + "|AAAA0\\d{6}|90000\\d|9000000\\d{3}|9000 0000 \\d{4}|0{2,}\\d{1,4})$");
 
     // ---------------------------------------------------------------- identifier patterns
@@ -321,9 +363,17 @@ public final class NoticeAnonymiser {
             "(?m)^[ \\t]*\\d{1,3}[.)]?[ \\t]+(?:M/s\\.?[ \\t]+)?(\\d{2}[A-Z]{5}(?:\\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]|\\d{0,4}))" + NA + "[ \\t]+");
     /** A word of a name in capitals in a table row: letters with '.', '-', apostrophe (a single letter allowed), or '&'. */
     private static final Pattern ROW_NAME_WORD = Pattern.compile("[A-Z][A-Z.\\-']*|&");
+    /** A token of one or two digits between the capital words of a row's name ("ORBIT 3 LTD"): part of the name, never an amount. */
+    private static final Pattern ROW_SMALL_NUMBER = Pattern.compile("\\d{1,2}");
+    /** An amount in a table row: three or more digits, or digits with commas / a decimal point ("1,00,000", "12345.50"). */
+    private static final Pattern ROW_AMOUNT = Pattern.compile("\\d{1,3}(?:,\\d{2,3})+(?:\\.\\d+)?|\\d{3,}(?:\\.\\d+)?|\\d+\\.\\d+");
     private static final int ROW_NAME_MAX_WORDS = 6;
-    /** Capital words right after a paired GSTIN remainder at the next line's start: the rest of a name that wrapped. */
-    private static final int ROW_CONTINUATION_MAX_WORDS = 3;
+    /** Tokens right after a paired GSTIN remainder at the next line's start: the rest of a name that wrapped ("AND DIAMONDS 1 INDIA"). */
+    private static final int ROW_CONTINUATION_MAX_WORDS = 4;
+    /** Legal-form words on their own ("PRIVATE", "LIMITED", "LLP"): never a one-word vendor name in the self-check. */
+    private static final Set<String> LEGAL_FORM_WORDS = Set.of("PRIVATE", "PUBLIC", "LIMITED", "LTD", "PVT", "LLP", "OPC", "HUF",
+            "PROPRIETORSHIP", "PROPRIETOR", "PROP", "PARTNERSHIP", "FIRM", "INC", "CORPORATION", "CORPN", "CORP", "COMPANY", "CO",
+            "SONS", "BROS", "BROTHERS", "CONCERN");
     /** The placeholder of the wrapped part of a name: "SUPPLIER 3 CONTD" (the first part is "SUPPLIER 3"). */
     private static final String CONTINUATION_SUFFIX = "CONTD";
     /** Where a business name ends. */
@@ -1077,13 +1127,15 @@ public final class NoticeAnonymiser {
 
     /**
      * In a line that starts with a row number and a GSTIN token (whole, placeholder or leading fragment), the capitals
-     * phrase after the GSTIN that ends before the first amount (a token of three or more digits) is the holder's
-     * name: one to six words of capitals, "&", "AND", "OF", '.', '-' and apostrophe allowed inside (trailing
-     * connectors stay in the text). When the GSTIN wrapped (its remainder starts a later line), up to three capital
-     * words right after the remainder, before the first lower-case word, are the rest of the name (a trailing form
-     * word such as "SUPPLIER" is not). The holder of the taxpayer's GSTIN is the taxpayer; every other one is another
-     * party. A wrapped name is replaced piece by piece ({@link WrappedName}); the taxpayer's own wrapped name is left
-     * to the core rule.
+     * phrase after the GSTIN that ends before the first amount ({@link #ROW_AMOUNT}: three or more digits, or digits
+     * with commas / a decimal point) is the holder's name: one to six tokens of capitals, "&", "AND", "OF", '.', '-'
+     * and apostrophe allowed inside, and a token of one or two digits between capital words is part of the name
+     * ("ORBIT 3 LTD"); the name runs from the first capital word after the GSTIN to the last capital word before the
+     * first amount (trailing connectors and digits stay in the text). When the GSTIN wrapped (its remainder starts a
+     * later line), up to four tokens right after the remainder, before the first lower-case word, are the rest of the
+     * name, a digit token inside included ("AND DIAMONDS 1 INDIA"; a trailing form word such as "SUPPLIER" is not).
+     * The holder of the taxpayer's GSTIN is the taxpayer; every other one is another party. A wrapped name is
+     * replaced piece by piece ({@link WrappedName}); the taxpayer's own wrapped name is left to the core rule.
      */
     private void findRowNames() {
         Matcher m = ROW_START.matcher(text);
@@ -1092,23 +1144,29 @@ public final class NoticeAnonymiser {
             for (GstinHit h : gstinHits) if (h.start() == m.start(1)) hit = h;
             List<int[]> toks = tokens(m.end(), lineBounds(m.end())[1]);
             int n = 0;
-            while (n < toks.size() && n < ROW_NAME_MAX_WORDS && ROW_NAME_WORD.matcher(token(toks.get(n))).matches()) n++;
-            if (n == 0 || n < toks.size() && token(toks.get(n)).replaceAll("\\D", "").length() < 3) continue;
-            int rowWords = n;   // the whole phrase on the row, a trailing connector included ("NOVA GEMS &")
-            String phrase = text.substring(toks.get(0)[0], toks.get(n - 1)[1]).replaceAll("\\s+", " ");
-            while (n > 0 && CONNECTOR_WORDS.contains(token(toks.get(n - 1)))) n--;
-            if (n == 0) continue;
-            int nameStart = toks.get(0)[0];
-            int nameEnd = toks.get(n - 1)[1];   // the span replaced: trailing connectors stay in the text
+            while (n < toks.size() && n < ROW_NAME_MAX_WORDS && isRowNameToken(token(toks.get(n)))) n++;
+            // the name must be followed by an amount (or fill the line)
+            if (n == 0 || n < toks.size() && !ROW_AMOUNT.matcher(token(toks.get(n))).matches()) continue;
+            int first = 0;
+            while (first < n && !ROW_NAME_WORD.matcher(token(toks.get(first))).matches()) first++;
+            if (first == n) continue;
+            int rowWords = n - first;   // the whole phrase on the row, a trailing connector included ("NOVA GEMS &")
+            String phrase = text.substring(toks.get(first)[0], toks.get(n - 1)[1]).replaceAll("\\s+", " ");
+            while (n > first && isRowNameTrailer(token(toks.get(n - 1)))) n--;
+            if (n == first) continue;
+            int nameStart = toks.get(first)[0];
+            int nameEnd = toks.get(n - 1)[1];   // the span replaced: trailing connectors and digits stay in the text
             List<int[]> cont = new ArrayList<>();
             if (hit != null && hit.paired()) {
                 List<int[]> ct = tokens(hit.remEnd(), lineBounds(hit.remEnd())[1]);
                 int c = 0;
-                while (c < ct.size() && c < ROW_CONTINUATION_MAX_WORDS && ROW_NAME_WORD.matcher(token(ct.get(c))).matches()) c++;
-                while (c > 0 && (CONNECTOR_WORDS.contains(token(ct.get(c - 1))) || BUSINESS_STOP_WORDS.contains(token(ct.get(c - 1))))) c--;
+                while (c < ct.size() && c < ROW_CONTINUATION_MAX_WORDS && isRowNameToken(token(ct.get(c)))) c++;
+                while (c > 0 && (isRowNameTrailer(token(ct.get(c - 1))) || BUSINESS_STOP_WORDS.contains(token(ct.get(c - 1))))) c--;
                 cont.addAll(ct.subList(0, c));
             }
-            StringBuilder full = new StringBuilder(phrase);
+            // a name that did not wrap is what stands between the first and the last capital word; a wrapped one
+            // keeps its trailing connector so that the pieces join ("NOVA GEMS &" + "ASSOCIATES")
+            StringBuilder full = new StringBuilder(cont.isEmpty() ? text.substring(nameStart, nameEnd).replaceAll("\\s+", " ") : phrase);
             for (int[] t : cont) full.append(' ').append(token(t));
             BusinessName b = split(full.toString());
             if (b == null) continue;
@@ -1129,8 +1187,22 @@ public final class NoticeAnonymiser {
         }
     }
 
+    /** A token of a row's name: a capital word ({@link #ROW_NAME_WORD}) or one to two digits between such words. */
+    private static boolean isRowNameToken(String token) {
+        return ROW_NAME_WORD.matcher(token).matches() || ROW_SMALL_NUMBER.matcher(token).matches();
+    }
+
+    /** A connector or a small number at the end of a row's name: not part of it (stays in the text). */
+    private static boolean isRowNameTrailer(String token) {
+        return CONNECTOR_WORDS.contains(token) || ROW_SMALL_NUMBER.matcher(token).matches();
+    }
+
     /** [start, end) of every whitespace-separated token of the text between {@code from} and {@code to}. */
     private List<int[]> tokens(int from, int to) {
+        return tokensOf(text, from, to);
+    }
+
+    private static List<int[]> tokensOf(String text, int from, int to) {
         List<int[]> out = new ArrayList<>();
         Matcher m = Pattern.compile("\\S+").matcher(text);
         m.region(from, to);

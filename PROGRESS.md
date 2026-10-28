@@ -3,7 +3,7 @@
 Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
 (`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
 
-Last updated: 28-10-2026 (b30: anonymiser on the RFD-08 vendor table as PDFBox reads it: GSTIN fragments a row apart, vendor names in the row layout, names that wrap, connectors inside a name)
+Last updated: 28-10-2026 (b31: anonymiser: a digit inside a row-layout vendor name, a real GSTIN / PAN with digits starting in 0 mistaken for a placeholder, the fragment self-check per piece, a lone capital word in a row)
 
 ---
 
@@ -1206,8 +1206,55 @@ GSTINs; no live call).
   residual > 0.
 - Not done: the live run on the RFD-08 notice after these fixes (no key here).
 
+## (b31) Anonymiser: a digit inside a row-layout name, a leading-zero GSTIN taken for a placeholder, the self-check per fragment (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b30): everything was hidden
+except one vendor in two consecutive identical table rows (masked: "9 99AAAAA9 AAAAAAAA 9 AAA 99999 9999 9 9 9 Aaaaa
+... \n999A9A9 aaaaa ..."), whose name holds a single-digit token ("ORBIT 3 LTD"-like); both leading fragments, both
+remainders and the name survived, and the self-check reported only one "caps-phrase-2-words". One commit, two tests
+(synthetic rows, invented names, allow-listed GSTINs; no live call). Two causes, one of them not the one first assumed:
+
+- **Row names with a digit inside** (`findRowNames`): the row parser took the "3" of "ORBIT 3 LTD" for the first
+  amount, so the row was skipped and the name survived. Now a token of one or two digits between capital words
+  (`ROW_SMALL_NUMBER`) is part of the name and an amount is a token of three or more digits or digits with commas / a
+  decimal point (`ROW_AMOUNT`: "12345", "1,00,000.50"); the name runs from the first capital word after the GSTIN token
+  to the last capital word before the first amount (trailing connectors and digits stay in the text; a name that did
+  not wrap is built from that span, so a trailing digit never enters the core) and maps to "SUPPLIER n" + suffix as
+  before ("ORBIT 3" -> "SUPPLIER 1", "LTD" stays; the prose "Orbit 3 Ltd" -> "Supplier 1 Ltd"). A wrapped
+  continuation after the remainder takes up to four tokens with a digit inside too (`ROW_CONTINUATION_MAX_WORDS`:
+  "AND FITTINGS 1 INDIA" -> "AND SUPPLIER 2 CONTD", mapped to "FITTINGS 1 INDIA"). Two identical rows map to the same
+  placeholder GSTIN and the same "SUPPLIER n".
+- **A real GSTIN / PAN whose digits start with 0 was "already a placeholder"**: `ALREADY_PLACEHOLDER` accepted any
+  five letters before "0ddd" (`[A-Z]{5}0\d{3}[A-Z]`), so a GSTIN such as "24TTTTT0333T1Z3" (PAN "TTTTT0333T") was
+  returned as its own placeholder, nothing was replaced or mapped, and the self-check took the surviving pair for a
+  placeholder as well. That is why the two leads were neither replaced nor counted (the "unpaired lead" reading was
+  wrong: they paired, then the pair was waved through). The placeholder letters are now exactly "AAAAA" for a PAN
+  (`AAAAA0\d{3}A`) and a GSTIN (`\d{2}AAAAA0\d{3}A[0-9A-Z]Z[0-9A-Z]`), as they already were for TAN / IFSC / CIN.
+  Every leading fragment with real letters is replaced by the placeholder-shaped prefix (state code, "AAAAA", the
+  sequence digits) under `gstin_fragment`, paired or not.
+- **Self-check** (`residualRisks`): a leading fragment with real letters counts as `gstin-lead` and a remainder with
+  real characters as `gstin-remainder`, each piece on its own whether paired a row apart or not (a real lead next to
+  a placeholder remainder is still reported; `gstin-fragment` is gone, `gstin-split` stays for a GSTIN split within
+  six characters). New `caps-word-in-row`: a capital word of four or more letters standing on its own between a table
+  row's GSTIN token (whole, placeholder or fragment) and the row's first amount, so a one-word vendor name left
+  behind is reported; a word of a counted upper-case phrase is not counted twice, and placeholder, form, connector,
+  legal-form (`LEGAL_FORM_WORDS`) and trade words never count.
+- Proved by `rowNamesWithADigitInsideAndGstinsWithALeadingZeroAreReplaced` (the two-row shape with "ORBIT 3 LTD" and
+  GSTIN `24TTTTT0333T1Z3`, added to `.githooks/allowed_ids.txt`; the prose spelling; the wrapped continuation with a
+  digit; a lead that pairs with nothing replaced by "33AAAAA1" and absent from the residual; residual 0; exact round
+  trip, joined and whole-name forms; second pass unchanged; a bare leading-zero GSTIN / PAN replaced) and
+  `residualRisksReportLeadsRemaindersAndLoneCapitalWordsInRows` (the same two rows un-anonymised -> "residual: 6
+  (caps-word-in-row x2, gstin-lead x2, gstin-remainder x2)", the mixed real / placeholder pairs, a lone word after a
+  GSTIN placeholder, an amount with commas and a decimal point, no double count with `caps-phrase-2-words`, clean rows
+  0, no value in the report). Before the fix the same input left both rows untouched with "residual: 0" (checked with
+  a throwaway probe on `51355ae`).
+- Not done: the live run on the RFD-08 notice after this fix (no key here); the anonymiser stays regex-based.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **615 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b31), the Spring context test included (no Postgres in the
+  container).
 - Offline unit suite (`mvn test`): **613 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 28-10-2026 after (b30), the Spring context test included (no Postgres in the
   container: its scheduler logs one "Failed to obtain JDBC Connection" line, the test passes). 612 after step 1.

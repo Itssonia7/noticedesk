@@ -288,7 +288,8 @@ class NoticeAnonymiserTest {
         assertEquals("24CCCCC2222C1Z5", r.map().valueOf("24AAAAA0005A1Z5"));
         // the self-check sees no fragment and no split GSTIN in the anonymised text
         NoticeAnonymiser.Residual residual = r.residual();
-        assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_GSTIN_FRAGMENT), residual.line());
+        assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_GSTIN_LEAD), residual.line());
+        assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_GSTIN_REMAINDER), residual.line());
         assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_SPLIT_GSTIN), residual.line());
         assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_GSTIN), residual.line());
         // exact round trip (rows 4 and 5 share the leading placeholder "24AAAAA00": the pair decides), joined form too
@@ -309,8 +310,9 @@ class NoticeAnonymiserTest {
                 888Y1Z8 is the rest of a GSTIN nobody can pair.
                 """;
         NoticeAnonymiser.Residual before = NoticeAnonymiser.residualRisks(unpaired);
-        assertEquals(2, before.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_GSTIN_FRAGMENT), before.line());
-        assertEquals("residual: 2 (gstin-fragment x2)", before.line());
+        assertEquals(1, before.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_GSTIN_LEAD), before.line());
+        assertEquals(1, before.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_GSTIN_REMAINDER), before.line());
+        assertEquals("residual: 2 (gstin-lead, gstin-remainder)", before.line());
         NoticeAnonymiser.Result u = NoticeAnonymiser.anonymise(unpaired);
         assertFalse(u.text().contains("YYYYY") || u.text().contains("888Y1Z8"), u.text());
         assertTrue(u.text().contains("The supplier 24AAAAA1 has not filed"), u.text());
@@ -489,6 +491,117 @@ class NoticeAnonymiserTest {
         assertEquals(List.of("LUNAR GOLD AND DIAMONDS", "NOVA GEMS & ASSOCIATES", "GOLD AND DIAMONDS"),
                 NoticeAnonymiser.upperCaseBusinessPhrases("supplier LUNAR GOLD AND DIAMONDS, NOVA GEMS & ASSOCIATES and X GOLD AND DIAMONDS"));
         assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases("GOODS AND SERVICES TAX, OFFICE OF THE COMMISSIONER, REFUND OF INPUT TAX CREDIT"));
+    }
+
+    /**
+     * The vendor that survived a real RFD-08 after (b30): two consecutive identical table rows whose name holds a
+     * single-digit token ("ORBIT 3 LTD") and whose GSTIN's PAN digits start with 0. The digit between capital words is
+     * part of the name (an amount has three or more digits), the name maps to "SUPPLIER n" with the legal-form suffix
+     * left in the text, every spelling included; the leading fragment pairs with its remainder on the next line and
+     * both rows get the same placeholder GSTIN and the same "SUPPLIER n"; a real GSTIN / PAN whose digits start with 0
+     * is a value, never "already a placeholder"; a wrapped continuation with a digit inside ("AND FITTINGS 1 INDIA")
+     * is the rest of the name; a leading fragment that pairs with nothing is replaced by the fragment shape and the
+     * self-check reports 0 afterwards; the round trip is exact and a second pass changes nothing.
+     */
+    @Test
+    void rowNamesWithADigitInsideAndGstinsWithALeadingZeroAreReplaced() {
+        String text = """
+                GOVERNMENT OF MAHARASHTRA
+                FORM GST RFD-08
+                To,
+                M/s ZETA ALLOYS PRIVATE LIMITED
+                GSTIN: 27ZZZZZ9999Z1Z9
+                2. (a) The supplier Orbit 3 Ltd has not filed GSTR-3B; the supplier 33WWWWW6 is also under scrutiny.
+                   (c) The following inward supplies are ineligible:
+                Sr. GSTIN Trade/Legal Name Invoice value IGST CGST SGST Cess Reason
+                1 24TTTTT0 ORBIT 3 LTD 12345 1111 0 0 0 Goods received by the
+                333T1Z3 after cancellation of
+                its registration
+                certificate.
+                2 24TTTTT0 ORBIT 3 LTD 12345 1111 0 0 0 Goods received by the
+                333T1Z3 after cancellation of
+                3 36UUUUU COSMIC DRIP 34567 0 3111 3111 0 Supplier is non-existent at
+                4444U1Z4 AND FITTINGS 1 INDIA as per field visit
+                TOTAL 59257
+                Dy. Commissioner of State Tax
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        String lower = a.toLowerCase(Locale.ROOT);
+        for (String real : List.of("zeta alloys", "orbit", "cosmic", "drip", "fittings", "india", "ZZZZZ", "TTTTT", "UUUUU", "WWWWW",
+                "333T1Z3", "4444U1Z4")) {
+            assertFalse(lower.contains(real.toLowerCase(Locale.ROOT)), "survived: " + real + "\n" + a);
+        }
+        assertTrue(a.contains("The supplier Supplier 1 Ltd has not filed GSTR-3B; the supplier 33AAAAA1 is also under scrutiny."),
+                "the prose spelling of the name, and a lead that pairs with nothing replaced by the fragment shape\n" + a);
+        String row = " 24AAAAA0 SUPPLIER 1 LTD 12345 1111 0 0 0 Goods received by the\n002A1Z2 after cancellation of\n";
+        assertTrue(a.contains("\n1" + row), "row 1: the digit is part of the name, the suffix stays, the lead pairs with the next line\n" + a);
+        assertTrue(a.contains("\n2" + row), "row 2: the same GSTIN placeholder and the same SUPPLIER n\n" + a);
+        assertTrue(a.contains("\n3 36AAAAA SUPPLIER 2 34567 0 3111 3111 0 Supplier is non-existent at\n0003A1Z3 AND SUPPLIER 2 CONTD as per field visit\n"),
+                "a wrapped continuation with a digit inside is the rest of the name\n" + a);
+        assertEquals(text.lines().count(), a.lines().count(), "the line layout is unchanged");
+        assertEquals("ORBIT 3", r.map().valueOf("SUPPLIER 1"));
+        assertEquals("Orbit 3", r.map().valueOf("Supplier 1"));
+        assertEquals("FITTINGS 1 INDIA", r.map().valueOf("SUPPLIER 2 CONTD"));
+        assertEquals("24TTTTT0333T1Z3", r.map().valueOf("24AAAAA0002A1Z2"), "the joined GSTIN is mapped");
+        assertEquals("33WWWWW6", r.map().valueOf("33AAAAA1"));
+        assertEquals(3, r.map().count(AnonymisationMap.KIND_GSTIN), r.map().summaryLine());
+        assertEquals(5, r.map().count(AnonymisationMap.KIND_GSTIN_FRAGMENT), "two leads, two remainders, one unpaired lead: " + r.map().summaryLine());
+        assertTrue(r.privacyLine().contains("GSTINs 3") && r.privacyLine().contains("other parties 2") && r.privacyLine().endsWith("residual: 0"), r.privacyLine());
+        assertEquals(0, r.residual().total(), r.residual().line() + "\n" + a);
+        assertEquals(List.of(), NoticeAnonymiser.upperCaseBusinessPhrases(a), a);
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        assertEquals("reply on ORBIT 3 LTD and COSMIC DRIP AND FITTINGS 1 INDIA",
+                NoticeAnonymiser.deAnonymise("reply on SUPPLIER 1 LTD and SUPPLIER 2 AND SUPPLIER 2 CONTD", r.map()));
+        NoticeAnonymiser.Result twice = NoticeAnonymiser.anonymise(a);
+        assertEquals(a, twice.text(), "a second pass changes nothing");
+        assertTrue(twice.map().isEmpty(), twice.map().summaryLine());
+        // the root cause of the surviving lead: a real GSTIN / PAN whose digits start with 0 is not a placeholder
+        NoticeAnonymiser.Result zero = NoticeAnonymiser.anonymise("GSTIN 24TTTTT0333T1Z3, PAN TTTTT0333T, GSTIN 24TTTTT0333T1Z3.");
+        assertEquals("GSTIN 24AAAAA0001A1Z1, PAN AAAAA0001A, GSTIN 24AAAAA0001A1Z1.", zero.text());
+        assertEquals(0, zero.residual().total(), zero.residual().line());
+    }
+
+    /**
+     * The self-check on rows the anonymiser did not clean: a leading fragment with real letters ("gstin-lead"), a
+     * remainder with real characters ("gstin-remainder"), each piece on its own whether paired or not (a lead left
+     * next to a placeholder remainder is still a lead), and a capital word on its own between the row's GSTIN token
+     * and its first amount ("caps-word-in-row": a one-word vendor name left behind); a counted upper-case phrase is
+     * not counted twice, and placeholder, legal-form, trade and form words never count. Never a value in the report.
+     */
+    @Test
+    void residualRisksReportLeadsRemaindersAndLoneCapitalWordsInRows() {
+        String rows = """
+                1 24TTTTT0 ORBIT 3 LTD 12345 1111 0 0 0 Goods received by the
+                333T1Z3 after cancellation of
+                2 24TTTTT0 ORBIT 3 LTD 12345 1111 0 0 0 Goods received by the
+                333T1Z3 after cancellation of
+                """;
+        NoticeAnonymiser.Residual r = NoticeAnonymiser.residualRisks(rows);
+        assertEquals("residual: 6 (caps-word-in-row x2, gstin-lead x2, gstin-remainder x2)", r.line());
+        for (String value : List.of("ORBIT", "TTTTT", "333T1Z3")) {
+            assertFalse(r.line().contains(value) || r.shapes().toString().contains(value), "a value leaked into the report: " + value);
+        }
+        assertEquals("residual: 1 (gstin-lead)",
+                NoticeAnonymiser.residualRisks("1 24TTTTT0 SUPPLIER 1 LTD 12345 1111 0 0 0 Goods received by the\n002A1Z2 after cancellation of\n").line(),
+                "a real lead next to a placeholder remainder");
+        assertEquals("residual: 1 (gstin-remainder)",
+                NoticeAnonymiser.residualRisks("1 24AAAAA0 SUPPLIER 1 LTD 12345 1111 0 0 0 Goods received by the\n333T1Z3 after cancellation of\n").line(),
+                "a real remainder next to a placeholder lead");
+        assertEquals("residual: 0",
+                NoticeAnonymiser.residualRisks("1 24AAAAA0 SUPPLIER 1 LTD 12345 1111 0 0 0 Goods received by the\n002A1Z2 after cancellation of\n").line());
+        assertEquals("residual: 1 (caps-word-in-row)", NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 ORBIT 12345 0 0 0 Reason").line(),
+                "a one-word vendor name after a GSTIN placeholder");
+        assertEquals("residual: 1 (caps-word-in-row)", NoticeAnonymiser.residualRisks("1 24AAAAA0 ORBIT 3 LTD 1,00,000.50 0 Reason").line(),
+                "an amount with commas and a decimal point ends the name; LTD is a legal-form word");
+        assertEquals("residual: 1 (caps-phrase-2-words)", NoticeAnonymiser.residualRisks("1 24AAAAA0002A1Z2 ORBIT TRADERS 12345 0 0 0 Reason").line(),
+                "a phrase counted once, not once more per word");
+        for (String clean : List.of("1 24AAAAA0002A1Z2 SUPPLIER 2 TRADERS 12345 0 0 0 Reason",
+                "1 27AAAAA0001A1Z1 NOTICEE COMPANY PRIVATE LIMITED 12345 0 0 0 Reason",
+                "2 29AAAAA00 SUPPLIER 3 & 234567 0 21111 21111 0 Return not filed by the\n04A1Z4 ASSOCIATES for the period",
+                "3 36AAAAA SUPPLIER 4 34567 0 3111 3111 0 Supplier is non-existent at\n0005A1Z5 AND SUPPLIER 4 CONTD as per field visit")) {
+            assertEquals("residual: 0", NoticeAnonymiser.residualRisks(clean).line(), clean);
+        }
     }
 
     /**
