@@ -47,6 +47,7 @@
 36AAAAA0004A1Z4
 33AAAAA0005A1Z5
 07AAAAA0006A1Z6
+24AAAAA0005A1Z5
 
 # Dev / demo seeds (seed_demo.sql, packages/db/seeds/phase1_demo.sql)
 07AANPK7890F1ZD

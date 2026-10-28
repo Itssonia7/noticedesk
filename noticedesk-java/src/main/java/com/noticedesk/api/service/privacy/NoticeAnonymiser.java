@@ -30,7 +30,9 @@ import java.util.regex.Pattern;
  * office and heading words never count as a name), person names after Shri / Smt / Mr / Ms / Proprietor / Director /
  * Partner / Authorised signatory ("PERSON n"), and the street / building part of addresses ("ADDRESS n"; the city and
  * the State are kept for jurisdiction). A GSTIN split over a line break or a hyphen by a PDF text layer is replaced
- * with the break kept.
+ * with the break kept; a GSTIN whose leading fragment and remainder stand a table row apart (the text layer reads a
+ * row as one line and wraps the GSTIN cell to the start of the next) is replaced piece by piece with the same
+ * placeholder split at the same position, and a fragment that pairs with nothing is replaced by the fragment shape.
  *
  * <p>Kept: amounts, dates, periods, section numbers, form names, officer designations, the department office, tax
  * rates, HSN codes and invoice numbers (an invoice number is touched only where it contains a party name that is
@@ -63,6 +65,8 @@ public final class NoticeAnonymiser {
     public record Residual(Map<String, Integer> countsByShape, List<String> shapes) {
         public static final String SHAPE_GSTIN = "gstin";
         public static final String SHAPE_SPLIT_GSTIN = "gstin-split";
+        /** A leading GSTIN fragment (state code, PAN letters, digits) or a remainder at a line start that pairs with nothing. */
+        public static final String SHAPE_GSTIN_FRAGMENT = "gstin-fragment";
         public static final String SHAPE_PAN = "pan";
         public static final String SHAPE_EMAIL = "email";
         public static final String SHAPE_PHONE = "phone-10-digits";
@@ -116,6 +120,19 @@ public final class NoticeAnonymiser {
             if (gstinSpans.stream().anyMatch(x -> x[0] < e && s < x[1])) continue;
             gstinSpans.add(new int[]{s, e});
             if (!ALREADY_PLACEHOLDER.matcher(joined).matches()) note(counts, shapes, Residual.SHAPE_SPLIT_GSTIN);
+        }
+        // a GSTIN whose leading fragment and remainder stand a table row apart; a fragment that pairs with nothing
+        FragmentScan scan = scanFragments(t, gstinSpans);
+        for (FragmentPair p : scan.pairs()) {
+            gstinSpans.add(new int[]{p.leadStart(), p.leadEnd()});
+            gstinSpans.add(new int[]{p.remStart(), p.remEnd()});
+            if (!ALREADY_PLACEHOLDER.matcher(p.joined()).matches()) note(counts, shapes, Residual.SHAPE_SPLIT_GSTIN);
+        }
+        for (int[] f : scan.unpairedLeads()) {
+            if (!FRAGMENT_LEAD_PLACEHOLDER.matcher(t.substring(f[0], f[1])).matches()) note(counts, shapes, Residual.SHAPE_GSTIN_FRAGMENT);
+        }
+        for (int[] f : scan.unpairedRemainders()) {
+            if (!FRAGMENT_REMAINDER_PLACEHOLDER.matcher(t.substring(f[0], f[1])).matches()) note(counts, shapes, Residual.SHAPE_GSTIN_FRAGMENT);
         }
         m = PAN.matcher(t);
         while (m.find()) {
@@ -180,8 +197,20 @@ public final class NoticeAnonymiser {
             + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK
             + "\\d" + GSTIN_BREAK + "\\d" + GSTIN_BREAK + "\\d" + GSTIN_BREAK + "\\d" + GSTIN_BREAK
             + "[A-Z]" + GSTIN_BREAK + "[0-9A-Z]" + GSTIN_BREAK + "Z" + GSTIN_BREAK + "[0-9A-Z])" + NA);
+    /**
+     * The first 7 to 11 characters of a GSTIN (state code, the five PAN letters, up to four digits) as a token of its
+     * own: a PDF text layer that reads a table row by row puts the rest of the GSTIN at the start of a later line.
+     */
+    private static final Pattern LEADING_FRAGMENT = Pattern.compile(NB + "(\\d{2}[A-Z]{5}\\d{0,4})" + NA);
+    /** The last 6 to 8 characters of a GSTIN at the start of a line (the remainder of a leading fragment). */
+    private static final Pattern LONE_REMAINDER = Pattern.compile("(?m)^[ \\t]*(\\d{2,4}[A-Z][0-9A-Z]Z[0-9A-Z])" + NA);
+    /** The placeholder shapes of an unpaired leading fragment ("27AAAAA1") and remainder ("001A1Z1"). */
+    private static final Pattern FRAGMENT_LEAD_PLACEHOLDER = Pattern.compile("\\d{2}AAAAA\\d{0,4}");
+    private static final Pattern FRAGMENT_REMAINDER_PLACEHOLDER = Pattern.compile("(?:0\\d{0,3})?A[0-9A-Z]Z[0-9A-Z]");
+    /** Lines after a leading fragment in which its remainder is looked for at the line start. */
+    private static final int FRAGMENT_LINES = 3;
     private static final Pattern PAN = Pattern.compile(NB + "([A-Z]{5}\\d{4}[A-Z])" + NA);
-    private static final Pattern TAN = Pattern.compile(NB + "([A-Z]{4}\\d{5}[A-Z])" + NA);
+    private static final Pattern TAN =Pattern.compile(NB + "([A-Z]{4}\\d{5}[A-Z])" + NA);
     private static final Pattern CIN = Pattern.compile(NB + "([LU]\\d{5}[A-Z]{2}\\d{4}[A-Z]{3}\\d{6})" + NA);
     private static final Pattern IFSC = Pattern.compile(NB + "([A-Z]{4}0[A-Z0-9]{6})" + NA);
     private static final Pattern EMAIL = Pattern.compile("(?i)[A-Z0-9._%+\\-]+@[A-Z0-9.\\-]+\\.[A-Z]{2,}");
@@ -373,8 +402,86 @@ public final class NoticeAnonymiser {
     /** Split GSTINs: joined real value -> joined placeholder (the mapping gets the joined pair too). */
     private final LinkedHashMap<String, String> splitGstins = new LinkedHashMap<>();
 
-    /** One GSTIN occurrence: [start, end) in the text, its 15 characters joined (upper case), whether it was split. */
-    record GstinHit(int start, int end, String joined, boolean split) {}
+    /** Leading fragments and remainders that pair with nothing: still identifying, replaced on their own. */
+    private final List<int[]> unpairedLeads = new ArrayList<>();
+    private final List<int[]> unpairedRemainders = new ArrayList<>();
+
+    /**
+     * One GSTIN occurrence: [start, end) in the text, its 15 characters joined (upper case), whether it was split. A
+     * GSTIN whose remainder stands a row apart has [start, end) on its leading fragment and [remStart, remEnd) on the
+     * remainder ({@link #paired()}).
+     */
+    record GstinHit(int start, int end, String joined, boolean split, int remStart, int remEnd) {
+        GstinHit(int start, int end, String joined, boolean split) {
+            this(start, end, joined, split, -1, -1);
+        }
+
+        boolean paired() {
+            return remStart >= 0;
+        }
+    }
+
+    /** A GSTIN broken about a table row apart: its leading fragment, the remainder at a later line start, the joined value. */
+    record FragmentPair(int leadStart, int leadEnd, int remStart, int remEnd, String joined) {}
+
+    /** Every fragment pair of a text and the leading fragments / remainders that pair with nothing ([start, end) each). */
+    record FragmentScan(List<FragmentPair> pairs, List<int[]> unpairedLeads, List<int[]> unpairedRemainders) {}
+
+    /**
+     * Pairs every leading fragment ({@link #LEADING_FRAGMENT}, outside the spans in {@code taken}) with the characters
+     * that complete the GSTIN structure at the start of one of the next {@link #FRAGMENT_LINES} lines (after optional
+     * whitespace), first line first; a leading fragment or a line-start remainder ({@link #LONE_REMAINDER}) left over
+     * is reported unpaired.
+     */
+    static FragmentScan scanFragments(String text, List<int[]> taken) {
+        List<FragmentPair> pairs = new ArrayList<>();
+        List<int[]> leads = new ArrayList<>();
+        List<int[]> remainders = new ArrayList<>();
+        List<int[]> claimed = new ArrayList<>(taken);
+        Matcher m = LEADING_FRAGMENT.matcher(text);
+        while (m.find()) {
+            int ls = m.start(1);
+            int le = m.end(1);
+            if (overlapsAny(claimed, ls, le)) continue;
+            String lead = m.group(1);
+            int digits = 11 - lead.length();
+            Pattern rem = Pattern.compile("^[ \\t]*(" + (digits > 0 ? "\\d{" + digits + "}" : "") + "[A-Z][0-9A-Z]Z[0-9A-Z])" + NA);
+            FragmentPair pair = null;
+            int lineEnd = text.indexOf('\n', le);
+            for (int k = 0; k < FRAGMENT_LINES && lineEnd >= 0 && lineEnd < text.length() && pair == null; k++) {
+                int lineStart = lineEnd + 1;
+                int next = text.indexOf('\n', lineStart);
+                if (next < 0) next = text.length();
+                Matcher r = rem.matcher(text.substring(lineStart, next));
+                if (r.lookingAt()) {
+                    int rs = lineStart + r.start(1);
+                    int re = lineStart + r.end(1);
+                    String joined = lead + r.group(1);
+                    if (!overlapsAny(claimed, rs, re) && GSTIN.matcher(joined).matches()) pair = new FragmentPair(ls, le, rs, re, joined);
+                }
+                lineEnd = next;
+            }
+            claimed.add(new int[]{ls, le});
+            if (pair != null) {
+                pairs.add(pair);
+                claimed.add(new int[]{pair.remStart(), pair.remEnd()});
+            } else {
+                leads.add(new int[]{ls, le});
+            }
+        }
+        m = LONE_REMAINDER.matcher(text);
+        while (m.find()) {
+            if (overlapsAny(claimed, m.start(1), m.end(1))) continue;
+            remainders.add(new int[]{m.start(1), m.end(1)});
+            claimed.add(new int[]{m.start(1), m.end(1)});
+        }
+        return new FragmentScan(pairs, leads, remainders);
+    }
+
+    private static boolean overlapsAny(List<int[]> spans, int start, int end) {
+        for (int[] s : spans) if (s[0] < end && start < s[1]) return true;
+        return false;
+    }
 
     private NoticeAnonymiser(String text) {
         this.text = text;
@@ -415,14 +522,37 @@ public final class NoticeAnonymiser {
             if (!alternation.isEmpty()) alternation.append('|');
             alternation.append(Pattern.quote(e.placeholder()));
         }
+        // a GSTIN placeholder whose leading fragment and remainder stand a row apart is restored from its joined value
+        // (the leading fragment "27AAAAA0" is the same for every GSTIN of that state, so the pair decides)
+        List<int[]> fixed = new ArrayList<>();
+        List<String> fixedWith = new ArrayList<>();
+        for (FragmentPair pair : scanFragments(text, List.of()).pairs()) {
+            String real = map.valueOf(pair.joined());
+            if (real == null || real.length() != 15) continue;
+            int n = pair.leadEnd() - pair.leadStart();
+            fixed.add(new int[]{pair.leadStart(), pair.leadEnd()});
+            fixedWith.add(real.substring(0, n));
+            fixed.add(new int[]{pair.remStart(), pair.remEnd()});
+            fixedWith.add(real.substring(n));
+        }
         Pattern p = Pattern.compile("(?i)" + NB + "(?:" + alternation + ")" + NA);
         Matcher m = p.matcher(text);
+        while (m.find()) {
+            if (overlapsAny(fixed, m.start(), m.end())) continue;
+            String real = map.valueOf(m.group());
+            fixed.add(new int[]{m.start(), m.end()});
+            fixedWith.add(real != null ? real : m.group());
+        }
+        Integer[] order = new Integer[fixed.size()];
+        for (int i = 0; i < order.length; i++) order[i] = i;
+        java.util.Arrays.sort(order, Comparator.comparingInt(i -> fixed.get(i)[0]));
         StringBuilder out = new StringBuilder(text.length() + 64);
         int last = 0;
-        while (m.find()) {
-            String real = map.valueOf(m.group());
-            out.append(text, last, m.start()).append(real != null ? real : m.group());
-            last = m.end();
+        for (int i : order) {
+            int[] span = fixed.get(i);
+            if (span[0] < last) continue;
+            out.append(text, last, span[0]).append(fixedWith.get(i));
+            last = span[1];
         }
         out.append(text, last, text.length());
         return out.toString();
@@ -491,6 +621,16 @@ public final class NoticeAnonymiser {
             if (gstinHits.stream().anyMatch(h -> h.start() < end && start < h.end())) continue;
             gstinHits.add(new GstinHit(start, end, joined, true));
         }
+        // a GSTIN whose leading fragment and remainder stand a table row apart (the PDF text layer reads a row as one
+        // line and wraps the GSTIN cell to the start of the next)
+        List<int[]> taken = new ArrayList<>();
+        for (GstinHit h : gstinHits) taken.add(new int[]{h.start(), h.end()});
+        FragmentScan scan = scanFragments(text, taken);
+        for (FragmentPair p : scan.pairs()) {
+            gstinHits.add(new GstinHit(p.leadStart(), p.leadEnd(), p.joined(), true, p.remStart(), p.remEnd()));
+        }
+        unpairedLeads.addAll(scan.unpairedLeads());
+        unpairedRemainders.addAll(scan.unpairedRemainders());
         gstinHits.sort(Comparator.comparingInt(GstinHit::start));
     }
 
@@ -517,12 +657,29 @@ public final class NoticeAnonymiser {
         for (GstinHit h : gstinHits) {
             String raw = text.substring(h.start(), h.end());
             String placeholder = gstinPlaceholder(h.joined());
-            if (h.split()) {
+            if (h.paired()) {
+                // the same placeholder, split at the same position as the real GSTIN; the joined value is mapped too
+                int n = h.end() - h.start();
+                splitGstins.put(h.joined(), placeholder);
+                add(h.start(), h.end(), placeholder.substring(0, n), AnonymisationMap.KIND_GSTIN_FRAGMENT, 0);
+                add(h.remStart(), h.remEnd(), placeholder.substring(n), AnonymisationMap.KIND_GSTIN_FRAGMENT, 0);
+            } else if (h.split()) {
                 splitGstins.put(h.joined(), placeholder);
                 add(h.start(), h.end(), withBreaksOf(placeholder, raw), AnonymisationMap.KIND_GSTIN, 0);
             } else {
                 add(h.start(), h.end(), placeholder, AnonymisationMap.KIND_GSTIN, 0);
             }
+        }
+        // a fragment that pairs with nothing still carries the PAN letters / digits: replaced by the fragment shape
+        for (int[] f : unpairedLeads) {
+            String v = text.substring(f[0], f[1]);
+            if (FRAGMENT_LEAD_PLACEHOLDER.matcher(v).matches()) continue;
+            add(f[0], f[1], leadFragmentPlaceholder(v), AnonymisationMap.KIND_GSTIN_FRAGMENT, 0);
+        }
+        for (int[] f : unpairedRemainders) {
+            String v = text.substring(f[0], f[1]);
+            if (FRAGMENT_REMAINDER_PLACEHOLDER.matcher(v).matches()) continue;
+            add(f[0], f[1], remainderFragmentPlaceholder(v), AnonymisationMap.KIND_GSTIN_FRAGMENT, 0);
         }
 
         Matcher m = PAN.matcher(text);
@@ -630,6 +787,35 @@ public final class NoticeAnonymiser {
         }
         placeholders.put(key, candidate);
         return candidate;
+    }
+
+    /** "24YYYYY8" -> "24AAAAA1": the state code and the placeholder PAN letters, the digits carrying the sequence. */
+    private String leadFragmentPlaceholder(String lead) {
+        String key = AnonymisationMap.KIND_GSTIN_FRAGMENT + "|" + lead;
+        String existing = placeholders.get(key);
+        if (existing != null) return existing;
+        int digits = lead.length() - 7;
+        String ph = lead.substring(0, 2) + "AAAAA" + (digits > 0 ? zeroPadded(nextSequence(AnonymisationMap.KIND_GSTIN_FRAGMENT), digits) : "");
+        placeholders.put(key, ph);
+        return ph;
+    }
+
+    /** "888Y1Z8" -> "001A1Z1": the digits carry the sequence, the PAN letter is the placeholder's, entity digit and Z kept. */
+    private String remainderFragmentPlaceholder(String remainder) {
+        String key = AnonymisationMap.KIND_GSTIN_FRAGMENT + "|" + remainder;
+        String existing = placeholders.get(key);
+        if (existing != null) return existing;
+        int seq = nextSequence(AnonymisationMap.KIND_GSTIN_FRAGMENT);
+        String check = seq <= 9 ? String.valueOf(seq) : String.valueOf((char) ('A' + (seq - 10) % 26));
+        String ph = zeroPadded(seq, remainder.length() - 4) + "A" + remainder.charAt(remainder.length() - 3) + "Z" + check;
+        placeholders.put(key, ph);
+        return ph;
+    }
+
+    private static String zeroPadded(int seq, int width) {
+        String digits = String.valueOf(seq);
+        if (digits.length() >= width) return digits.substring(digits.length() - width);
+        return "0".repeat(width - digits.length()) + digits;
     }
 
     private String panPlaceholder(String pan) {

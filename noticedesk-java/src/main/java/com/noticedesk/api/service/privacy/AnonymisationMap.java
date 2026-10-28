@@ -21,6 +21,8 @@ import java.util.TreeMap;
 public final class AnonymisationMap {
 
     public static final String KIND_GSTIN = "gstin";
+    /** A piece of a GSTIN a PDF text layer put a table row apart from the rest (the joined GSTIN is mapped as {@link #KIND_GSTIN}). */
+    public static final String KIND_GSTIN_FRAGMENT = "gstin_fragment";
     public static final String KIND_PAN = "pan";
     public static final String KIND_TAN = "tan";
     public static final String KIND_CIN = "cin";

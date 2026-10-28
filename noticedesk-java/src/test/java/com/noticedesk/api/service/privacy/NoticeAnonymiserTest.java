@@ -245,6 +245,83 @@ class NoticeAnonymiserTest {
     }
 
     /**
+     * The Para 2(c) vendor table as PDFBox reads it: each row on one line, the GSTIN cell wrapped so that its first 7
+     * to 9 characters stand after the row number and the remainder starts the next line, about 60 characters away
+     * (the three row shapes of a real RFD-08). Leading fragment and remainder are replaced by the same placeholder
+     * split at the same position, the joined value is mapped, the same GSTIN split differently twice gets one
+     * placeholder, two GSTINs of one State (the same leading placeholder) still round-trip exactly, a fragment that
+     * pairs with nothing is replaced by the fragment shape and counted by the self-check, and the layout is unchanged.
+     */
+    @Test
+    void gstinFragmentsARowApartArePairedAndReplaced() {
+        String text = """
+                GSTIN: 27ZZZZZ9999Z1Z9
+                2(c) The following inward supplies are ineligible:
+                Sr. GSTIN Trade/Legal Name Invoice value IGST CGST SGST Cess Reason
+                1 24YYYYY8 ORBIT TRADERS 12345 0 1111 1111 0 Goods received by the
+                888Y1Z8 SUPPLIER after cancellation of
+                its registration
+                certificate.
+                2 29XXXXX77 NOVA GEMS & 234567 0 21111 21111 0 Return not filed by the
+                77X1Z7 ASSOCIATES for the period in question
+                3 36UUUUU COSMIC DRIP 34567 0 3111 3111 0 Supplier is non-existent at
+                4444U1Z4 AND FITTINGS as per field visit
+                4 24CCCCC22 LUNAR GOLD AND DIAMONDS 45678 0 4111 4111 0 Invoice not uploaded by the
+                22C1Z5 SUPPLIER in GSTR-1
+                5 24YYYYY88 ORBIT TRADERS 5678 0 511 511 0 Goods received by the
+                88Y1Z8 SUPPLIER after cancellation
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        for (String fragment : List.of("ZZZZZ", "YYYYY", "XXXXX", "UUUUU", "CCCCC", "888Y1Z8", "77X1Z7", "4444U1Z4", "22C1Z5", "88Y1Z8")) {
+            assertFalse(a.contains(fragment), "survived: " + fragment + "\n" + a);
+        }
+        assertTrue(a.contains("GSTIN: 27AAAAA0001A1Z1"), a);
+        assertTrue(a.contains("\n1 24AAAAA0 ") && a.contains("\n002A1Z2 SUPPLIER after cancellation of\n"), "shape 1: 8 + 7\n" + a);
+        assertTrue(a.contains("\n2 29AAAAA00 ") && a.contains("\n03A1Z3 ASSOCIATES for the period"), "shape 2: 9 + 6\n" + a);
+        assertTrue(a.contains("\n3 36AAAAA ") && a.contains("\n0004A1Z4 AND FITTINGS as per"), "shape 3: 7 + 8\n" + a);
+        assertTrue(a.contains("\n4 24AAAAA00 ") && a.contains("\n05A1Z5 SUPPLIER in GSTR-1"), "a second GSTIN of the same State\n" + a);
+        assertTrue(a.contains("\n5 24AAAAA00 ") && a.contains("\n02A1Z2 SUPPLIER after cancellation\n"), "the same GSTIN split differently: the same placeholder\n" + a);
+        assertEquals(text.lines().count(), a.lines().count(), "the line layout is unchanged");
+        assertEquals(5, r.map().count(AnonymisationMap.KIND_GSTIN), "five distinct GSTINs: " + r.map().summaryLine());
+        assertEquals("24YYYYY8888Y1Z8", r.map().valueOf("24AAAAA0002A1Z2"));
+        assertEquals("24CCCCC2222C1Z5", r.map().valueOf("24AAAAA0005A1Z5"));
+        // the self-check sees no fragment and no split GSTIN in the anonymised text
+        NoticeAnonymiser.Residual residual = r.residual();
+        assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_GSTIN_FRAGMENT), residual.line());
+        assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_SPLIT_GSTIN), residual.line());
+        assertFalse(residual.countsByShape().containsKey(NoticeAnonymiser.Residual.SHAPE_GSTIN), residual.line());
+        // exact round trip (rows 4 and 5 share the leading placeholder "24AAAAA00": the pair decides), joined form too
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        assertEquals("suppliers 24YYYYY8888Y1Z8 and 24CCCCC2222C1Z5 and 36UUUUU4444U1Z4",
+                NoticeAnonymiser.deAnonymise("suppliers 24AAAAA0002A1Z2 and 24AAAAA0005A1Z5 and 36AAAAA0004A1Z4", r.map()));
+        // a second pass changes nothing
+        NoticeAnonymiser.Result twice = NoticeAnonymiser.anonymise(a);
+        assertEquals(a, twice.text());
+        assertTrue(twice.map().isEmpty(), twice.map().summaryLine());
+        // a leading fragment whose remainder is not within the next three lines, and a remainder on its own, are still
+        // identifying: counted by the self-check, replaced by the fragment shape, restored exactly
+        String unpaired = """
+                The supplier 24YYYYY8 has not filed its returns.
+
+
+
+                888Y1Z8 is the rest of a GSTIN nobody can pair.
+                """;
+        NoticeAnonymiser.Residual before = NoticeAnonymiser.residualRisks(unpaired);
+        assertEquals(2, before.countsByShape().get(NoticeAnonymiser.Residual.SHAPE_GSTIN_FRAGMENT), before.line());
+        assertEquals("residual: 2 (gstin-fragment x2)", before.line());
+        NoticeAnonymiser.Result u = NoticeAnonymiser.anonymise(unpaired);
+        assertFalse(u.text().contains("YYYYY") || u.text().contains("888Y1Z8"), u.text());
+        assertTrue(u.text().contains("The supplier 24AAAAA1 has not filed"), u.text());
+        assertTrue(u.text().contains("\n002A1Z2 is the rest"), u.text());
+        assertEquals(0, u.residual().total(), u.residual().line());
+        assertEquals(2, u.map().count(AnonymisationMap.KIND_GSTIN_FRAGMENT), u.map().summaryLine());
+        assertEquals(unpaired, NoticeAnonymiser.deAnonymise(u.text(), u.map()));
+        assertEquals(u.text(), NoticeAnonymiser.anonymise(u.text()).text(), "a second pass changes nothing");
+    }
+
+    /**
      * Vendor names a refund show cause notice prints in capitals, in three layouts: (a) prose, the name before a
      * bracketed "(GSTIN:...)"; (b) "supplier i.e. NAME" with the GSTIN on the next line and "supplier of NAME";
      * (c) a table whose cells are each on their own line (split GSTIN, blank line, the name, blank line, amounts),
