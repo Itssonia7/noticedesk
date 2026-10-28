@@ -67,6 +67,17 @@ public final class NoticeAnonymiser {
     private static final String NA = "(?![A-Za-z0-9])";
 
     private static final Pattern GSTIN = Pattern.compile("(?i)" + NB + "(\\d{2}[A-Z]{5}\\d{4}[A-Z][0-9A-Z]Z[0-9A-Z])" + NA);
+    /** A break inside a GSTIN whose 15 characters a PDF text layer split over a line end, spaces or a hyphen. */
+    private static final String GSTIN_BREAK = "[ \\t\\r\\n\\-]{0,6}";
+    /**
+     * A GSTIN split at any point (e.g. the first 8 characters, a line break, the last 7): the same structure as
+     * {@link #GSTIN} with an optional break between any two characters, anchored on the state code and the Z check
+     * character; upper case only. A contiguous GSTIN matches too and is skipped where this pattern is applied.
+     */
+    private static final Pattern SPLIT_GSTIN = Pattern.compile(NB + "(\\d" + GSTIN_BREAK + "\\d" + GSTIN_BREAK
+            + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK + "[A-Z]" + GSTIN_BREAK
+            + "\\d" + GSTIN_BREAK + "\\d" + GSTIN_BREAK + "\\d" + GSTIN_BREAK + "\\d" + GSTIN_BREAK
+            + "[A-Z]" + GSTIN_BREAK + "[0-9A-Z]" + GSTIN_BREAK + "Z" + GSTIN_BREAK + "[0-9A-Z])" + NA);
     private static final Pattern PAN = Pattern.compile(NB + "([A-Z]{5}\\d{4}[A-Z])" + NA);
     private static final Pattern TAN = Pattern.compile(NB + "([A-Z]{4}\\d{5}[A-Z])" + NA);
     private static final Pattern CIN = Pattern.compile(NB + "([LU]\\d{5}[A-Z]{2}\\d{4}[A-Z]{3}\\d{6})" + NA);
@@ -173,6 +184,13 @@ public final class NoticeAnonymiser {
     private final List<String> stateNames;
     private String taxpayerGstin;
     private final Set<String> otherGstins = new LinkedHashSet<>();
+    /** Every GSTIN of the text, whole or split, in text order. */
+    private final List<GstinHit> gstinHits = new ArrayList<>();
+    /** Split GSTINs: joined real value -> joined placeholder (the mapping gets the joined pair too). */
+    private final LinkedHashMap<String, String> splitGstins = new LinkedHashMap<>();
+
+    /** One GSTIN occurrence: [start, end) in the text, its 15 characters joined (upper case), whether it was split. */
+    record GstinHit(int start, int end, String joined, boolean split) {}
 
     private NoticeAnonymiser(String text) {
         this.text = text;
@@ -233,6 +251,7 @@ public final class NoticeAnonymiser {
         taxpayerGstin = tg.gstin();
         otherGstins.addAll(tg.otherParties());
 
+        collectGstins();
         findIdentifiers();
         findReferences();
         findBusinessNames();
@@ -257,6 +276,11 @@ public final class NoticeAnonymiser {
             last = s.end();
         }
         sb.append(text, last, text.length());
+        // a split GSTIN is mapped in its split form (exact round trip) and in its joined form too, so a model that
+        // joins the two halves in its output is still restored
+        splitGstins.forEach((joined, placeholder) -> {
+            if (!joined.equals(placeholder)) map.add(AnonymisationMap.KIND_GSTIN, placeholder, joined);
+        });
         return sb.toString();
     }
 
@@ -267,11 +291,56 @@ public final class NoticeAnonymiser {
 
     // ---------------------------------------------------------------- identifiers
 
-    private void findIdentifiers() {
+    /** Every GSTIN of the text, whole ({@link #GSTIN}) or split ({@link #SPLIT_GSTIN}), once each, in text order. */
+    private void collectGstins() {
         Matcher m = GSTIN.matcher(text);
-        while (m.find()) add(m.start(1), m.end(1), gstinPlaceholder(m.group(1)), AnonymisationMap.KIND_GSTIN, 0);
+        while (m.find()) gstinHits.add(new GstinHit(m.start(1), m.end(1), m.group(1).toUpperCase(Locale.ROOT), false));
+        m = SPLIT_GSTIN.matcher(text);
+        while (m.find()) {
+            String raw = m.group(1);
+            if (raw.length() == 15) continue;   // contiguous: already collected
+            String joined = raw.replaceAll("[\\s\\-]", "");
+            if (joined.length() != 15) continue;
+            int start = m.start(1);
+            int end = m.end(1);
+            if (gstinHits.stream().anyMatch(h -> h.start() < end && start < h.end())) continue;
+            gstinHits.add(new GstinHit(start, end, joined, true));
+        }
+        gstinHits.sort(Comparator.comparingInt(GstinHit::start));
+    }
 
-        m = PAN.matcher(text);
+    /**
+     * The placeholder of a split GSTIN written with the same breaks as {@code raw} ("27AAACB2\n894G1ZN" ->
+     * "27AAAAA0\n001A1Z1"), so the table layout and the line count are unchanged.
+     */
+    static String withBreaksOf(String placeholder, String raw) {
+        StringBuilder out = new StringBuilder(raw.length());
+        int p = 0;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                out.append(p < placeholder.length() ? placeholder.charAt(p) : c);
+                p++;
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    private void findIdentifiers() {
+        for (GstinHit h : gstinHits) {
+            String raw = text.substring(h.start(), h.end());
+            String placeholder = gstinPlaceholder(h.joined());
+            if (h.split()) {
+                splitGstins.put(h.joined(), placeholder);
+                add(h.start(), h.end(), withBreaksOf(placeholder, raw), AnonymisationMap.KIND_GSTIN, 0);
+            } else {
+                add(h.start(), h.end(), placeholder, AnonymisationMap.KIND_GSTIN, 0);
+            }
+        }
+
+        Matcher m = PAN.matcher(text);
         while (m.find()) add(m.start(1), m.end(1), panPlaceholder(m.group(1)), AnonymisationMap.KIND_PAN, 1);
 
         m = CIN.matcher(text);
@@ -686,19 +755,18 @@ public final class NoticeAnonymiser {
         return letters * 2 >= words.length && capitalised * 2 >= words.length;
     }
 
-    /** The GSTIN nearest to [start, end) within 160 characters (upper case), or null. */
+    /** The GSTIN (whole or split) nearest to [start, end) within 160 characters (upper case, joined), or null. */
     private String nearestGstin(int start, int end) {
         int from = Math.max(0, start - 160);
         int to = Math.min(text.length(), end + 160);
-        Matcher g = GSTIN.matcher(text);
-        g.region(from, to);
         String best = null;
         int bestDist = Integer.MAX_VALUE;
-        while (g.find()) {
-            int dist = g.start() >= end ? g.start() - end : g.end() <= start ? start - g.end() : 0;
+        for (GstinHit h : gstinHits) {
+            if (h.end() <= from || h.start() >= to) continue;
+            int dist = h.start() >= end ? h.start() - end : h.end() <= start ? start - h.end() : 0;
             if (dist < bestDist) {
                 bestDist = dist;
-                best = g.group(1).toUpperCase(Locale.ROOT);
+                best = h.joined();
             }
         }
         return best;

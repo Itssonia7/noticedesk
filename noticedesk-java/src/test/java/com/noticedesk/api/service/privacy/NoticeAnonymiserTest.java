@@ -200,6 +200,50 @@ class NoticeAnonymiserTest {
         assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
     }
 
+    /**
+     * A PDF text layer breaks the GSTINs of a vendor table in two (the first 8 characters, a line end, the last 7) or
+     * a hyphen is printed inside one: each is replaced by the placeholder written with the same break, the joined
+     * value is mapped too, the taxpayer's split occurrence gets the taxpayer's placeholder, and the round trip is exact.
+     */
+    @Test
+    void gstinsSplitOverALineBreakOrAHyphenAreReplaced() {
+        String text = """
+                GSTIN: 27ZZZZZ9999Z1Z9
+                Para 2(c): the following inward supplies
+                Sr. GSTIN of supplier Invoice value
+                1 24YYYYY8
+                888Y1Z8 1,00,000
+                2 29XXXXX7-777X1Z7 2,00,000
+                3 27ZZZZZ9
+                999Z1Z9 3,00,000
+                4 24YYYYY8
+                   888Y1Z8 4,00,000
+                """;
+        NoticeAnonymiser.Result r = NoticeAnonymiser.anonymise(text);
+        String a = r.text();
+        for (String fragment : List.of("ZZZZZ", "YYYYY", "XXXXX", "999Z1Z9", "888Y1Z8", "777X1Z7")) {
+            assertFalse(a.contains(fragment), "survived: " + fragment + "\n" + a);
+        }
+        assertTrue(a.contains("GSTIN: 27AAAAA0001A1Z1"), a);
+        assertTrue(a.contains("1 24AAAAA0\n002A1Z2 1,00,000"), "the placeholder keeps the line break\n" + a);
+        assertTrue(a.contains("2 29AAAAA0-003A1Z3 2,00,000"), "the placeholder keeps the hyphen\n" + a);
+        assertTrue(a.contains("3 27AAAAA0\n001A1Z1 3,00,000"), "the taxpayer's split occurrence is the taxpayer's placeholder\n" + a);
+        assertTrue(a.contains("4 24AAAAA0\n   002A1Z2 4,00,000"), "the same vendor twice: the same placeholder, indentation kept\n" + a);
+        assertEquals(text.length(), a.length(), "the layout (line count, breaks) is unchanged");
+        // exact round trip; the joined form restores too (a model may join the halves in its output)
+        assertEquals(text, NoticeAnonymiser.deAnonymise(a, r.map()));
+        assertEquals("24YYYYY8888Y1Z8", r.map().valueOf("24AAAAA0002A1Z2"));
+        assertEquals("the supplier 24YYYYY8888Y1Z8 and 29XXXXX7777X1Z7",
+                NoticeAnonymiser.deAnonymise("the supplier 24AAAAA0002A1Z2 and 29AAAAA0003A1Z3", r.map()));
+        assertEquals(3, r.map().count(AnonymisationMap.KIND_GSTIN), "three distinct GSTINs, split or whole: " + r.map().summaryLine());
+        // a second pass changes nothing
+        NoticeAnonymiser.Result twice = NoticeAnonymiser.anonymise(a);
+        assertEquals(a, twice.text());
+        assertTrue(twice.map().isEmpty(), twice.map().summaryLine());
+        // a contiguous GSTIN placeholder is still what the header facts read
+        assertEquals("27AAAAA0001A1Z1", NoticeHeaderFacts.taxpayerGstin(a).gstin());
+    }
+
     @Test
     void emptyAndPlainTextAreUntouched() {
         assertEquals("", NoticeAnonymiser.anonymise("").text());

@@ -79,11 +79,16 @@ public final class AnonymisationMap {
         return e != null ? e.value() : null;
     }
 
-    /** Distinct real values per kind (case-insensitive), e.g. two spellings of one name count once. */
+    /**
+     * Distinct real values per kind (case-insensitive), e.g. two spellings of one name count once; a GSTIN or PAN
+     * split over a line break counts once with its joined form.
+     */
     public Map<String, Integer> counts() {
         Map<String, java.util.Set<String>> distinct = new TreeMap<>();
         for (Entry e : entries) {
-            distinct.computeIfAbsent(e.kind(), k -> new java.util.HashSet<>()).add(e.value().toLowerCase(Locale.ROOT));
+            String v = e.value().toLowerCase(Locale.ROOT);
+            if (KIND_GSTIN.equals(e.kind()) || KIND_PAN.equals(e.kind())) v = v.replaceAll("[\\s\\-]", "");
+            distinct.computeIfAbsent(e.kind(), k -> new java.util.HashSet<>()).add(v);
         }
         Map<String, Integer> out = new TreeMap<>();
         distinct.forEach((k, v) -> out.put(k, v.size()));
