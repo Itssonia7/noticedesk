@@ -64,7 +64,7 @@ export default function ClientITDrilldownPage({ params }: Props) {
 
   // Group by assessment_year. Notices without an AY land in a "No AY" bucket.
   const buckets: Record<string, typeof data.notices> = {};
-  for (const n of data.notices) {
+  for (const n of (data.notices || [])) {
     const key = n.assessment_year ?? "No AY";
     if (!buckets[key]) buckets[key] = [];
     buckets[key].push(n);

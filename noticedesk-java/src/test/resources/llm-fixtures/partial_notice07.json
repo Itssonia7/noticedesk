@@ -1,0 +1,26 @@
+{
+  "id": "msg_fixture_partial_007",
+  "type": "message",
+  "role": "assistant",
+  "model": "fixture-partial-model",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Synthetic fixture: reasoning summary withheld.",
+      "signature": "fixture-signature-not-real"
+    },
+    {
+      "type": "text",
+      "text": "{\"sections\": [{\"section\": 4, \"after_block\": null, \"html\": \"<p>The equipment invoices carry the supplier GSTIN, invoice number, HSN, taxable value and tax as required by Rule 46; a chassis or serial number is not a prescribed particular.</p>\"}, {\"section\": 5, \"after_block\": null, \"html\": \"<ol><li>Para 3: Denied. Rule 46 does not require machine serial numbers on a tax invoice.</li><li>Para 4: Denied. The conditions of Section 16(2)(a) are met.</li></ol>\"}, {\"section\": 6, \"after_block\": null, \"html\": \"<p>Input tax credit cannot be denied for a particular that the law does not prescribe.</p>\"}], \"citations\": [{\"case\": \"Fixture Traders v. State Tax Officer\", \"court\": \"Fixture High Court\", \"year\": 2021, \"quoted_text\": null, \"cited_for\": \"credit not deniable for non-prescribed particulars\"}], \"documents\": [\"Copies of purchase invoices for capital goods\", \"Delivery challans and installation records\"], \"summary_line\": \"Credit on capital goods is admissible; Rule 46 does not prescribe serial numbers.\"}"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 4200,
+    "output_tokens": 1800,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 9000
+  },
+  "_fixture_note": "Synthetic partial-drafting writer output for bench notice-bench-007 (fake taxpayer)."
+}

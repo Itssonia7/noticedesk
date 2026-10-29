@@ -72,7 +72,7 @@ export default function ClientGstDrilldownPage({ params }: Props) {
   const isPortal = reg.sync_method === "portal";
 
   const buckets: Record<string, typeof data.notices> = {};
-  for (const n of data.notices) {
+  for (const n of (data.notices || [])) {
     const key = n.financial_year ?? "No FY";
     if (!buckets[key]) buckets[key] = [];
     buckets[key].push(n);

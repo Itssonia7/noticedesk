@@ -2,8 +2,14 @@ package com.noticedesk.api.agent;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
+import com.noticedesk.api.agent.PartialDraftingAgent.RawAiCitation;
+import com.noticedesk.api.config.AppProperties;
+import com.noticedesk.api.service.llm.ApiUsageLogService;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -17,186 +23,885 @@ import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * Citation Verification Agent — Tier 1 (IndianKanoon or stub).
- *
- * Extracts citations from a draft text blob using a simple "v." pattern,
- * then verifies each against the configured provider. Stub returns an empty
- * result set (used in dev/CI); IndianKanoon calls the public search API.
- */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class CitationVerificationAgent {
 
-    /** Matches "Foo Bar v. Baz Corp" — case names that contain " v. " */
     private static final Pattern CITATION_RE = Pattern.compile(
             "([A-Za-z][^\\n.]{2,60})\\s+v\\.\\s+([A-Za-z][^\\n,.(]{2,60})",
             Pattern.CASE_INSENSITIVE);
 
-    private static final String IK_BASE_URL  = "https://api.indiankanoon.org/search/";
-    private static final int    HTTP_TIMEOUT_SECS = 10;
+    private static final String IK_SEARCH_URL = "https://api.indiankanoon.org/search/";
+    private static final String IK_FRAGMENT_URL = "https://api.indiankanoon.org/docfragment/";
+    private static final int HTTP_TIMEOUT_SECS = 10;
+
+    private static final Set<String> WHITELIST = Set.of(
+            "section 16", "section 50", "section 73", "section 74", "section 75",
+            "section 16(2)(aa)", "proviso to section 50(1)", "bharti airtel", "vkc footsteps"
+    );
 
     private final ObjectMapper objectMapper;
+    private final AppProperties properties;
+    private final ApiUsageLogService apiUsageLogService;
+    private final NamedParameterJdbcTemplate jdbcTemplate;
+    private final IndianKanoonClient ikClient;
 
-    // ---- Public data types -----------------------------------------------
+    @Autowired
+    public CitationVerificationAgent(ObjectMapper objectMapper,
+                                     AppProperties properties,
+                                     @Autowired(required = false) ApiUsageLogService apiUsageLogService,
+                                     @Autowired(required = false) NamedParameterJdbcTemplate jdbcTemplate,
+                                     IndianKanoonClient ikClient) {
+        this.objectMapper = objectMapper;
+        this.properties = properties;
+        this.apiUsageLogService = apiUsageLogService;
+        this.jdbcTemplate = jdbcTemplate;
+        this.ikClient = ikClient;
+    }
+
+    public CitationVerificationAgent(ObjectMapper objectMapper, AppProperties properties,
+                                     ApiUsageLogService apiUsageLogService, NamedParameterJdbcTemplate jdbcTemplate) {
+        this(objectMapper, properties, apiUsageLogService, jdbcTemplate, new IndianKanoonClient(objectMapper));
+    }
+
+    public CitationVerificationAgent(ObjectMapper objectMapper) {
+        this(objectMapper, null, null, null);
+    }
 
     public record VerifiedCitation(
             String caseName,
             String citationString,
             String rawText,
-            String status,           // VERIFIED | VERIFIED_PARTIAL | UNVERIFIED
+            String status,                       // VERIFIED | VERIFIED_PARTIAL | NOT_FOUND | NOT_CHECKED
             String sourceUrl,
             String verifiedParagraphText,
             Double propositionMatchConfidence,
-            String actionTaken) {}   // passed | flagged | stripped
+            String actionTaken,                  // passed | flagged | stripped
+            String details,
+            String court,
+            Integer year,
+            String quotedText
+    ) {}
 
     public record CitationVerificationResult(
-            Map<String, Object>   summary,
-            List<VerifiedCitation> citations) {}
+            Map<String, Object> summary,
+            List<VerifiedCitation> citations,
+            String cleanedHtml,
+            List<String> flags
+    ) {}
 
-    // ---- Public API ------------------------------------------------------
-
-    /**
-     * Extract citations from {@code draftText} and verify them.
-     *
-     * @param draftText        concatenated HTML/text of all draft sections
-     * @param citationProvider {@code "stub"} or {@code "indiankanoon"}
-     */
     public CitationVerificationResult verify(String draftText, String citationProvider) {
-        if ("stub".equalsIgnoreCase(citationProvider) || draftText == null || draftText.isBlank()) {
-            return stubResult();
-        }
-
-        List<String> caseNames = extractCaseNames(draftText);
-        if (caseNames.isEmpty()) {
-            return emptyResult();
-        }
-
-        if ("indiankanoon".equalsIgnoreCase(citationProvider)) {
-            return verifyWithIndianKanoon(caseNames);
-        }
-
-        // Unknown provider — degrade gracefully to stub
-        log.warn("unknown citation provider '{}', falling back to stub", citationProvider);
-        return stubResult();
+        List<RawAiCitation> extracted = extractCitationsFromText(draftText);
+        return verifyStructuredCitations(extracted, draftText, citationProvider, null);
     }
 
-    // ---- Private: extraction ---------------------------------------------
-
-    private List<String> extractCaseNames(String text) {
-        Set<String>  seen  = new LinkedHashSet<>();
-        List<String> names = new ArrayList<>();
+    private List<RawAiCitation> extractCitationsFromText(String text) {
+        if (text == null || text.isBlank()) return List.of();
+        List<RawAiCitation> list = new ArrayList<>();
         Matcher m = CITATION_RE.matcher(text);
         while (m.find()) {
-            String caseName = (m.group(1).strip() + " v. " + m.group(2).strip()).trim();
-            if (seen.add(caseName.toLowerCase())) {
-                names.add(caseName);
-            }
+            String cName = (m.group(1).strip() + " v. " + m.group(2).strip()).trim();
+            list.add(new RawAiCitation(cName, null, null, null, null));
         }
-        return names;
+        return list;
     }
 
-    // ---- Private: IndianKanoon verification ------------------------------
+    public CitationVerificationResult verifyStructuredCitations(
+            List<RawAiCitation> rawCitations,
+            String fullHtml,
+            String provider,
+            UUID noticeId
+    ) {
+        if (rawCitations == null || rawCitations.isEmpty()) {
+            return new CitationVerificationResult(
+                    Map.of("total", 0, "verified", 0, "partial", 0, "unverified", 0, "removed", 0),
+                    List.of(), fullHtml, List.of());
+        }
 
-    private CitationVerificationResult verifyWithIndianKanoon(List<String> caseNames) {
+        String effectiveProvider = provider;
+        if (effectiveProvider == null || effectiveProvider.isBlank()) {
+            effectiveProvider = (properties != null && properties.getCitation() != null) ?
+                    properties.getCitation().getProvider() : "stub";
+        }
+
+        if ("stub".equalsIgnoreCase(effectiveProvider)) {
+            List<VerifiedCitation> stubList = new ArrayList<>();
+            for (RawAiCitation r : rawCitations) {
+                stubList.add(new VerifiedCitation(
+                        r.caseName(), r.caseName(), r.caseName(), "VERIFIED",
+                        "https://indiankanoon.org/doc/stub/", null, 0.90, "passed",
+                        "Dev stub auto-passed", r.court(), r.year(), r.quotedText()));
+            }
+            Map<String, Object> summary = Map.of("total", stubList.size(), "verified", stubList.size(), "partial", 0, "unverified", 0, "removed", 0);
+            return new CitationVerificationResult(summary, stubList, fullHtml, List.of());
+        }
+
+        // Check token for IndianKanoon
+        String token = (properties != null && properties.getCitation() != null) ?
+                properties.getCitation().getIndiankanoonApiToken() : null;
+        if (token == null || token.isBlank()) {
+            token = System.getenv("INDIANKANOON_API_TOKEN");
+        }
+
+        if (token == null || token.isBlank()) {
+            log.warn("INDIANKANOON_API_TOKEN is missing. Marking citations NOT_CHECKED and setting block flag.");
+            List<VerifiedCitation> notChecked = new ArrayList<>();
+            for (RawAiCitation r : rawCitations) {
+                notChecked.add(new VerifiedCitation(
+                        r.caseName(), r.caseName(), r.caseName(), "NOT_CHECKED",
+                        null, null, 0.0, "flagged",
+                        "Missing IndianKanoon API Token", r.court(), r.year(), r.quotedText()));
+            }
+            Map<String, Object> summary = Map.of("total", notChecked.size(), "verified", 0, "partial", 0, "unverified", notChecked.size(), "removed", 0);
+            return new CitationVerificationResult(summary, notChecked, fullHtml, List.of("MISSING_INDIANKANOON_API_TOKEN"));
+        }
+
         HttpClient httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
+                .connectTimeout(Duration.ofSeconds(HTTP_TIMEOUT_SECS))
                 .build();
 
-        String token = System.getenv("INDIANKANOON_API_TOKEN");
+        int maxCalls = (properties != null && properties.getCitation() != null) ?
+                properties.getCitation().getMaxCallsPerDraft() : 15;
 
-        List<VerifiedCitation> citations = new ArrayList<>();
-        int verified = 0, partial = 0, stripped = 0;
+        List<VerifiedCitation> verifiedList = new ArrayList<>();
+        List<String> flags = new ArrayList<>();
+        String currentHtml = fullHtml;
+        int callsMade = 0;
+        int countVerified = 0, countPartial = 0, countUnverified = 0, countRemoved = 0;
 
-        for (String caseName : caseNames) {
-            VerifiedCitation vc = lookupIndianKanoon(httpClient, token, caseName);
-            citations.add(vc);
-            switch (vc.status()) {
-                case "VERIFIED"         -> verified++;
-                case "VERIFIED_PARTIAL" -> partial++;
-                default                 -> stripped++;
+        for (RawAiCitation r : rawCitations) {
+            String cName = r.caseName() != null ? r.caseName().toLowerCase() : "";
+
+            // 1. Whitelist check
+            if (isWhitelisted(cName)) {
+                verifiedList.add(new VerifiedCitation(
+                        r.caseName(), r.caseName(), r.caseName(), "VERIFIED",
+                        null, null, 1.0, "passed",
+                        "Skipped API check: Whitelisted statutory term or leading authority", r.court(), r.year(), r.quotedText()));
+                countVerified++;
+                continue;
+            }
+
+            // 2. Cap check
+            if (callsMade >= maxCalls) {
+                flags.add("IK_MAX_CALLS_EXCEEDED");
+                verifiedList.add(new VerifiedCitation(
+                        r.caseName(), r.caseName(), r.caseName(), "NOT_CHECKED",
+                        null, null, 0.0, "flagged",
+                        "Exceeded max IK API calls limit (" + maxCalls + ")", r.court(), r.year(), r.quotedText()));
+                countUnverified++;
+                continue;
+            }
+
+            // 3. Cache check
+            String cacheKey = r.caseName() + "|" + r.court() + "|" + r.year();
+            VerifiedCitation cached = getFromCache(cacheKey);
+            if (cached != null) {
+                verifiedList.add(cached);
+                if ("VERIFIED".equals(cached.status())) countVerified++;
+                else if ("VERIFIED_PARTIAL".equals(cached.status())) countPartial++;
+                else countUnverified++;
+                continue;
+            }
+
+            // 4. IndianKanoon API Call using HTTP POST method
+            callsMade++;
+            if (apiUsageLogService != null) {
+                apiUsageLogService.logUsage("indiankanoon", "ik_search", 1, 0, "ik_search", null, noticeId);
+            }
+
+            VerifiedCitation result = searchIndianKanoon(httpClient, token, r, noticeId);
+            saveToCache(cacheKey, result);
+            verifiedList.add(result);
+
+            if ("VERIFIED".equals(result.status())) {
+                countVerified++;
+            } else if ("NOT_FOUND".equals(result.status())) {
+                countRemoved++;
+                flags.add("citation removed");
+                if (currentHtml != null && r.caseName() != null) {
+                    currentHtml = currentHtml.replace(r.caseName(), "");
+                }
+            } else if ("VERIFIED_PARTIAL".equals(result.status())) {
+                countPartial++;
+                flags.add("UNVERIFIED_QUOTE");
+            } else {
+                countUnverified++;
             }
         }
 
         Map<String, Object> summary = Map.of(
-                "total",      citations.size(),
-                "verified",   verified,
-                "partial",    partial,
-                "unverified", stripped,
-                "removed",    stripped);
+                "total", verifiedList.size(),
+                "verified", countVerified,
+                "partial", countPartial,
+                "unverified", countUnverified,
+                "removed", countRemoved
+        );
 
-        log.info("citation verification complete provider=indiankanoon total={} verified={} stripped={}",
-                citations.size(), verified, stripped);
-        return new CitationVerificationResult(summary, citations);
+        return new CitationVerificationResult(summary, verifiedList, currentHtml, flags);
     }
 
-    private VerifiedCitation lookupIndianKanoon(HttpClient client, String token, String caseName) {
-        String encoded = URLEncoder.encode(caseName, StandardCharsets.UTF_8);
-        String url = IK_BASE_URL + "?formInput=" + encoded + "&pagenum=0";
-
-        HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .timeout(Duration.ofSeconds(HTTP_TIMEOUT_SECS))
-                .GET();
-        if (token != null && !token.isBlank()) {
-            builder.header("Authorization", "Token " + token);
+    private boolean isWhitelisted(String caseName) {
+        if (caseName == null) return false;
+        for (String w : WHITELIST) {
+            if (caseName.contains(w)) return true;
         }
+        return false;
+    }
 
+    private VerifiedCitation searchIndianKanoon(HttpClient client, String token, RawAiCitation raw, UUID noticeId) {
         try {
-            HttpResponse<String> response = client.send(
-                    builder.build(), HttpResponse.BodyHandlers.ofString());
+            String formBody = "formInput=" + URLEncoder.encode(raw.caseName(), StandardCharsets.UTF_8) + "&pagenum=0";
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(IK_SEARCH_URL))
+                    .timeout(Duration.ofSeconds(HTTP_TIMEOUT_SECS))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header("Authorization", "Token " + token)
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody))
+                    .build();
 
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
-                log.warn("indiankanoon returned {} for '{}'", response.statusCode(), caseName);
-                return unverified(caseName, null);
+                log.warn("IndianKanoon search returned HTTP {} for '{}'", response.statusCode(), raw.caseName());
+                return new VerifiedCitation(raw.caseName(), raw.caseName(), raw.caseName(), "NOT_FOUND", null, null, 0.0, "stripped", "HTTP " + response.statusCode(), raw.court(), raw.year(), raw.quotedText());
             }
 
-            Map<String, Object> data = objectMapper.readValue(
-                    response.body(), new TypeReference<>() {});
-
+            Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
             @SuppressWarnings("unchecked")
-            List<Map<String, Object>> docs =
-                    (List<Map<String, Object>>) data.getOrDefault("docs", List.of());
+            List<Map<String, Object>> docs = (List<Map<String, Object>>) body.getOrDefault("docs", List.of());
 
             if (docs.isEmpty()) {
-                return unverified(caseName, null);
+                return new VerifiedCitation(raw.caseName(), raw.caseName(), raw.caseName(), "NOT_FOUND", null, null, 0.0, "stripped", "No matching cases found on IndianKanoon", raw.court(), raw.year(), raw.quotedText());
             }
 
-            Map<String, Object> first = docs.get(0);
-            String tid  = first.get("tid")   != null ? first.get("tid").toString()   : null;
-            String docUrl = tid != null ? "https://indiankanoon.org/doc/" + tid + "/" : null;
+            Map<String, Object> doc = docs.get(0);
+            String docId = doc.get("tid") != null ? doc.get("tid").toString() : null;
+            String title = doc.get("title") != null ? doc.get("title").toString() : "";
+            String docUrl = docId != null ? "https://indiankanoon.org/doc/" + docId + "/" : null;
 
-            return new VerifiedCitation(
-                    caseName, null, caseName,
-                    "VERIFIED", docUrl, null, 0.85, "passed");
+            // Quote verification if quoted_text is present
+            if (raw.quotedText() != null && !raw.quotedText().isBlank() && docId != null) {
+                if (apiUsageLogService != null) {
+                    apiUsageLogService.logUsage("indiankanoon", "ik_fragment", 1, 0, "ik_fragment", null, noticeId);
+                }
+                boolean quoteFound = verifyFragmentQuote(client, token, docId, raw.quotedText());
+                if (!quoteFound) {
+                    return new VerifiedCitation(raw.caseName(), raw.caseName(), raw.caseName(), "VERIFIED_PARTIAL", docUrl, null, 0.70, "flagged", "Case title matched, but quote text not found in document fragment", raw.court(), raw.year(), raw.quotedText());
+                }
+            }
 
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return unverified(caseName, null);
+            return new VerifiedCitation(raw.caseName(), raw.caseName(), raw.caseName(), "VERIFIED", docUrl, null, 0.95, "passed", "Verified against " + title, raw.court(), raw.year(), raw.quotedText());
+
         } catch (Exception e) {
-            log.warn("indiankanoon lookup failed for '{}': {}", caseName, e.getMessage());
-            return unverified(caseName, null);
+            log.error("IndianKanoon search failed for '{}': {}", raw.caseName(), e.getMessage());
+            return new VerifiedCitation(raw.caseName(), raw.caseName(), raw.caseName(), "NOT_FOUND", null, null, 0.0, "stripped", "API error: " + e.getMessage(), raw.court(), raw.year(), raw.quotedText());
         }
     }
 
-    // ---- Private: helpers ------------------------------------------------
+    private boolean verifyFragmentQuote(HttpClient client, String token, String docId, String quote) {
+        try {
+            String formBody = "formInput=" + URLEncoder.encode(quote, StandardCharsets.UTF_8) + "&path=" + docId;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(IK_FRAGMENT_URL))
+                    .timeout(Duration.ofSeconds(HTTP_TIMEOUT_SECS))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header("Authorization", "Token " + token)
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody))
+                    .build();
 
-    private VerifiedCitation unverified(String caseName, String rawText) {
-        return new VerifiedCitation(caseName, null,
-                rawText != null ? rawText : caseName,
-                "UNVERIFIED", null, null, null, "stripped");
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() == 200 && response.body().contains(quote);
+        } catch (Exception e) {
+            log.warn("Fragment quote verification failed: {}", e.getMessage());
+            return false;
+        }
     }
 
-    private CitationVerificationResult stubResult() {
-        return new CitationVerificationResult(
-                Map.of("total", 0, "verified", 0, "unverified", 0, "removed", 0),
-                List.of());
+    private VerifiedCitation getFromCache(String cacheKey) {
+        if (jdbcTemplate == null) return null;
+        try {
+            String sql = "SELECT citation_json FROM citation_cache WHERE cache_key = :key AND fetched_at > NOW() - INTERVAL '30 days'";
+            List<String> rows = jdbcTemplate.queryForList(sql, new MapSqlParameterSource("key", cacheKey), String.class);
+            if (!rows.isEmpty()) {
+                return objectMapper.readValue(rows.get(0), VerifiedCitation.class);
+            }
+        } catch (Exception ignored) {}
+        return null;
     }
 
-    private CitationVerificationResult emptyResult() {
-        return new CitationVerificationResult(
-                Map.of("total", 0, "verified", 0, "unverified", 0, "removed", 0),
-                List.of());
+    private void saveToCache(String cacheKey, VerifiedCitation citation) {
+        if (jdbcTemplate == null) return;
+        try {
+            String sql = """
+                    INSERT INTO citation_cache (cache_key, citation_json, fetched_at)
+                    VALUES (:key, :json::jsonb, NOW())
+                    ON CONFLICT (cache_key) DO UPDATE SET citation_json = EXCLUDED.citation_json, fetched_at = NOW()
+                    """;
+            MapSqlParameterSource params = new MapSqlParameterSource()
+                    .addValue("key", cacheKey)
+                    .addValue("json", objectMapper.writeValueAsString(citation));
+            jdbcTemplate.update(sql, params);
+        } catch (Exception ignored) {}
+    }
+
+    // ---------------------------------------------------------------------
+    // v7 Stage 3: verification of structured AI citations via IndianKanoon
+    // ---------------------------------------------------------------------
+
+    public static final String VERIFIED = "VERIFIED";
+    public static final String VERIFIED_PARTIAL = "VERIFIED_PARTIAL";
+    public static final String NOT_FOUND = "NOT_FOUND";
+    public static final String NOT_CHECKED = "NOT_CHECKED";
+
+    private static final Set<String> NAME_STOPWORDS = Set.of(
+            "ltd", "limited", "pvt", "private", "co", "company", "the", "m", "s", "ms", "and", "inc",
+            "corp", "corporation", "llp", "of", "others", "ors", "anr", "another");
+
+    /** Flag set when the per-notice cost cap stopped IndianKanoon calls (remaining citations NOT_CHECKED). */
+    public static final String FLAG_IK_COST_CAP = "IK_COST_CAP_REACHED";
+
+    public CitationVerificationResult verifyAiCitations(List<RawAiCitation> rawCitations, UUID noticeId) {
+        return verifyAiCitations(rawCitations, noticeId, null);
+    }
+
+    /**
+     * Verifies every AI citation against IndianKanoon. A missing token, the per-draft call cap
+     * ({@code IK_MAX_CALLS_PER_DRAFT}), the per-notice cost cap ({@code budget}, each call counted at its
+     * configured price {@code citation.indiankanoon.cost-inr-per-*}) or a per-citation API error yields
+     * NOT_CHECKED; HTTP 401 / 403 / 429 from IndianKanoon throw {@link IndianKanoonFatalException} and stop
+     * the run.
+     * <ul>
+     *   <li>VERIFIED — case name, court and year all match a judgment (and the quoted text, if any, is found in it)</li>
+     *   <li>VERIFIED_PARTIAL — name matched but court/year differ or the quote was not found (block flag)</li>
+     *   <li>NOT_FOUND — no judgment with that name (citation text is removed by the caller; warn flag)</li>
+     *   <li>NOT_CHECKED — token missing, cap reached or API error (block flag)</li>
+     * </ul>
+     * The per-citation status is the only output; the caller edits the HTML.
+     */
+    public CitationVerificationResult verifyAiCitations(List<RawAiCitation> rawCitations, UUID noticeId, NoticeCallBudget budget) {
+        List<RawAiCitation> raws = dedupeCitations(rawCitations);
+        List<VerifiedCitation> out = new ArrayList<>();
+        List<String> flags = new ArrayList<>();
+
+        String token = (properties != null && properties.getCitation() != null)
+                ? properties.getCitation().getIndiankanoonApiToken() : null;
+        if (token == null || token.isBlank()) {
+            token = System.getenv("INDIANKANOON_API_TOKEN");
+        }
+        boolean tokenMissing = token == null || token.isBlank();
+        if (tokenMissing && !raws.isEmpty()) {
+            log.warn("INDIANKANOON_API_TOKEN is not set; {} AI citation(s) marked NOT_CHECKED", raws.size());
+            flags.add("MISSING_INDIANKANOON_API_TOKEN");
+        }
+
+        int maxCalls = (properties != null && properties.getCitation() != null)
+                ? properties.getCitation().getMaxCallsPerDraft() : 15;
+        int[] callsMade = {0};
+        Map<String, VerifiedCitation> seen = new HashMap<>();
+
+        for (RawAiCitation r : raws) {
+            String key = citationKey(r);
+            VerifiedCitation result = seen.get(key);
+            if (result == null) {
+                if (tokenMissing) {
+                    result = v7Result(r, NOT_CHECKED, null, "flagged", "INDIANKANOON_API_TOKEN not set");
+                } else {
+                    result = getFromIkCache(key);
+                    if (result == null) {
+                        result = checkAgainstIndianKanoon(r, token, maxCalls, callsMade, noticeId, budget);
+                        if (!NOT_CHECKED.equals(result.status())) {
+                            saveToIkCache(key, result);
+                        }
+                    }
+                }
+                seen.put(key, result);
+            }
+            if (NOT_CHECKED.equals(result.status()) && result.details() != null
+                    && result.details().startsWith("IK call cap") && !flags.contains("IK_MAX_CALLS_EXCEEDED")) {
+                flags.add("IK_MAX_CALLS_EXCEEDED");
+            }
+            if (NOT_CHECKED.equals(result.status()) && result.details() != null
+                    && result.details().startsWith("per-notice cost cap") && !flags.contains(FLAG_IK_COST_CAP)) {
+                flags.add(FLAG_IK_COST_CAP);
+            }
+            out.add(result);
+        }
+
+        long verified = out.stream().filter(c -> VERIFIED.equals(c.status())).count();
+        long partial = out.stream().filter(c -> VERIFIED_PARTIAL.equals(c.status())).count();
+        long notFound = out.stream().filter(c -> NOT_FOUND.equals(c.status())).count();
+        long notChecked = out.stream().filter(c -> NOT_CHECKED.equals(c.status())).count();
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("total", out.size());
+        summary.put("verified", verified);
+        summary.put("partial", partial);
+        summary.put("removed", notFound);
+        summary.put("not_checked", notChecked);
+        summary.put("ik_calls", callsMade[0]);
+        return new CitationVerificationResult(summary, out, null, flags);
+    }
+
+    private VerifiedCitation checkAgainstIndianKanoon(RawAiCitation r, String token, int maxCalls,
+                                                      int[] callsMade, UUID noticeId, NoticeCallBudget budget) {
+        if (callsMade[0] >= maxCalls) {
+            return v7Result(r, NOT_CHECKED, null, "flagged", "IK call cap reached (" + maxCalls + ")");
+        }
+        String capRefusal = costCapRefusal(budget, ApiUsageLogService.IK_SEARCH);
+        if (capRefusal != null) {
+            return v7Result(r, NOT_CHECKED, null, "flagged", capRefusal);
+        }
+        try {
+            callsMade[0]++;
+            recordIkCall(ApiUsageLogService.IK_SEARCH, noticeId, budget);
+            List<IndianKanoonClient.IkDoc> docs = ikClient.search(token, searchQuery(r.caseName()));
+            IndianKanoonClient.IkDoc match = null;
+            for (IndianKanoonClient.IkDoc d : docs) {
+                if (namesMatch(r.caseName(), d.title())) {
+                    match = d;
+                    break;
+                }
+            }
+            if (match == null) {
+                return v7Result(r, NOT_FOUND, null, "stripped", "No judgment with this case name found on IndianKanoon");
+            }
+            String url = match.docId() != null ? "https://indiankanoon.org/doc/" + match.docId() + "/" : null;
+
+            List<String> mismatches = new ArrayList<>();
+            if (!courtMatches(r.court(), match.docSource())) {
+                mismatches.add("court (cited: " + r.court() + ", IndianKanoon: " + match.docSource() + ")");
+            }
+            Integer ikYear = extractYear(match.publishDate(), match.title());
+            if (r.year() == null || !r.year().equals(ikYear)) {
+                mismatches.add("year (cited: " + r.year() + ", IndianKanoon: " + ikYear + ")");
+            }
+            if (!mismatches.isEmpty()) {
+                return v7Result(r, VERIFIED_PARTIAL, url, "flagged", "Name matched; mismatch in " + String.join(", ", mismatches));
+            }
+
+            if (r.quotedText() != null && !r.quotedText().isBlank() && match.docId() != null) {
+                if (callsMade[0] >= maxCalls) {
+                    return v7Result(r, VERIFIED_PARTIAL, url, "flagged", "Name/court/year matched; quote not checked (IK call cap reached)");
+                }
+                if (costCapRefusal(budget, ApiUsageLogService.IK_FRAGMENT) != null) {
+                    return v7Result(r, VERIFIED_PARTIAL, url, "flagged", "Name/court/year matched; quote not checked (per-notice cost cap)");
+                }
+                callsMade[0]++;
+                recordIkCall(ApiUsageLogService.IK_FRAGMENT, noticeId, budget);
+                String fragment = ikClient.fragment(token, match.docId(), r.quotedText());
+                if (!normaliseText(fragment).contains(normaliseText(r.quotedText()))) {
+                    return v7Result(r, VERIFIED_PARTIAL, url, "flagged", "Name/court/year matched; quoted text not found in judgment");
+                }
+            }
+            return v7Result(r, VERIFIED, url, "passed", "Matched IndianKanoon judgment: " + match.title());
+        } catch (IndianKanoonFatalException e) {
+            log.error("IndianKanoon fatal error, run stopped: {}", e.getMessage());
+            throw e;   // 401 / 403 / 429: never a NOT_CHECKED fallback
+        } catch (Exception e) {
+            log.warn("IndianKanoon check failed for one citation: {}", e.getClass().getSimpleName());
+            return v7Result(r, NOT_CHECKED, null, "flagged", "IndianKanoon API error");
+        }
+    }
+
+    /** The configured INR price of one IndianKanoon call of {@code kind} (0 when none is configured). */
+    private java.math.BigDecimal ikCostInr(String kind) {
+        return apiUsageLogService != null ? apiUsageLogService.indianKanoonCostInr(kind) : java.math.BigDecimal.ZERO;
+    }
+
+    /** Why the per-notice cost cap forbids the next IndianKanoon call, or null. */
+    private String costCapRefusal(NoticeCallBudget budget, String kind) {
+        if (budget == null) return null;
+        return budget.refusalReasonForFixedCost(kind, ikCostInr(kind));
+    }
+
+    /** Logs the call at its configured price (usage row + run ledger) and counts it against the notice budget. */
+    private void recordIkCall(String kind, UUID noticeId, NoticeCallBudget budget) {
+        java.math.BigDecimal cost = ikCostInr(kind);
+        if (apiUsageLogService != null) cost = apiUsageLogService.logIndianKanoonCall(kind, null, noticeId);
+        if (budget != null) budget.addSpentInr(cost);
+    }
+
+    private VerifiedCitation getFromIkCache(String cacheKey) {
+        if (jdbcTemplate == null) return null;
+        try {
+            int ttlDays = (properties != null && properties.getCitation() != null) ? properties.getCitation().getCacheTtlDays() : 30;
+            List<String> rows = jdbcTemplate.queryForList(
+                    "SELECT citation_json::text FROM ik_citation_cache WHERE cache_key = :key AND fetched_at > NOW() - make_interval(days => :ttl)",
+                    new MapSqlParameterSource("key", cacheKey).addValue("ttl", ttlDays), String.class);
+            if (!rows.isEmpty()) {
+                return objectMapper.readValue(rows.get(0), VerifiedCitation.class);
+            }
+        } catch (Exception e) {
+            log.debug("ik_citation_cache read failed: {}", e.getClass().getSimpleName());
+        }
+        return null;
+    }
+
+    private void saveToIkCache(String cacheKey, VerifiedCitation citation) {
+        if (jdbcTemplate == null) return;
+        try {
+            jdbcTemplate.update("""
+                    INSERT INTO ik_citation_cache (cache_key, citation_json, fetched_at)
+                    VALUES (:key, CAST(:json AS JSONB), NOW())
+                    ON CONFLICT (cache_key) DO UPDATE SET citation_json = EXCLUDED.citation_json, fetched_at = NOW()
+                    """, new MapSqlParameterSource().addValue("key", cacheKey).addValue("json", objectMapper.writeValueAsString(citation)));
+        } catch (Exception e) {
+            log.debug("ik_citation_cache write failed: {}", e.getClass().getSimpleName());
+        }
+    }
+
+    private static final Pattern STATUTORY_REF = Pattern.compile(
+            "(?i)^\\s*(section|sec\\.?|rule|notification|circular|instruction|order)\\s*(?:no\\.?|number)?\\s*([0-9][0-9A-Za-z()/.\\-]*)");
+    private static final Pattern REPORTER = Pattern.compile(
+            "(?i)[,;]?\\s*(?:[\\[(]\\s*(?:19|20)\\d{2}\\s*[\\])]|\\b(?:19|20)\\d{2}\\s*\\(|\\bAIR\\b|\\(?\\d+\\)?\\s*(?:SCC|GSTL|G\\.S\\.T\\.L|STR|ELT|E\\.L\\.T|taxmann|Centax|TMI)\\b).*$");
+    private static final Pattern VERSUS = Pattern.compile("(?i)\\s+(?:vs?\\.?|v/s\\.?|versus)\\s+");
+    private static final Set<String> NAME_NOISE = Set.of("m", "s", "ms", "the", "ltd", "limited", "pvt", "private", "p",
+            "co", "company", "corp", "corporation", "inc", "and", "anr", "ors", "others", "another");
+
+    /**
+     * Identity of a citation for de-duplication: case-insensitive party names without reporter citations,
+     * punctuation or company suffixes ("M/s ABC Pvt. Ltd. vs. Union of India, (2023) 5 SCC 1" and
+     * "ABC Private Limited v Union of India" are the same case); for statutory references, the kind
+     * and number ("Notification No. 40/2017-Central Tax" == "notification 40/2017-central tax").
+     */
+    public static String citationIdentity(String name) {
+        if (name == null) return "";
+        String s = name.replace('\u00a0', ' ').trim();
+        Matcher st = STATUTORY_REF.matcher(s);
+        if (st.find()) {
+            String kind = st.group(1).toLowerCase(Locale.ROOT).replace(".", "");
+            if (kind.equals("sec")) kind = "section";
+            return kind + ":" + st.group(2).toLowerCase(Locale.ROOT).replaceAll("[.\\-]+$", "");
+        }
+        s = REPORTER.matcher(s).replaceFirst("");
+        s = VERSUS.matcher(s).replaceAll(" v ");
+        s = TRAILING_PLACE.matcher(s).replaceFirst("$1");
+        StringBuilder out = new StringBuilder();
+        for (String tok : s.toLowerCase(Locale.ROOT).replace("&", " and ").replaceAll("[^a-z0-9 ]", " ").trim().split("\\s+")) {
+            if (tok.isEmpty() || NAME_NOISE.contains(tok)) continue;
+            tok = NAME_ABBREVIATIONS.getOrDefault(tok, tok);
+            if (out.length() > 0) out.append(' ');
+            out.append(tok);
+        }
+        return out.toString();
+    }
+
+    /**
+     * ", Delhi" / ", New Delhi" / ", Mumbai" after the respondent: a place (one to three words, no digits) after the
+     * last comma of the respondent's side is not part of the case's identity.
+     */
+    private static final Pattern TRAILING_PLACE = Pattern.compile("(?i)(\\sv\\s[^,]+?)\\s*,\\s*[A-Za-z][A-Za-z.]*(?:\\s+[A-Za-z][A-Za-z.]*){0,2}\\s*\\.?\\s*$");
+    /** Abbreviations folded to one spelling ("Commr." / "Commissioner", "Govt." / "Government"). */
+    private static final Map<String, String> NAME_ABBREVIATIONS = Map.of(
+            "commr", "commissioner", "comm", "commissioner", "govt", "government", "asst", "assistant", "dy", "deputy",
+            "addl", "additional", "jt", "joint");
+
+    /**
+     * Drops repeated citations (same {@link #citationIdentity}), keeping the first and filling its missing
+     * court, year, quote or purpose from the repeats. Order is preserved.
+     */
+    public static List<RawAiCitation> dedupeCitations(List<RawAiCitation> citations) {
+        if (citations == null || citations.isEmpty()) return List.of();
+        Map<String, RawAiCitation> byKey = new LinkedHashMap<>();
+        for (RawAiCitation c : citations) {
+            if (c == null || c.caseName() == null || c.caseName().isBlank()) continue;
+            String key = citationIdentity(c.caseName());
+            RawAiCitation first = byKey.get(key);
+            if (first == null) {
+                byKey.put(key, c);
+            } else {
+                byKey.put(key, new RawAiCitation(first.caseName(),
+                        first.court() != null ? first.court() : c.court(),
+                        first.year() != null ? first.year() : c.year(),
+                        first.quotedText() != null ? first.quotedText() : c.quotedText(),
+                        first.citedFor() != null ? first.citedFor() : c.citedFor()));
+            }
+        }
+        return new ArrayList<>(byKey.values());
+    }
+
+    private static VerifiedCitation v7Result(RawAiCitation r, String status, String url, String action, String details) {
+        return new VerifiedCitation(r.caseName(), r.caseName(), r.citedFor(), status, url, null,
+                VERIFIED.equals(status) ? 1.0 : 0.0, action, details, r.court(), r.year(), r.quotedText());
+    }
+
+    private static String citationKey(RawAiCitation r) {
+        String quote = r.quotedText() != null ? Integer.toHexString(normaliseText(r.quotedText()).hashCode()) : "-";
+        return "v7|" + String.join(" ", partyTokens(r.caseName())) + "|" + normaliseText(Objects.toString(r.court(), ""))
+                + "|" + r.year() + "|" + quote;
+    }
+
+    // ---------------------------------------------------------------- case-name matching against IndianKanoon titles
+
+    /** "(Arise India Ltd. v. Commissioner ...)" after a case name: a second case merged into the first in brackets. */
+    private static final Pattern BRACKETED_CASE = Pattern.compile(
+            "(?i)\\s*[(\\[][^()\\[\\]]*\\b(?:vs?\\.?|v/s\\.?|versus)\\b[^()\\[\\]]*[)\\]]");
+    /** "... on 13 December, 2021" at the end of an IndianKanoon title. */
+    private static final Pattern TITLE_DATE = Pattern.compile("(?i)\\s+on\\s+\\d{1,2}\\s+[A-Za-z]+,?\\s+(?:19|20)\\d{2}\\s*$");
+    /** "(Data Cell)", "[Appellant]": bracketed parts of a party name (after "(P)" has been folded to "private"). */
+    private static final Pattern BRACKETED_PART = Pattern.compile("\\s*[(\\[][^()\\[\\]]*[)\\]]");
+    /** Words that carry no identity: articles, "M/s", "and others", company suffixes (folded first, then dropped). */
+    private static final Set<String> NAME_DROP = Set.of(
+            "the", "m", "s", "ms", "and", "another", "anr", "others", "ors", "etc", "etc.", "through", "thru", "its",
+            "limited", "private", "company", "corporation", "incorporated", "llp", "ltd", "pvt", "co", "corp", "inc", "of");
+    /** Abbreviations folded to their full spelling before comparison (one token -> one or more tokens). */
+    private static final Map<String, String> NAME_EXPANSIONS = Map.ofEntries(
+            Map.entry("pvt", "private"), Map.entry("ltd", "limited"), Map.entry("p", "private"), Map.entry("co", "company"),
+            Map.entry("corp", "corporation"), Map.entry("inc", "incorporated"),
+            Map.entry("commr", "commissioner"), Map.entry("comm", "commissioner"), Map.entry("cmr", "commissioner"),
+            Map.entry("asst", "assistant"), Map.entry("asstt", "assistant"), Map.entry("addl", "additional"),
+            Map.entry("dy", "deputy"), Map.entry("jt", "joint"), Map.entry("govt", "government"),
+            Map.entry("cce", "commissioner central excise"), Map.entry("cgst", "central goods services tax"),
+            Map.entry("cit", "commissioner income tax"), Map.entry("uoi", "union india"),
+            Map.entry("cst", "commissioner sales tax"), Map.entry("ctt", "commissioner trade taxes"),
+            Map.entry("ito", "income tax officer"), Map.entry("sto", "state tax officer"), Map.entry("ac", "assistant commissioner"));
+
+    /**
+     * The text sent to the IndianKanoon search for a cited name: a second case merged into the name in brackets
+     * ("X v. Y (A v. B)") is dropped, as is a reporter citation after the name. Other names go as written.
+     */
+    static String searchQuery(String citedName) {
+        if (citedName == null) return "";
+        String s = BRACKETED_CASE.matcher(citedName.replace(' ', ' ')).replaceAll("");
+        s = stripReporterAfterRespondent(s);
+        s = s.replaceAll("\\s+", " ").trim();
+        return s.isEmpty() ? citedName.trim() : s;
+    }
+
+    /** Removes a reporter citation after the respondent only, so a petitioner named "Air India" is never cut at "AIR". */
+    private static String stripReporterAfterRespondent(String s) {
+        Matcher v = VERSUS.matcher(s);
+        int last = -1;
+        while (v.find()) last = v.end();
+        if (last < 0) return s;
+        return s.substring(0, last) + REPORTER.matcher(s.substring(last)).replaceFirst("");
+    }
+
+    /**
+     * The significant words of each party of a case name, in order: the name is cut at a bracketed second case and a
+     * reporter citation, split at "v." / "vs" / "versus", a trailing " on <date>" (IndianKanoon titles) and bracketed
+     * parts such as "(Data Cell)" are dropped, "(P)" / "Pvt" / "Ltd" / "Commr" / "Asst" / "CCE" ... are folded to their
+     * full spelling, "&" to "and", punctuation inside initials ("D.Y.Beathel", "M/S.") becomes spaces, and articles,
+     * "M/s", "and another", "& Ors", "etc" and company suffixes are dropped. A one-party title gives one list.
+     */
+    static List<List<String>> partyWords(String name) {
+        if (name == null) return List.of();
+        String s = name.replace(' ', ' ').replace("&amp;", " and ").replace("&", " and ");
+        s = BRACKETED_CASE.matcher(s).replaceAll("");
+        s = TITLE_DATE.matcher(s).replaceFirst("");
+        s = stripReporterAfterRespondent(s);
+        s = s.replaceAll("(?i)\\(\\s*p\\s*\\)", " private ");
+        s = BRACKETED_PART.matcher(s).replaceAll(" ");
+        List<List<String>> out = new ArrayList<>();
+        for (String side : VERSUS.split(" " + s + " ")) {
+            List<String> words = new ArrayList<>();
+            String plain = side.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", " ").trim();
+            for (String tok : plain.split(" ")) {
+                if (tok.isEmpty()) continue;
+                for (String w : NAME_EXPANSIONS.getOrDefault(tok, tok).split(" ")) {
+                    if (!NAME_DROP.contains(w)) words.add(w);
+                }
+            }
+            if (!words.isEmpty()) out.add(words);
+        }
+        return out;
+    }
+
+    /** The word of a party that must be present for a match: its first word of three or more letters, else its first word. */
+    private static String keyWord(List<String> words) {
+        for (String w : words) if (w.length() >= 3) return w;
+        return words.isEmpty() ? null : words.get(0);
+    }
+
+    /**
+     * True when the IndianKanoon title names the cited case. Each cited party is compared with the title party in the
+     * same position (both orders are tried): at least 60% of the cited party's significant words, or every word of the
+     * shorter side, must appear in the title party, and the first party's key word must. A title without "vs" is
+     * compared as one bag of words. Company suffixes, "M/s", "and others", bracketed parts, the judgment date and
+     * abbreviations are normalised on both sides ({@link #partyWords}).
+     */
+    static boolean namesMatch(String citedName, String ikTitle) {
+        if (citedName == null || ikTitle == null) return false;
+        List<List<String>> cited = partyWords(citedName);
+        List<List<String>> title = partyWords(ikTitle);
+        if (cited.isEmpty() || title.isEmpty()) return false;
+        if (cited.size() == 1 || title.size() == 1) {
+            List<String> all = new ArrayList<>();
+            title.forEach(all::addAll);
+            for (int i = 0; i < cited.size(); i++) {
+                if (!partyMatches(cited.get(i), all, i == 0)) return false;
+            }
+            return true;
+        }
+        if (partyMatches(cited.get(0), title.get(0), true) && partyMatches(cited.get(1), title.get(1), false)) return true;
+        return partyMatches(cited.get(0), title.get(1), true) && partyMatches(cited.get(1), title.get(0), false);
+    }
+
+    private static boolean partyMatches(List<String> cited, List<String> titleWords, boolean keyWordRequired) {
+        if (cited.isEmpty()) return true;
+        Set<String> title = new HashSet<>(titleWords);
+        if (keyWordRequired) {
+            String key = keyWord(cited);
+            if (key != null && !title.contains(key)) return false;
+        }
+        long hits = cited.stream().filter(title::contains).count();
+        int shorter = Math.min(cited.size(), title.size());
+        // every word of the shorter side (two or more words, or a one-word party on both sides), or >= 60% of the cited words
+        boolean shorterCovered = hits >= shorter && (shorter >= 2 || cited.size() == 1 && title.size() == 1);
+        return shorterCovered || hits * 5 >= cited.size() * 3;
+    }
+
+    // ---------------------------------------------------------------- court matching against IndianKanoon docsource
+
+    /** Place / state words of a high court and their other spellings; both sides are folded to the first spelling. */
+    private static final List<List<String>> COURT_PLACE_ALIASES = List.of(
+            List.of("bombay", "mumbai", "maharashtra", "nagpur", "aurangabad", "goa", "panaji"),
+            List.of("madras", "chennai", "tamil", "tamilnadu", "madurai"),
+            List.of("calcutta", "kolkata", "bengal", "jalpaiguri", "andaman", "port", "blair"),
+            List.of("karnataka", "bangalore", "bengaluru", "dharwad", "kalaburagi", "gulbarga"),
+            List.of("delhi", "newdelhi"), List.of("gujarat", "ahmedabad"), List.of("allahabad", "prayagraj", "lucknow"),
+            List.of("punjab", "haryana", "chandigarh"), List.of("telangana", "hyderabad"), List.of("andhra", "amaravati"),
+            List.of("kerala", "ernakulam", "kochi"), List.of("orissa", "odisha", "cuttack"),
+            List.of("madhya", "jabalpur", "indore", "gwalior"), List.of("rajasthan", "jaipur", "jodhpur"),
+            List.of("patna", "bihar"), List.of("jharkhand", "ranchi"), List.of("chhattisgarh", "bilaspur"),
+            List.of("uttarakhand", "nainital"), List.of("himachal", "shimla"), List.of("gauhati", "guwahati", "assam"),
+            List.of("jammu", "kashmir", "srinagar", "ladakh"), List.of("tripura", "agartala"), List.of("meghalaya", "shillong"),
+            List.of("manipur", "imphal"), List.of("sikkim", "gangtok"));
+    private static final Set<String> COURT_NOISE = Set.of(
+            "court", "courts", "of", "the", "hon", "ble", "honble", "honourable", "india", "high", "supreme", "judicature",
+            "at", "bench", "hc", "sc", "and", "pradesh", "state", "division", "single", "larger", "full", "constitution",
+            "principal", "seat", "circuit", "regional", "zonal", "new");
+
+    private enum CourtKind { SUPREME, HIGH, TRIBUNAL, AUTHORITY, OTHER }
+
+    private static CourtKind courtKind(String n) {
+        if (n.contains("supreme") || n.matches(".*\\bsc\\b.*") || n.contains("apex")) return CourtKind.SUPREME;
+        if (n.contains("high court") || n.matches(".*\\bhc\\b.*") || n.contains("high ct")) return CourtKind.HIGH;
+        if (n.contains("tribunal") || n.matches(".*\\b(?:cestat|itat|nclt|nclat|cat|gstat|appellate)\\b.*")) return CourtKind.TRIBUNAL;
+        if (n.matches(".*\\b(?:aar|aaar|authority|commissioner|appeals)\\b.*")) return CourtKind.AUTHORITY;
+        return CourtKind.OTHER;
+    }
+
+    /** The subject of a tribunal ("cestat" / "itat" ...) so that two tribunals of different subjects never match. */
+    private static String tribunalSubject(String n) {
+        if (n.contains("cestat") || n.contains("customs") || n.contains("excise") || n.contains("service tax")) return "cestat";
+        if (n.contains("itat") || n.contains("income tax")) return "itat";
+        if (n.contains("nclat")) return "nclat";
+        if (n.contains("nclt") || n.contains("company law")) return "nclt";
+        if (n.contains("gstat") || n.contains("goods and services")) return "gstat";
+        return null;
+    }
+
+    private static String foldPlace(String token) {
+        for (List<String> aliases : COURT_PLACE_ALIASES) {
+            if (aliases.contains(token)) return aliases.get(0);
+        }
+        return token;
+    }
+
+    private static Set<String> courtPlaces(String n) {
+        Set<String> out = new HashSet<>();
+        for (String t : n.split(" ")) {
+            if (t.isBlank() || COURT_NOISE.contains(t)) continue;
+            // tribunal / authority words are not places
+            if (t.matches("cestat|itat|nclt|nclat|gstat|cat|aar|aaar|tribunal|appellate|authority|customs|excise|service|tax|income|goods|services|advance|ruling|rulings|national|company|law|central|administrative")) continue;
+            out.add(foldPlace(t));
+        }
+        return out;
+    }
+
+    /**
+     * True when the cited court is the IndianKanoon docsource. Supreme Court, high courts, tribunals and authorities
+     * are told apart; a high court must agree on its place / state (other spellings folded: Bombay / Mumbai, Madras /
+     * Chennai, Calcutta / Kolkata, Karnataka / Bangalore ...; "Hon'ble", "of Judicature", "at", a bench word are
+     * ignored); tribunals agree on their subject (CESTAT / ITAT ...) and ignore the bench place; docsource strings such
+     * as "Supreme Court of India", "Calcutta High Court", "CESTAT" and "Appellate Tribunal" are accepted.
+     */
+    static boolean courtMatches(String citedCourt, String ikSource) {
+        if (citedCourt == null || citedCourt.isBlank() || ikSource == null || ikSource.isBlank()) return false;
+        String cited = normaliseText(citedCourt).replaceAll("\\bnew delhi\\b", "newdelhi");
+        String source = normaliseText(ikSource).replaceAll("\\bnew delhi\\b", "newdelhi");
+        CourtKind ck = courtKind(cited);
+        CourtKind sk = courtKind(source);
+        if (ck != sk) {
+            // "Appellate Tribunal" / "CESTAT" cited against an authority-like docsource, or the reverse: both non-courts
+            boolean bothNonCourt = (ck == CourtKind.TRIBUNAL || ck == CourtKind.AUTHORITY || ck == CourtKind.OTHER)
+                    && (sk == CourtKind.TRIBUNAL || sk == CourtKind.AUTHORITY || sk == CourtKind.OTHER);
+            if (!bothNonCourt) return false;
+        }
+        if (ck == CourtKind.SUPREME) return true;
+        if (ck == CourtKind.HIGH) {
+            Set<String> citedPlaces = courtPlaces(cited);
+            Set<String> sourcePlaces = courtPlaces(source);
+            return sourcePlaces.containsAll(citedPlaces);
+        }
+        String cs = tribunalSubject(cited);
+        String ss = tribunalSubject(source);
+        if (cs != null && ss != null) return cs.equals(ss);
+        if (cs != null || ss != null) return true;   // one side names only "Appellate Tribunal": accept
+        Set<String> citedPlaces = courtPlaces(cited);
+        Set<String> sourcePlaces = courtPlaces(source);
+        return sourcePlaces.containsAll(citedPlaces) || citedPlaces.containsAll(sourcePlaces);
+    }
+
+    private static final Pattern YEAR = Pattern.compile("\\b(19|20)\\d{2}\\b");
+
+    /** Year of the judgment: from the publish date if present, else the last year in the title ("... on 12 May, 2016"). */
+    private static Integer extractYear(String publishDate, String title) {
+        if (publishDate != null) {
+            Matcher m = YEAR.matcher(publishDate);
+            if (m.find()) return Integer.parseInt(m.group());
+        }
+        Integer last = null;
+        if (title != null) {
+            Matcher m = YEAR.matcher(title);
+            while (m.find()) last = Integer.parseInt(m.group());
+        }
+        return last;
+    }
+
+    private static List<String> partyTokens(String name) {
+        return significant(normaliseText(Objects.toString(name, "")).replace(" vs ", " v "), NAME_STOPWORDS);
+    }
+
+    private static List<String> significant(String text, Set<String> stop) {
+        List<String> out = new ArrayList<>();
+        for (String t : text.trim().split(" ")) {
+            if (!t.isBlank() && !stop.contains(t)) out.add(t);
+        }
+        return out;
+    }
+
+    static String normaliseText(String s) {
+        if (s == null) return "";
+        return s.toLowerCase()
+                .replace("&amp;", " and ")
+                .replaceAll("\\bv(?:s)?\\.", " v ")
+                .replaceAll("[^a-z0-9 ]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
+    /**
+     * Removes the citation of {@code caseName} (and a reporter reference / year immediately after it,
+     * e.g. "(2016) 333 ELT 3 (SC)") from AI HTML, leaving the surrounding argument intact.
+     */
+    public static String removeCitationText(String html, String caseName) {
+        if (html == null || html.isBlank() || caseName == null || caseName.isBlank()) return html;
+        String name = Pattern.quote(caseName.trim()).replace(" ", "\\E\\s+\\Q");
+        // optional "(2016) 333 ELT 3 (SC)" / "[2019] 10 SCC 1": year, then volume REPORTER page, then (court)
+        String reporter = "(?:\\s*,?\\s*(?:\\[|\\()(?:19|20)\\d{2}(?:\\]|\\))"
+                + "(?:\\s+\\d+\\s+[A-Z][A-Za-z.]*(?:\\s+[A-Z][A-Za-z.]*)?\\s+\\d+)?"
+                + "(?:\\s*\\((?:SC|[A-Z][A-Za-z .]{1,30})\\))?)?";
+        String cleaned = html.replaceAll("(?i)(?:\\s*(?:see|reference|refer|precedent|relying on|in)\\s*:?\\s*)?"
+                + name + reporter, "");
+        return cleaned
+                .replaceAll("\\(\\s*\\)", "")
+                .replaceAll("\\s+([.,;:])", "$1")
+                .replaceAll("([.;:])\\s*[.;:,]+", "$1")
+                .replaceAll(" {2,}", " ")
+                .replaceAll("<p>\\s*[—–-]?\\s*</p>", "")
+                .replaceAll("<li>\\s*</li>", "");
     }
 }

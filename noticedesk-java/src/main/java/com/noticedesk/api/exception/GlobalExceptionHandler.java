@@ -41,6 +41,14 @@ public class GlobalExceptionHandler {
                 .body(envelope("validation_error", "request validation failed", Map.of("errors", errors)));
     }
 
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleMaxUploadSize(org.springframework.web.multipart.MaxUploadSizeExceededException ex) {
+        log.warn("max_upload_size_exceeded: {}", ex.getMessage());
+        return ResponseEntity
+                .status(HttpStatus.BAD_REQUEST)
+                .body(envelope("payload_too_large", "File size exceeds the maximum allowed upload size of 50 MB", Map.of()));
+    }
+
     @ExceptionHandler(DataAccessException.class)
     public ResponseEntity<Map<String, Object>> handleDb(DataAccessException ex) {
         log.error("db_error: {}", ex.getMessage());

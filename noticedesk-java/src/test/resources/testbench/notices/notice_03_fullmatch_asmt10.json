@@ -1,0 +1,21 @@
+{
+  "notice_id": "notice-bench-003",
+  "document_type": "asmt_10",
+  "full_ocr_text": "GOVERNMENT OF KARNATAKA\nCOMMERCIAL TAXES DEPARTMENT\nOFFICE OF THE COMMERCIAL TAX OFFICER, AUDIT-3.1, BENGALURU\n\nForm GST ASMT-10 Intimation of Discrepancy After Scrutiny of Returns\nReference No: ASMT10/KA/2023-24/404\nDate: 10-08-2023\n\nTo,\nM/s Apex Tech Solutions\nGSTIN: 29CCCDD9012C1Z8\nFinancial Year: 2022-23\n\n1. Please take notice that during scrutiny of returns filed by you under Section 61 of the CGST / KGST Act, 2017 for the Financial Year 2022-23, certain discrepancies have been observed upon automated data reconciliation.\n\n2. Reconciliation between your outward supply details filed in Form GSTR-1 and self-assessed tax paid in Form GSTR-3B shows a significant variance in reported taxable turnover and tax liability.\n\n3. IT IS OBSERVED that total taxable outward turnover reported in Form GSTR-1 for FY 2022-23 is Rs. 50,00,000/- with tax liability of Rs. 9,00,000/-. However, turnover reported in GSTR-3B is Rs. 37,50,000/- with tax paid of Rs. 6,75,000/-. This leaves an unexplained turnover gap of Rs. 12,50,000/- and unpaid differential tax of Rs. 2,25,000/-.\n\n4. ACCORDINGLY, under Rule 99 of the CGST Rules 2017, you are informed of the aforesaid discrepancy and requested to offer your explanation in Form GST ASMT-11.\n\n5. YOU ARE HEREBY REQUESTED to explain the reasons for the discrepancy of Rs. 12,50,000/- in turnover and pay the differential tax of Rs. 2,25,000/- along with applicable interest under Section 50 within 30 days.\n\n6. Please note that if no satisfactory explanation is received within 30 days or the differential tax is not paid, appropriate proceedings under Section 73 or Section 74 shall be initiated without further notice.",
+  "answer_key": {
+    "expected_issues": 1,
+    "issues": [
+      {
+        "issue_no": 1,
+        "status": "full",
+        "card_ids": ["CARD-010"],
+        "key_facts": {
+          "period": "2022-23",
+          "amount": 225000.0,
+          "legal_section": "Rule 99"
+        }
+      }
+    ],
+    "para_count": 6
+  }
+}

@@ -1,0 +1,51 @@
+=================================================================
+SCENARIO 2: NOVEL NOTICE & AUTO-CACHING
+=================================================================
+Prompt Version: fast_track_corpus_v1
+Provider: fast-track
+
+SECTION 1: Title & Header
+<p><b>BEFORE THE PROPER OFFICER, GOODS AND SERVICES TAX DEPARTMENT</b></p><p>REPLY TO SHOW CAUSE NOTICE / INTIMATION</p>
+
+SECTION 2: Jurisdiction & Forum
+<p><b>To:</b> Proper Officer, Ward 10</p><p><b>Jurisdiction:</b> Maharashtra</p>
+
+SECTION 3: Taxpayer Details
+<p><b>Taxpayer Name:</b> CryptoNode Systems India<br><b>GSTIN:</b> 27BBBCC9876K1Z9<br><b>PAN:</b> AAACA1234A</p>
+
+SECTION 4: Notice Reference & Subject
+<p><b>Ref Notice No:</b> CUSTOM/999/2026 | <b>DIN/RFN:</b> DIN-2026-99</p>
+
+SECTION 5: Statement of Facts
+<p>The Taxpayer respectfully submits the factual background of the matter for Financial Year 2023-24.</p>
+
+SECTION 6: Preliminary Objections
+<p>1. The subject notice/intimation is barred by limitation and procedural defects under the GST Law.<br>2. Absence of proper DIN/RFN invalidates the proceeding per CBIC circulars.</p>
+
+SECTION 7: Substantive Reply & Defense
+<div class="template-body">REPLY ON BEHALF OF CryptoNode Systems India</p><p>GSTIN: 27BBBCC9876K1Z9</p><p>Respected Sir/Madam,</p><p>With reference to the notice/intimation issued under GST Law for FY 2023-24, we submit that all tax liabilities have been duly discharged in accordance with law. It is requested that the proposed proceedings be dropped and closure issued.</p><p>Thanking you,<br>CryptoNode Systems India</div>
+
+SECTION 8: Statutory Provisions & Analysis
+<p>Analysis of applicable provisions under Sections 16, 73, 74, 75, 129, and 140 of the Central Goods and Services Tax Act, 2017.</p>
+
+SECTION 9: Precedents & Judicial Decisions
+<p>Relied upon binding precedents of the Hon'ble Supreme Court and High Courts regarding natural justice and statutory compliance under GST.</p>
+
+SECTION 10: Documentary Evidence List
+<ul><li>Copy of GSTR-3B & GSTR-1 returns</li><li>GSTR-2A/2B Reconciliation Statement</li><li>Tax payment receipts (DRC-03)</li></ul>
+
+SECTION 11: Prayer Clause
+<p>In light of the above submissions, it is prayed that the proposed proceedings/demand be dropped and proceedings closed.</p>
+
+SECTION 12: Verification & Declaration
+<p>I, Authorized Signatory for CryptoNode Systems India, do hereby verify that the contents of this reply are true to the best of my knowledge and belief.</p>
+
+SECTION 13: Signature & Representation
+<p><b>For CryptoNode Systems India</b><br><br>Authorized Signatory / Legal Advocate</p>
+
+SECTION 14: Internal Partner Note
+<p>Fast-tracked output compiled from verified GST legal template.</p>
+
+SECTION 15: Client Summary
+<p>Formal reply prepared and submitted for filing before the Proper Officer.</p>
+

@@ -11,6 +11,8 @@ public class AppProperties {
 
     private String environment = "development";
     private String logLevel = "INFO";
+    /** Directory holding private (non-committed) seed data; empty = private seeding skipped. */
+    private String privateSeedDir = "";
 
     private Auth auth = new Auth();
     private Llm llm = new Llm();
@@ -20,8 +22,13 @@ public class AppProperties {
     private Workflow workflow = new Workflow();
     private DocumentParsing documentParsing = new DocumentParsing();
     private Drafting drafting = new Drafting();
+    private Embedding embedding = new Embedding();
     private String sentryDsn;
     private List<String> allowedOrigins = List.of("http://localhost:3000");
+    private Matching matching = new Matching();
+    private Pricing pricing = new Pricing();
+    private Citation citation = new Citation();
+    private Catalogue catalogue = new Catalogue();
 
     public boolean isDevAuthAllowed() {
         return "development".equals(environment) && "dev".equals(auth.getProvider());
@@ -38,27 +45,252 @@ public class AppProperties {
     public static class Llm {
         private String providerPrimary = "stub";
         private String providerSecondary;
+        /** Provider of the new-issue writer (anthropic, gemini, ...); blank = the primary provider. */
+        private String providerNewIssue = "";
+        /** Provider of the high-stakes writer; blank = the primary provider. */
+        private String providerHighStakes = "";
+        /**
+         * Provider of the document parsing agent (triage after OCR: document type, period, sections, grounds);
+         * blank = the primary provider. Env {@code LLM_PROVIDER_TRIAGE}.
+         */
+        private String providerParsing = "";
         private Anthropic anthropic = new Anthropic();
         private OpenAi openai = new OpenAi();
+        private Gemini gemini = new Gemini();
         // Per-agent model overrides
+        private String modelExtraction = "";
+        private String modelFormatting = "";
+        private String modelOpus = "";
         private String modelDrafting = "";
-        private String modelTriage = "claude-sonnet-4-6";
-        private String modelParsing = "claude-sonnet-4-6";
+        private String modelTriage = "";
+        private String modelParsing = "";
+        private String modelMatching = "";
+        private String modelPartialDrafting = "";
+        private String modelNewIssue = "";
+        private String modelHighStakes = "";
+        /** Shortlist title pass ({@code ShortlistTitleAgent}); blank = the matching model. */
+        private String modelShortlist = "";
         private String stubDefaultCanned;
+
+        // Per-agent thinking effort (output_config.effort) for models listed in anthropic.effort-models.
+        // Blank = no effort sent (the model's own default applies). Values come from application.yml.
+        private String effortMatching = "";
+        private String effortPartialDrafting = "";
+        private String effortNewIssue = "";
+        private String effortHighStakes = "";
+        /** Template variable extraction step (runs on the partial-drafting model): a lookup task, low effort. */
+        private String effortTemplateVariables = "low";
+        /** Shortlist title pass: a generous read of one-line titles, low effort. */
+        private String effortShortlist = "low";
+
+        // Per-agent max_tokens. A thinking model spends output tokens on thinking before the JSON,
+        // so the cap must leave room for both. A max_tokens stop is retried once with the *Retry cap.
+        // Integer so an empty env var binds to null and falls back to the default below.
+        private Integer maxTokensMatching = 12000;
+        private Integer maxTokensMatchingRetry = 20000;
+        private Integer maxTokensPartialDrafting = 16000;
+        private Integer maxTokensPartialDraftingRetry = 24000;
+        private Integer maxTokensNewIssue = 16000;
+        private Integer maxTokensNewIssueRetry = 24000;
+        private Integer maxTokensHighStakes = 16000;
+        private Integer maxTokensHighStakesRetry = 24000;
+        /** The variable step returns a short JSON object (a few values per issue). */
+        private Integer maxTokensTemplateVariables = 2000;
+        private Integer maxTokensTemplateVariablesRetry = 4000;
+
+        /** Per-notice spend cap (INR) across all v7 model calls; once reached, remaining AI issues are left to the partner. */
+        private Double maxCostInrPerNotice = 60.0;
+        /** Per-notice limits for the high-stakes model. */
+        private HighStakesLimits highStakes = new HighStakesLimits();
+        /**
+         * Logs a truncated sample (400 chars) of an unparseable writer response. Off by default: the
+         * response can quote the notice. Enable only for the synthetic test bench.
+         */
+        private boolean debugLogRawOutput = false;
+
+        @Data
+        public static class HighStakesLimits {
+            /** Maximum high-stakes model calls (retries included) for one notice. */
+            private Integer maxCallsPerNotice = 6;
+        }
+
+        /**
+         * Provider for an agent key: {@code provider-new-issue} for new_issue, {@code provider-high-stakes} for
+         * high_stakes, {@code provider-parsing} for parsing (triage) when set, else the primary provider.
+         */
+        public String providerForAgent(String agent) {
+            String override = switch (agent != null ? agent : "") {
+                case "new_issue" -> providerNewIssue;
+                case "high_stakes" -> providerHighStakes;
+                case "parsing" -> providerParsing;
+                default -> null;
+            };
+            return override != null && !override.isBlank() ? override.trim().toLowerCase(java.util.Locale.ROOT) : providerPrimary;
+        }
+
+        /** Effort for a v7 agent key (matching, partial_drafting, new_issue, high_stakes, template_variables, shortlist); "" when unset. */
+        public String effortForAgent(String agent) {
+            String v = switch (agent) {
+                case "matching" -> effortMatching;
+                case "partial_drafting" -> effortPartialDrafting;
+                case "new_issue" -> effortNewIssue;
+                case "high_stakes" -> effortHighStakes;
+                case TEMPLATE_VARIABLES -> effortTemplateVariables;
+                case SHORTLIST -> effortShortlist;
+                default -> "";
+            };
+            return v != null ? v.trim() : "";
+        }
+
+        /**
+         * max_tokens for a v7 agent key; {@code retry} = the higher cap used after a max_tokens stop. The shortlist
+         * title pass reads its caps from {@code matching.shortlist}: use {@link AppProperties#maxTokensForAgent}.
+         */
+        public int maxTokensForAgent(String agent, boolean retry) {
+            return switch (agent) {
+                case "matching" -> orDefault(retry ? maxTokensMatchingRetry : maxTokensMatching, retry ? 20000 : 12000);
+                case "partial_drafting" -> orDefault(retry ? maxTokensPartialDraftingRetry : maxTokensPartialDrafting, retry ? 24000 : 16000);
+                case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 24000 : 16000);
+                case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 24000 : 16000);
+                case TEMPLATE_VARIABLES -> orDefault(retry ? maxTokensTemplateVariablesRetry : maxTokensTemplateVariables, retry ? 4000 : 2000);
+                default -> retry ? 16000 : 8000;
+            };
+        }
+
+        /**
+         * Agent key of the template variable extraction step ({@code TemplateVariableAgent}). It has no model of its
+         * own: it runs on the partial-drafting model ({@code LLM_MODEL_PARTIAL_DRAFTING}), so pricing needs nothing new.
+         */
+        public static final String TEMPLATE_VARIABLES = "template_variables";
+
+        /** Agent key of the shortlist title pass ({@code ShortlistTitleAgent}). */
+        public static final String SHORTLIST = "shortlist";
+
+        /** Model of the shortlist title pass: {@code model-shortlist} when set, else the matching model. */
+        public String shortlistModel() {
+            return modelShortlist != null && !modelShortlist.isBlank() ? modelShortlist.trim() : modelMatching;
+        }
+
+        private static int orDefault(Integer value, int fallback) {
+            return value != null && value > 0 ? value : fallback;
+        }
 
         @Data
         public static class Anthropic {
             private String apiKey;
-            private String model = "claude-opus-4-7";
-            private double timeoutSeconds = 180.0;
+            private String workspaceId;
+            private String model = "";
+            private double timeoutSeconds = 600.0;
+            /**
+             * Models that always think: they get output_config.effort and never thinking/temperature/
+             * top_p/top_k. Other Anthropic models keep the legacy request shape.
+             */
+            private List<String> effortModels = new java.util.ArrayList<>();
+            /** Upper bound applied to any max_tokens value sent to Anthropic. */
+            private Integer maxTokensCeiling = 32000;
         }
 
         @Data
         public static class OpenAi {
             private String apiKey;
-            private String model = "gpt-4o";
+            private String model = "";
             private double timeoutSeconds = 180.0;
             private String baseUrl = "";
+        }
+
+        @Data
+        public static class Gemini {
+            private String apiKey;
+            private String model = "";
+            private double timeoutSeconds = 180.0;
+        }
+    }
+
+    @Data
+    public static class Matching {
+        private boolean allowDraftCards = false;
+        private Shortlist shortlist = new Shortlist();
+        private Citations citations = new Citations();
+
+        @Data
+        public static class Citations {
+            /** Default of {@code matching.citations.max-per-issue}. */
+            public static final int DEFAULT_MAX_PER_ISSUE = 3;
+            /**
+             * Cases an AI writer may cite per issue (env CITATIONS_MAX_PER_ISSUE). Cases beyond it stay in the text but
+             * are marked NOT_CHECKED ("beyond per-issue citation limit") and never sent to IndianKanoon; 0 = no limit.
+             */
+            private int maxPerIssue = DEFAULT_MAX_PER_ISSUE;
+        }
+
+        @Data
+        public static class Shortlist {
+            /**
+             * Render only the cards a code shortlist keeps for the notice (card stages and statutory / form keywords
+             * against the notice text; see {@code CardShortlister}) instead of the whole catalogue.
+             */
+            private boolean enabled = true;
+            /** Label scoring keeps every card scoring at least this fraction of the best score in the stage pool. */
+            private double relativeCutoff = 0.35;
+            /** When the cutoff keeps fewer cards than this, the top cards by label score are kept up to this many. */
+            private int minCards = 15;
+            /** Run the AI title pass ({@code ShortlistTitleAgent}) and add its picks to the label picks. */
+            private boolean aiTitles = true;
+            /** Relative cut-off of the label scoring when the AI title pass returned at least one card. */
+            private double relativeCutoffWithAi = 0.5;
+            /** Min-cards top-up of the label scoring when the AI title pass returned at least one card. */
+            private int minCardsWithAi = 12;
+            /**
+             * Title substrings (case-insensitive) of the cards added in full for a show cause notice / intimation that
+             * cites no section or rule (see {@code CardShortlister}).
+             */
+            private List<String> absenceTitlePatterns = new java.util.ArrayList<>(List.of("no section", "vague"));
+            /** Log the shortlisted card ids (ids only) at INFO instead of DEBUG (env MATCHING_SHORTLIST_LOG_IDS). */
+            private boolean logIds = false;
+            /** max_tokens of the AI title pass (thinking tokens count against it). */
+            private Integer titleMaxTokens = 6000;
+            /** max_tokens of the AI title pass retry after a max_tokens stop. */
+            private Integer titleRetryMaxTokens = 9000;
+            /** Default of {@code matching.shortlist.title-max-cards}. */
+            public static final int DEFAULT_TITLE_MAX_CARDS = 15;
+            /**
+             * Cards kept from the AI title pass (env SHORTLIST_TITLE_MAX_CARDS): the model answers a ranked list and
+             * the first this many are used, so the shortlist (and the matching prompt's size) is the same from run to
+             * run on the same notice. 0 = keep every id.
+             */
+            private int titleMaxCards = DEFAULT_TITLE_MAX_CARDS;
+        }
+    }
+
+    @Data
+    public static class Catalogue {
+        /**
+         * Whether matching sees provisional content: 'draft' issue cards promoted from an approved AI issue
+         * section (and their 'provisional' reply templates). Default true in development so a promoted
+         * template is reused on the next similar notice; set false to match against CA-approved cards only.
+         */
+        private boolean includeProvisional = true;
+        /**
+         * Whether matching sees the approved entries of the learned library ({@code $PRIVATE_SEED_DIR/learned}):
+         * issues the new-issue writer drafted with no catalogue card, approved by a named person. Default false;
+         * provisional learned entries never reach the matcher.
+         */
+        private boolean includeLearned = false;
+        /** Run id written on new learned entries ({@code source_run}, e.g. the deployed commit); blank = "unknown". */
+        private String learnedSourceRun = "";
+    }
+
+    @Data
+    public static class Pricing {
+        private double inrPerUsd = 88.0;
+        private java.util.Map<String, ModelPrice> models = new java.util.HashMap<>();
+
+        @Data
+        public static class ModelPrice {
+            private double inputPerMillion = 0.0;
+            private double outputPerMillion = 0.0;
+            private double cacheReadPerMillion = 0.0;
+            private double cacheWritePerMillion = 0.0;
         }
     }
 
@@ -68,6 +300,15 @@ public class AppProperties {
         private String providerFallback;
         private GoogleDocAi googleDocAi = new GoogleDocAi();
         private AzureDocIntel azureDocIntel = new AzureDocIntel();
+        private Gemini gemini = new Gemini();
+
+        /** OCR on the gemini provider (key: {@code llm.gemini.api-key}). */
+        @Data
+        public static class Gemini {
+            private String model = "";
+            private int maxOutputTokens = 65536;
+            private double timeoutSeconds = 300.0;
+        }
 
         @Data
         public static class GoogleDocAi {
@@ -131,21 +372,112 @@ public class AppProperties {
 
     @Data
     public static class Drafting {
+        private String pipeline = "rag";
         private int ocrExcerptChars = 20000;
         private int maxOutputTokens = 16000;
         private int supportingDocExcerptChars = 5000;
         private int supportingEvidenceMaxChars = 40000;
+        private double similarityThreshold = 0.70;
         private String demoFirmNameOverride;
+        private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
+        private int chunkTtlDays = 365;
+        private String expiredChunkPolicy = "FLAG_AND_USE"; // FLAG_AND_USE | EXCLUDE
+        private String citationFailPolicy = "FLAG_AND_CONTINUE"; // FLAG_AND_CONTINUE | FALL_THROUGH_TO_OPUS
+        private HighStakes highStakes = new HighStakes();
+        private Defects defects = new Defects();
+
+        /** All three triggers off by default; set HIGH_STAKES_SECTION_74 / HIGH_STAKES_APPEAL_STAGE / HIGH_STAKES_DEMAND_THRESHOLD to enable. */
+        @Data
+        public static class HighStakes {
+            private Boolean section74 = false;
+            private Boolean appealStage = false;
+            private String demandThreshold;  // empty/null = demand threshold check disabled
+        }
+
+        /** Code defect checks run after matching (DefectChecker). */
+        @Data
+        public static class Defects {
+            /** Fewer days than this between a DRC-01A and its Part B / reply date is a defect (firm to confirm). */
+            private int drc01aMinDays = 15;
+        }
+    }
+
+    @Data
+    public static class Citation {
+        private String provider = "stub";
+        private String indiankanoonApiToken;
+        private int maxCallsPerDraft = 15;
+        private int cacheTtlDays = 30;
+        private IndianKanoon indiankanoon = new IndianKanoon();
+
+        /** Real per-call prices of the IndianKanoon API; 0 until set from the firm's IndianKanoon plan. */
+        @Data
+        public static class IndianKanoon {
+            private double costInrPerSearch = 0.0;
+            private double costInrPerFragment = 0.0;
+        }
+    }
+
+    @Data
+    public static class Embedding {
+        private String provider = "stub";
+        private String model = "";
+        private double similarityThreshold = 0.70;
+        private int outputDimensionality = 1536;
+    }
+
+    /**
+     * max_tokens for a v7 agent key: {@code matching.shortlist.title-max-tokens} / {@code title-retry-max-tokens}
+     * for the shortlist title pass, else {@link Llm#maxTokensForAgent}.
+     */
+    public int maxTokensForAgent(String agent, boolean retry) {
+        if (Llm.SHORTLIST.equals(agent)) {
+            Matching.Shortlist s = matching != null ? matching.getShortlist() : null;
+            Integer v = s == null ? null : retry ? s.getTitleRetryMaxTokens() : s.getTitleMaxTokens();
+            return v != null && v > 0 ? v : retry ? 9000 : 6000;
+        }
+        return llm.maxTokensForAgent(agent, retry);
+    }
+
+    /**
+     * Model a v7 writer sends for {@code agent}: on the gemini provider the one {@link #modelForAgent} resolves (the
+     * writer's own model, else {@code llm.gemini.model}), so the call, the budget and the provider agree; on any other
+     * provider {@code configured} (the writer's {@code model-*} setting).
+     */
+    public String writerModel(String agent, String configured) {
+        if (llm != null && "gemini".equals(llm.providerForAgent(agent))) return modelForAgent(agent, "gemini");
+        return configured;
     }
 
     public String modelForAgent(String agent, String provider) {
-        if (!"anthropic".equals(provider)) {
-            return "openai".equals(provider) ? llm.openai.model : "";
+        if ("openai".equals(provider)) {
+            return llm.openai.model;
+        } else if ("gemini".equals(provider)) {
+            // the writers name their own model (LLM_MODEL_NEW_ISSUE / LLM_MODEL_HIGH_STAKES), the parsing agent
+            // LLM_MODEL_PARSING when it is not an Anthropic model id; else GEMINI_MODEL
+            String writerModel = switch (agent != null ? agent : "") {
+                case "new_issue" -> llm.modelNewIssue;
+                case "high_stakes" -> llm.modelHighStakes;
+                case "parsing" -> llm.modelParsing != null && !llm.modelParsing.toLowerCase(java.util.Locale.ROOT).startsWith("claude")
+                        ? llm.modelParsing : null;
+                default -> null;
+            };
+            return writerModel != null && !writerModel.isBlank() ? writerModel.trim() : llm.gemini.model;
+        } else if (!"anthropic".equals(provider)) {
+            return "";
         }
         String override = switch (agent) {
-            case "drafting" -> llm.modelDrafting;
-            case "triage"   -> llm.modelTriage;
-            case "parsing"  -> llm.modelParsing;
+            case "extraction" -> llm.modelExtraction;
+            case "formatting" -> llm.modelFormatting;
+            case "opus", "template_generation" -> llm.modelOpus;
+            case "drafting"   -> llm.modelDrafting;
+            case "triage"     -> llm.modelTriage;
+            case "parsing"    -> llm.modelParsing;
+            case "matching"   -> llm.modelMatching;
+            case "partial_drafting", Llm.TEMPLATE_VARIABLES -> llm.modelPartialDrafting;
+            case "new_issue"        -> llm.modelNewIssue;
+            case "high_stakes"      -> llm.modelHighStakes;
+            case Llm.SHORTLIST      -> llm.shortlistModel();
             default         -> "";
         };
         return (override != null && !override.isBlank()) ? override : llm.anthropic.model;

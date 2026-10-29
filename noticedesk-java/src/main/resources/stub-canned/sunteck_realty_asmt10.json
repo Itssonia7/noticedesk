@@ -1,0 +1,23 @@
+{
+  "document_type": "ASMT-10",
+  "law": "GST",
+  "client_name_on_document": "Sunteck Realty Holdings Ltd",
+  "pans_extracted": [{"value": "AABCS5678C", "location": "header"}],
+  "gstins_extracted": [
+    {"value": "27AABCS5678C1Z7", "location": "header", "state_code": "27"}
+  ],
+  "notice_number": "ASMT10-MH-2026-00912",
+  "din_or_rfn": "DIN20260119ASMT10004611",
+  "issue_date": "2026-02-15",
+  "receipt_date": "2026-02-18",
+  "due_date": "2026-05-13",
+  "hearing_date": null,
+  "financial_year": "2022-23",
+  "assessment_year": null,
+  "authority": "Assistant Commissioner of State Tax, Special Circle 2, Mumbai West",
+  "demand_amount": 2196000,
+  "issues": ["JDA outward supply classification & ITC mismatch under Rule 36(4)"],
+  "documents_required": ["JDA agreements", "GSTR-2B reconciliation"],
+  "parse_confidence": 0.95,
+  "fields_needing_review": []
+}

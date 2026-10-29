@@ -1,0 +1,907 @@
+package com.noticedesk.api.agent;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.noticedesk.api.config.AppProperties;
+import com.noticedesk.api.model.matching.IssueCard;
+import com.noticedesk.api.service.llm.ApiUsageLogService;
+import com.noticedesk.api.service.llm.LlmFactory;
+import com.noticedesk.api.service.llm.LlmFatalException;
+import com.noticedesk.api.service.llm.LlmProvider;
+import com.noticedesk.api.service.llm.LlmResponse;
+import com.noticedesk.api.service.llm.NoticeCallBudget;
+import com.noticedesk.api.service.matching.CardShortlister;
+import com.noticedesk.api.service.matching.CatalogueService;
+import com.noticedesk.api.service.matching.StageResolver;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Service;
+
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class IssueMatchingAgent {
+
+    private final LlmFactory llmFactory;
+    private final CatalogueService catalogueService;
+    private final ApiUsageLogService apiUsageLogService;
+    private final AppProperties properties;
+    private final NamedParameterJdbcTemplate jdbc;
+    private final ObjectMapper objectMapper;
+
+    /** AI title pass of the shortlist; null (tests, or not wired) shortlists by labels only. */
+    private ShortlistTitleAgent shortlistTitleAgent;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setShortlistTitleAgent(ShortlistTitleAgent shortlistTitleAgent) {
+        this.shortlistTitleAgent = shortlistTitleAgent;
+    }
+
+    public record MatchedNoticeInfo(
+            String noticeNumber,
+            String din,
+            String issueDate,
+            String replyDueDate,
+            String financialYear,
+            String taxPeriod,
+            Double totalDemandAmount,
+            String authority,
+            String gstin
+    ) {
+        /** A notice block without the noticee's GSTIN (output before the {@code gstin} field). */
+        public MatchedNoticeInfo(String noticeNumber, String din, String issueDate, String replyDueDate, String financialYear,
+                                 String taxPeriod, Double totalDemandAmount, String authority) {
+            this(noticeNumber, din, issueDate, replyDueDate, financialYear, taxPeriod, totalDemandAmount, authority, null);
+        }
+
+        /** The same block with the financial year, authority and GSTIN set by code after matching. */
+        public MatchedNoticeInfo withHeaderFacts(String newFinancialYear, String newAuthority, String newGstin) {
+            return new MatchedNoticeInfo(noticeNumber, din, issueDate, replyDueDate, newFinancialYear, taxPeriod,
+                    totalDemandAmount, newAuthority, newGstin);
+        }
+    }
+
+    /** Issue kind (v3): a ground of demand or action stated by the department. */
+    public static final String KIND_DEMAND = "demand";
+    /** Issue kind (v3): a procedural / jurisdictional / limitation / form defect visible in the document itself. */
+    public static final String KIND_DEFECT = "defect";
+    /**
+     * Issue kind (v3.4): interest or penalty consequential to a demand ground of the same notice that has a dedicated
+     * catalogue card of its own; {@code parentIssueNo} names the demand issue it rides on. Downstream (template fill,
+     * assembly, writers) treats it exactly like a demand issue.
+     */
+    public static final String KIND_CONSEQUENTIAL = "consequential";
+
+    /**
+     * One matched issue. {@code cardIds} holds ONLY the primary card (one element, or empty for status
+     * {@code none}), so template fill and every downstream consumer read it unchanged; the matcher's other
+     * plausible cards are in {@code alternateCardIds} (at most two, never the primary). {@code kind} is
+     * {@link #KIND_DEMAND} (default, every v1 / v2 issue), {@link #KIND_DEFECT} (v3 visible-defect ground) or
+     * {@link #KIND_CONSEQUENTIAL} (v3.4 interest / penalty with its own card). {@code clientFactsToConfirm} (v3.2)
+     * holds the primary card's CLIENT facts the notice does not evidence, in the card's words, for the partner to
+     * confirm with the client; empty before v3.2 and for status none. {@code parentIssueNo} (v3.4) is the
+     * {@code issue_no} of the demand issue a consequential issue rides on; null for every other issue and before v3.4.
+     */
+    public record MatchedIssue(
+            int issueNo,
+            String status,
+            String kind,
+            List<String> cardIds,
+            List<String> alternateCardIds,
+            String why,
+            List<String> notThisIfChecked,
+            Map<String, Object> facts,
+            List<String> noticeParas,
+            List<String> flags,
+            List<String> clientFactsToConfirm,
+            Integer parentIssueNo
+    ) {
+        public MatchedIssue {
+            if (alternateCardIds == null) alternateCardIds = List.of();
+            if (clientFactsToConfirm == null) clientFactsToConfirm = List.of();
+            kind = normalizeKind(kind);
+        }
+
+        /** An issue with client facts but no parent (the v3.2 / v3.3 shape). */
+        public MatchedIssue(int issueNo, String status, String kind, List<String> cardIds, List<String> alternateCardIds, String why,
+                            List<String> notThisIfChecked, Map<String, Object> facts, List<String> noticeParas, List<String> flags,
+                            List<String> clientFactsToConfirm) {
+            this(issueNo, status, kind, cardIds, alternateCardIds, why, notThisIfChecked, facts, noticeParas, flags, clientFactsToConfirm, null);
+        }
+
+        /** An issue with a kind and alternates but no client facts (the v3 / v3.1 shape). */
+        public MatchedIssue(int issueNo, String status, String kind, List<String> cardIds, List<String> alternateCardIds, String why,
+                            List<String> notThisIfChecked, Map<String, Object> facts, List<String> noticeParas, List<String> flags) {
+            this(issueNo, status, kind, cardIds, alternateCardIds, why, notThisIfChecked, facts, noticeParas, flags, List.of());
+        }
+
+        /** An issue of kind {@code demand} with alternates (the v2 shape). */
+        public MatchedIssue(int issueNo, String status, List<String> cardIds, List<String> alternateCardIds, String why,
+                            List<String> notThisIfChecked, Map<String, Object> facts, List<String> noticeParas, List<String> flags) {
+            this(issueNo, status, KIND_DEMAND, cardIds, alternateCardIds, why, notThisIfChecked, facts, noticeParas, flags);
+        }
+
+        /** An issue of kind {@code demand} without alternates (the v1 shape). */
+        public MatchedIssue(int issueNo, String status, List<String> cardIds, String why, List<String> notThisIfChecked,
+                            Map<String, Object> facts, List<String> noticeParas, List<String> flags) {
+            this(issueNo, status, KIND_DEMAND, cardIds, List.of(), why, notThisIfChecked, facts, noticeParas, flags);
+        }
+
+        /** The primary card id, or null for an issue without one. */
+        public String primaryCardId() {
+            return cardIds == null || cardIds.isEmpty() ? null : cardIds.get(0);
+        }
+
+        /** True for a visible-defect ground (kind {@code defect}). */
+        public boolean isDefect() {
+            return KIND_DEFECT.equals(kind);
+        }
+
+        /** True for a consequential interest / penalty ground with its own card (kind {@code consequential}, v3.4). */
+        public boolean isConsequential() {
+            return KIND_CONSEQUENTIAL.equals(kind);
+        }
+
+        /** The same issue with another facts map (the template variable step merges extracted values in). */
+        public MatchedIssue withFacts(Map<String, Object> newFacts) {
+            return new MatchedIssue(issueNo, status, kind, cardIds, alternateCardIds, why, notThisIfChecked,
+                    newFacts != null ? newFacts : Map.of(), noticeParas, flags, clientFactsToConfirm, parentIssueNo);
+        }
+    }
+
+    /**
+     * {@code defect} for "defect" and {@code consequential} for "consequential" (any case, trimmed); everything else
+     * (null, blank, "demand", unknown) is {@code demand}.
+     */
+    static String normalizeKind(String kind) {
+        if (kind == null) return KIND_DEMAND;
+        String k = kind.trim();
+        if (KIND_DEFECT.equalsIgnoreCase(k)) return KIND_DEFECT;
+        if (KIND_CONSEQUENTIAL.equalsIgnoreCase(k)) return KIND_CONSEQUENTIAL;
+        return KIND_DEMAND;
+    }
+
+    /** One entry of the v3.4 {@code defect_checks} object: {@code result} is ok, defect or cannot test; {@code basis} cites the text. */
+    public record DefectCheck(String result, String basis) {
+        public DefectCheck {
+            result = result == null ? "" : result.trim().toLowerCase(Locale.ROOT);
+            basis = basis == null ? "" : basis.trim();
+        }
+
+        /** True when the model reported this check as a visible defect. */
+        public boolean isDefect() {
+            return DEFECT_CHECK_RESULT_DEFECT.equals(result);
+        }
+    }
+
+    /** The {@code result} value of a {@link DefectCheck} that found a defect. */
+    public static final String DEFECT_CHECK_RESULT_DEFECT = "defect";
+
+    /** The ten mandatory {@code defect_checks} entries of prompt v3.4, in the prompt's order. */
+    public static final List<String> DEFECT_CHECK_NAMES = List.of(
+            "din_rfn", "signature", "limitation", "premature_74", "drc01a_missing",
+            "hearing", "reply_time", "officer", "recovery_without_demand", "non_speaking");
+
+    /** Paragraph stance (v3.5): a factual recital the taxpayer does not dispute (jurisdiction, dates, returns filed, notice received). */
+    public static final String STANCE_ADMITTED = "admitted";
+    /** Paragraph stance (v3.5): an allegation or proposed demand the taxpayer disputes. */
+    public static final String STANCE_DENIED = "denied";
+    /** Paragraph stance (v3.5): a correct factual statement that needs context (e.g. the payment was made under protest). */
+    public static final String STANCE_EXPLAINED = "explained";
+    /** Paragraph stance (v3.5): closing formalities (reply time, hearing offer, ex-parte warning). */
+    public static final String STANCE_NOT_APPLICABLE = "not_applicable";
+    /** The four {@code para_stance} values of prompt v3.5. */
+    public static final Set<String> PARA_STANCES = Set.of(STANCE_ADMITTED, STANCE_DENIED, STANCE_EXPLAINED, STANCE_NOT_APPLICABLE);
+
+    /**
+     * The matcher's result. {@code defectChecks} (v3.4) is the model's {@code defect_checks} object in its own order,
+     * empty before v3.4 and when the object is absent; it is reported, never stored. {@code paraStance} (v3.5) maps
+     * each {@code para_map} key to one of {@link #PARA_STANCES}; empty before v3.5 and when the object is absent, in
+     * which case the para-wise reply keeps its earlier wording. {@code shortlist} records the catalogue cards the
+     * prompt carried and how code chose them; null when the whole catalogue was rendered without a shortlist (feature
+     * off) and for results not made by the agent.
+     */
+    public record MatchingResult(
+            MatchedNoticeInfo notice,
+            List<MatchedIssue> issues,
+            Map<String, List<Integer>> paraMap,
+            List<String> missingOrDoubtful,
+            List<String> flags,
+            String catalogueHash,
+            int inputTokens,
+            int outputTokens,
+            int cacheReadTokens,
+            int cacheWriteTokens,
+            Map<String, DefectCheck> defectChecks,
+            Map<String, String> paraStance,
+            CardShortlister.Shortlist shortlist
+    ) {
+        public MatchingResult {
+            if (defectChecks == null) defectChecks = Map.of();
+            if (paraStance == null) paraStance = Map.of();
+        }
+
+        /** A result without a shortlist record (the v3.5 shape). */
+        public MatchingResult(MatchedNoticeInfo notice, List<MatchedIssue> issues, Map<String, List<Integer>> paraMap,
+                              List<String> missingOrDoubtful, List<String> flags, String catalogueHash,
+                              int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens,
+                              Map<String, DefectCheck> defectChecks, Map<String, String> paraStance) {
+            this(notice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens, outputTokens,
+                    cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, null);
+        }
+
+        /** A result without the v3.5 paragraph stances (the v3.4 shape). */
+        public MatchingResult(MatchedNoticeInfo notice, List<MatchedIssue> issues, Map<String, List<Integer>> paraMap,
+                              List<String> missingOrDoubtful, List<String> flags, String catalogueHash,
+                              int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens,
+                              Map<String, DefectCheck> defectChecks) {
+            this(notice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens, outputTokens,
+                    cacheReadTokens, cacheWriteTokens, defectChecks, Map.of());
+        }
+
+        /** A result without the v3.4 defect checks (the v1 to v3.3 shape). */
+        public MatchingResult(MatchedNoticeInfo notice, List<MatchedIssue> issues, Map<String, List<Integer>> paraMap,
+                              List<String> missingOrDoubtful, List<String> flags, String catalogueHash,
+                              int inputTokens, int outputTokens, int cacheReadTokens, int cacheWriteTokens) {
+            this(notice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens, outputTokens,
+                    cacheReadTokens, cacheWriteTokens, Map.of(), Map.of());
+        }
+
+        /** The same result with other issues (the template variable step merges extracted values into the facts). */
+        public MatchingResult withIssues(List<MatchedIssue> newIssues) {
+            return new MatchingResult(notice, newIssues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, shortlist);
+        }
+
+        /** The same result with another notice block (header facts set by code after matching). */
+        public MatchingResult withNotice(MatchedNoticeInfo newNotice) {
+            return new MatchingResult(newNotice, issues, paraMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, shortlist);
+        }
+
+        /** The same result with other issues and paragraph map (the code defect merge renumbers the issues). */
+        public MatchingResult withIssues(List<MatchedIssue> newIssues, Map<String, List<Integer>> newParaMap) {
+            return new MatchingResult(notice, newIssues, newParaMap, missingOrDoubtful, flags, catalogueHash, inputTokens,
+                    outputTokens, cacheReadTokens, cacheWriteTokens, defectChecks, paraStance, shortlist);
+        }
+    }
+
+    /**
+     * Loads the UNTRUNCATED full OCR text of the notice document directly from the database
+     * (table documents_inbox.ocr_text linked via notice_id -> source_inbox_id, or documents.extracted_text).
+     */
+    public String loadFullOcrTextFromDb(UUID noticeId) {
+        if (jdbc == null || noticeId == null) {
+            return "";
+        }
+        String sql = """
+                SELECT COALESCE(ib.ocr_text, doc.extracted_text, '') AS full_text
+                FROM notices n
+                LEFT JOIN documents_inbox ib ON ib.inbox_id = n.source_inbox_id
+                LEFT JOIN documents doc ON doc.matter_id = n.matter_id
+                WHERE n.notice_id = CAST(:nid AS UUID)
+                LIMIT 1
+                """;
+        List<String> rows = jdbc.query(sql, Map.of("nid", noticeId.toString()), (rs, rowNum) -> rs.getString("full_text"));
+        return rows.isEmpty() ? "" : rows.get(0);
+    }
+
+    /**
+     * Runs issue matching using Anthropic Sonnet (or configured LLM_MODEL_MATCHING model).
+     */
+    public MatchingResult matchNotice(UUID noticeId, String noticeType, UUID tenantId) {
+        String fullOcrText = loadFullOcrTextFromDb(noticeId);
+        return matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId);
+    }
+
+    public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId) {
+        return matchNoticeWithOcrText(fullOcrText, noticeType, tenantId, noticeId, null);
+    }
+
+    /** Flag of a result whose call was refused by the notice's cost cap (no call was made for that attempt). */
+    public static final String FLAG_COST_CAP = "matching_cost_cap";
+
+    /**
+     * Version of the live matching prompt (v3.7: the shortlist is chosen by label scoring plus an AI title pass, cards
+     * carry no KEYWORDS line, and the siblings named by NOT THIS IF rules but not shown are listed by title only: such
+     * a card may be an alternate or make the status partial / none, never be the primary of a full match; v3.6: the catalogue in the prompt is a code shortlist for the notice; a
+     * ground no shown card fits is status none, never a forced fit; v3.5: a {@code para_stance} object gives every {@code para_map} paragraph
+     * one of admitted / denied / explained / not_applicable, so the para-wise reply no longer denies factual
+     * recitals; v3.4: a mandatory ten-item {@code defect_checks} object replaces the
+     * free-form defect scan, one defect ground per "defect" result; consequential interest / penalty with a dedicated
+     * card becomes its own {@code consequential} issue with {@code parent_issue_no}; v3.3: a card's stage is tested
+     * against the RESPONSE the input document calls for, per an input-document to response-stage table, never
+     * against the input document's own name;
+     * v3.2: status decided on notice-visible DECISIVE facts only, the card's CLIENT facts returned as
+     * {@code client_facts_to_confirm}, an untestable NOT THIS IF rule no longer lowers the status; v3.1: boundary
+     * lines and {@code not_this_if_checked} written only for the chosen cards, {@code why} capped at 60 words of
+     * prose, DIN/signature and proper-officer guards; v3 added visible-defect issues with {@code kind}, written
+     * date-boundary checks and partial must cite the missing DECISIVE fact; v2 added one primary card + alternates
+     * and grounds-first splitting).
+     */
+    public static final String PROMPT_VERSION = "issue_matching_v3_7";
+    /** Prompt resource under {@code prompts/} ({@code issue_matching_v3.md} is edited in place for the v3.x versions). */
+    public static final String PROMPT_FILE = "issue_matching_v3";
+
+    /** Issue flag: the primary card id is not in the active catalogue (the issue is downgraded to {@code none}). */
+    public static final String FLAG_UNKNOWN_CARD_ID = "unknown_card_id";
+    /** Issue flag: status full / partial returned without a primary card (prompt self-check 3). */
+    public static final String FLAG_HEDGED = "hedged";
+    /** Issue flag (informational): a visible-defect ground (kind {@code defect}) that no catalogue card covers (status {@code none}). */
+    public static final String FLAG_DEFECT_WITHOUT_CARD = "defect_without_card";
+    /** Result flag: the model's {@code issues} count differs from its {@code grounds} count (prompt self-check 1). */
+    public static final String FLAG_ISSUE_COUNT_MISMATCH = "issue_count_mismatch";
+    /**
+     * Issue flag (informational heuristic, v3.2): status partial and the {@code why} text contains the token
+     * "CLIENT", so the model may have downgraded the match on a client-side fact, which the prompt forbids.
+     * Never a failure; the status is kept.
+     */
+    public static final String FLAG_PARTIAL_ON_CLIENT_FACT = "partial_on_client_fact";
+    /**
+     * Result flag (v3.4): the {@code defect_checks} object is absent or has fewer than the ten mandatory entries
+     * (prompt self-check 1a). Informational: the issues are kept.
+     */
+    public static final String FLAG_DEFECT_CHECKS_MISSING = "defect_checks_missing";
+    /**
+     * Result flag (v3.4): the number of defect grounds (issues of kind {@code defect}) differs from the number of
+     * {@code defect_checks} entries whose result is "defect" (prompt self-check 1a). Tested only when the object
+     * holds at least one entry. Informational: the issues are kept.
+     */
+    public static final String FLAG_DEFECT_COUNT_MISMATCH = "defect_count_mismatch";
+    /**
+     * Issue flag (v3.7): the primary of a full match was a card the prompt listed by title only; the status is lowered
+     * to partial (a card the matcher has not read in full cannot be a full match).
+     */
+    public static final String FLAG_TITLES_ONLY_PRIMARY = "titles_only_primary";
+    /** Most alternates kept per issue; any beyond are dropped. */
+    static final int MAX_ALTERNATES = 2;
+
+    /** {@code matching.shortlist.enabled} (env MATCHING_SHORTLIST, default true). */
+    boolean shortlistEnabled() {
+        return properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null
+                || properties.getMatching().getShortlist().isEnabled();
+    }
+
+    /** {@code matching.shortlist.ai-titles} (env MATCHING_SHORTLIST_AI, default true). */
+    boolean shortlistAiEnabled() {
+        return properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null
+                || properties.getMatching().getShortlist().isAiTitles();
+    }
+
+    /** {@code matching.shortlist.log-ids} (env MATCHING_SHORTLIST_LOG_IDS, default false): shortlisted card ids at INFO, else DEBUG. */
+    boolean shortlistLogIds() {
+        return properties != null && properties.getMatching() != null && properties.getMatching().getShortlist() != null
+                && properties.getMatching().getShortlist().isLogIds();
+    }
+
+    /** {@code matching.shortlist.relative-cutoff} / {@code min-cards} and their {@code -with-ai} variants. */
+    CardShortlister.Options shortlistOptions() {
+        if (properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null) {
+            return CardShortlister.Options.DEFAULT;
+        }
+        AppProperties.Matching.Shortlist s = properties.getMatching().getShortlist();
+        return new CardShortlister.Options(s.getRelativeCutoff(), s.getMinCards(), s.getRelativeCutoffWithAi(), s.getMinCardsWithAi(),
+                s.getAbsenceTitlePatterns());
+    }
+
+    /**
+     * The shortlist for a first matching call: the AI title pass (when on and available; it goes through the same
+     * budget) and the label scoring, united by {@link CardShortlister#shortlist}. A failed or refused title pass
+     * leaves the labels alone (status {@link CardShortlister#AI_SKIPPED}); {@link LlmFatalException} is passed on.
+     */
+    CardShortlister.Shortlist buildShortlist(List<IssueCard> cards, String noticeType, String text, UUID noticeId,
+                                             NoticeCallBudget budget) {
+        Set<String> aiPicks = null;
+        String aiStatus = CardShortlister.AI_OFF;
+        boolean parseFallback = false;
+        if (shortlistAiEnabled() && shortlistTitleAgent != null && shortlistTitleAgent.available()) {
+            ShortlistTitleAgent.Picks picks = shortlistTitleAgent.pickCards(cards, noticeType, text, noticeId, budget);
+            if (picks != null) {
+                aiPicks = picks.cardIds();
+                aiStatus = CardShortlister.AI_USED;
+                parseFallback = picks.parseFallback();
+            } else {
+                aiStatus = CardShortlister.AI_SKIPPED;
+            }
+        }
+        return CardShortlister.shortlist(cards, noticeType, StageResolver.resolve(noticeType, text), text, shortlistOptions(),
+                aiPicks, aiStatus).withAiParseFallback(parseFallback);
+    }
+
+    /**
+     * As {@link #matchNoticeWithOcrText(String, String, UUID, UUID)}, checking every attempt (retry included)
+     * against {@code budget} before the call and recording each billed call in it. A refused attempt ends
+     * matching with a {@link #FLAG_COST_CAP} fallback result. A null budget checks nothing.
+     * When a shortlist narrower than the catalogue is rendered, the system prompt is the rules alone (cached across
+     * notices) and the shortlisted cards (no KEYWORDS line, plus the titles-only block) go in the per-call user message
+     * before the notice; when every card is rendered (shortlist off, level full) the catalogue stays in the cached
+     * system prompt as before. The catalogue hash is always that of the FULL visible catalogue, so results stay
+     * comparable.
+     */
+    public MatchingResult matchNoticeWithOcrText(String fullOcrText, String noticeType, UUID tenantId, UUID noticeId,
+                                                 NoticeCallBudget budget) {
+        // approved learned-library entries are appended only with catalogue.include-learned=true
+        List<IssueCard> cards = CatalogueService.withLearned(catalogueService.getActiveCards(), catalogueService.learnedCardsForMatching());
+        String fullCatalogueText = catalogueService.renderCatalogueCompactText(cards);
+        String catalogueHash = catalogueService.getCatalogueHash(fullCatalogueText);
+
+        boolean shortlistOn = shortlistEnabled();
+        CardShortlister.Shortlist shortlist = null;
+        String compactCatalogueText = fullCatalogueText;
+        Set<String> titlesOnlyIds = Set.of();
+        if (shortlistOn) {
+            String text = fullOcrText != null ? fullOcrText : "";
+            shortlist = buildShortlist(cards, noticeType, text, noticeId, budget);
+            if (!shortlist.isFull()) {
+                compactCatalogueText = catalogueService.renderShortlistText(shortlist.cards(), shortlist.titlesOnly());
+                titlesOnlyIds = new HashSet<>(shortlist.titlesOnlyIds());
+            }
+            log.info("matching_shortlist noticeId={} Shortlist: {} of {} catalogue cards, notice keys {}, rendered {} chars (full catalogue {} chars)",
+                    noticeId, shortlist.describe(), shortlist.catalogueSize(), shortlist.noticeKeys(),
+                    compactCatalogueText.length(), fullCatalogueText.length());
+            if (shortlistLogIds()) {
+                log.info("matching_shortlist_ids noticeId={} full={} titles_only={} defects={}", noticeId, shortlist.cardIds(),
+                        shortlist.titlesOnlyIds(), shortlist.defectPicks());
+            } else {
+                log.debug("matching_shortlist_ids noticeId={} full={} titles_only={} defects={}", noticeId, shortlist.cardIds(),
+                        shortlist.titlesOnlyIds(), shortlist.defectPicks());
+            }
+        }
+
+        Set<String> validCardIds = new HashSet<>();
+        for (IssueCard card : cards) {
+            validCardIds.add(card.cardId());
+        }
+
+        LlmProvider llm = llmFactory.getLlmForAgent("matching");
+        String modelName = properties.getLlm().getModelMatching();
+
+        String promptTemplate = loadPromptTemplate();
+        String noticePart = "NOTICE TYPE FROM TRIAGE: " + noticeType + "\n\nFULL NOTICE OCR TEXT:\n" + fullOcrText;
+        String systemPrompt;
+        String userPrompt;
+        if (shortlist != null && !shortlist.isFull()) {
+            // the rules are the cached prefix; the cards differ per notice, so they are sent fresh with the notice
+            systemPrompt = promptTemplate;
+            userPrompt = compactCatalogueText + "\n\n" + noticePart;
+        } else {
+            systemPrompt = promptTemplate + "\n\n" + compactCatalogueText;
+            userPrompt = noticePart;
+        }
+
+        String effort = properties.getLlm().effortForAgent("matching");
+        boolean raiseCap = false;
+        int totalInTokens = 0;
+        int totalOutTokens = 0;
+        int totalCacheReadTokens = 0;
+        int totalCacheWriteTokens = 0;
+
+        LlmResponse response = null;
+        JsonNode jsonNode = null;
+        String validationError = null;
+
+        for (int attempt = 1; attempt <= 2; attempt++) {
+            String activeUserPrompt = userPrompt;
+            if (attempt == 2 && validationError != null && !raiseCap) {
+                activeUserPrompt += "\n\nCRITICAL FIX REQUIRED: Previous attempt failed validation with error: "
+                        + validationError + ". Ensure you output STRICT JSON with all required fields.";
+            }
+            int maxTokens = properties.getLlm().maxTokensForAgent("matching", raiseCap);
+            jsonNode = null;
+
+            // hard cap: worst case of exactly this call (prompt and max_tokens as sent) must fit the budget;
+            // the system prompt is the cacheable prefix (the rules; plus the full catalogue when every card is shown),
+            // the user prompt the per-call part (the notice; plus the shortlisted cards when a shortlist is shown)
+            NoticeCallBudget.Prompt shape = NoticeCallBudget.Prompt.of(modelName, systemPrompt, activeUserPrompt);
+            String refusal = budget != null ? budget.refusalReason("matching", shape, maxTokens) : null;
+            if (refusal != null) {
+                log.error("matching_not_called attempt={} noticeId={}: {}", attempt, noticeId, refusal);
+                return createFallbackResult(FLAG_COST_CAP, refusal, catalogueHash, totalInTokens, totalOutTokens,
+                        totalCacheReadTokens, totalCacheWriteTokens);
+            }
+
+            try {
+                response = llm.generateWithEffort(systemPrompt, activeUserPrompt, modelName, maxTokens, effort, true);
+            } catch (LlmFatalException e) {
+                if (budget != null) budget.recordCall("matching", null, modelName);
+                throw e;   // billing / auth error or live run aborted: no retry, no fallback result
+            } catch (Exception e) {
+                if (budget != null) budget.recordCall("matching", null, modelName);
+                log.warn("matching_attempt_failed attempt={} error={}", attempt, e.getMessage());
+                validationError = e.getMessage();
+                outcome(attempt, false, e.getClass().getSimpleName());
+                continue;
+            }
+
+            if (response == null) {
+                validationError = "Model call returned no response";
+                outcome(attempt, false, "no_response");
+                continue;
+            }
+
+            // usage is billed whether or not the output is usable
+            totalInTokens += response.inputTokensOrZero();
+            totalOutTokens += response.outputTokensOrZero();
+            totalCacheReadTokens += response.cacheReadTokensOrZero();
+            totalCacheWriteTokens += response.cacheWriteTokensOrZero();
+            if (budget != null) {
+                budget.recordCall("matching", response, modelName, shape);
+            } else if (apiUsageLogService != null && apiUsageLogService.promptCache() != null) {
+                // no budget: still remember the prefix's measured token count and that it is cached now
+                int cacheTokens = response.cacheWriteTokensOrZero() + response.cacheReadTokensOrZero();
+                if (cacheTokens > 0) apiUsageLogService.promptCache().recordUse(modelName, shape.prefixHash(), cacheTokens);
+            }
+            apiUsageLogService.logCall(response, modelName, "matching", attempt, tenantId, noticeId);
+
+            if (response.refused()) {
+                log.warn("matching_refused stop_reason={} attempt={}", response.stopReason(), attempt);
+                validationError = "Model declined the request (stop_reason=refusal)";
+                outcome(attempt, false, LlmResponse.FAILURE_REFUSAL);
+                break;   // the same prompt will be refused again
+            }
+            if (response.truncated()) {
+                log.warn("matching_attempt_truncated stop_reason=max_tokens attempt={} max_tokens={}", attempt, maxTokens);
+                validationError = "Output was truncated due to max_tokens limit.";
+                raiseCap = true;
+                outcome(attempt, false, LlmResponse.FAILURE_MAX_TOKENS);
+                continue;
+            }
+            if (response.failed()) {
+                log.warn("matching_attempt_unusable failure={} stop_reason={} attempt={}",
+                        response.failureReason(), response.stopReason(), attempt);
+                validationError = "Model returned no usable text output (" + response.failureReason() + ")";
+                outcome(attempt, false, response.failureReason());
+                continue;
+            }
+
+            try {
+                // fences / prose around the object are dropped; stray quotes inside strings are escaped
+                jsonNode = AiOutputParser.readJsonTree(objectMapper, response.content());
+            } catch (IllegalArgumentException e) {
+                log.warn("matching_attempt_failed attempt={} error={}", attempt, e.getMessage());
+                validationError = e.getMessage();
+                outcome(attempt, false, "invalid_json");
+                continue;
+            }
+            if (jsonNode.has("notice") && jsonNode.has("issues")) {
+                validationError = null;
+                outcome(attempt, true, null);
+                break;
+            }
+            validationError = "JSON missing required 'notice' or 'issues' keys";
+            outcome(attempt, false, "invalid_output");
+        }
+
+        if (jsonNode == null || validationError != null) {
+            log.error("matching_failed_all_attempts noticeId={} error={}", noticeId, validationError);
+            return createFallbackResult("matching_failed", validationError, catalogueHash, totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
+        }
+
+        // Parse and validate issue cards against catalogue
+        try {
+            MatchedNoticeInfo noticeInfo = parseNoticeInfo(jsonNode.path("notice"));
+            List<MatchedIssue> issues = new ArrayList<>();
+
+            List<String> resultFlags = new ArrayList<>();
+            JsonNode issuesArray = jsonNode.path("issues");
+            if (issuesArray.isArray()) {
+                for (JsonNode issueNode : issuesArray) {
+                    int issueNo = issueNode.path("issue_no").asInt(issues.size() + 1);
+                    String status = issueNode.path("status").asText("none");
+                    String kind = normalizeKind(issueNode.path("kind").asText(null));   // v1 / v2 output: demand
+                    String why = issueNode.path("why").asText("");
+
+                    CardChoice choice = readCardChoice(issueNode);
+
+                    List<String> notThisIf = new ArrayList<>();
+                    JsonNode notNode = issueNode.path("not_this_if_checked");
+                    if (notNode.isArray()) {
+                        for (JsonNode n : notNode) {
+                            notThisIf.add(n.asText());
+                        }
+                    }
+
+                    List<String> noticeParas = new ArrayList<>();
+                    JsonNode parasNode = issueNode.path("notice_paras");
+                    if (parasNode.isArray()) {
+                        for (JsonNode p : parasNode) {
+                            noticeParas.add(p.asText());
+                        }
+                    }
+
+                    Map<String, Object> facts = objectMapper.convertValue(issueNode.path("facts"), new TypeReference<Map<String, Object>>() {});
+                    if (facts == null) facts = Map.of();
+
+                    List<String> clientFacts = readClientFactsToConfirm(issueNode);
+                    Integer parentIssueNo = readParentIssueNo(issueNode);
+
+                    List<String> issueFlags = new ArrayList<>();
+
+                    // Unknown primary card -> the issue becomes "none" + flag unknown_card_id (as before)
+                    List<String> primary = new ArrayList<>();
+                    if (choice.primary() != null) {
+                        if (validCardIds.contains(choice.primary())) {
+                            primary.add(choice.primary());
+                        } else {
+                            log.warn("Issue #{}: Unknown card_id '{}' returned by LLM. Downgrading issue to 'none'.", issueNo, choice.primary());
+                            status = "none";
+                            issueFlags.add(FLAG_UNKNOWN_CARD_ID);
+                        }
+                    }
+
+                    // v3.7: a card listed by title only was never read in full, so it cannot carry a full match
+                    if ("full".equalsIgnoreCase(status) && !primary.isEmpty() && titlesOnlyIds.contains(primary.get(0))) {
+                        log.warn("Issue #{}: full match on titles-only card {}; lowered to partial", issueNo, primary.get(0));
+                        status = "partial";
+                        issueFlags.add(FLAG_TITLES_ONLY_PRIMARY);
+                    }
+
+                    // Unknown alternates are dropped silently (logged); the primary never repeats as an alternate
+                    List<String> alternates = new ArrayList<>();
+                    for (String alt : choice.alternates()) {
+                        if (alternates.size() >= MAX_ALTERNATES) break;
+                        if (!validCardIds.contains(alt)) {
+                            log.info("Issue #{}: unknown alternate card_id '{}' dropped", issueNo, alt);
+                        } else if (!alt.equals(choice.primary()) && !alternates.contains(alt)) {
+                            alternates.add(alt);
+                        }
+                    }
+
+                    // Prompt self-check 3: a full / partial match must name a primary card
+                    if (("full".equalsIgnoreCase(status) || "partial".equalsIgnoreCase(status)) && primary.isEmpty()) {
+                        log.warn("Issue #{}: status '{}' without a primary card_id (hedged)", issueNo, status);
+                        issueFlags.add(FLAG_HEDGED);
+                    }
+
+                    // Informational: a visible defect the catalogue has no card for (status none, after the unknown-card downgrade)
+                    if (KIND_DEFECT.equals(kind) && "none".equalsIgnoreCase(status)) {
+                        issueFlags.add(FLAG_DEFECT_WITHOUT_CARD);
+                    }
+
+                    // Informational heuristic (v3.2): a partial whose reason mentions a CLIENT fact
+                    if (isPartialOnClientFact(status, why)) {
+                        log.info("Issue #{}: partial match whose why mentions a CLIENT fact (informational)", issueNo);
+                        issueFlags.add(FLAG_PARTIAL_ON_CLIENT_FACT);
+                    }
+
+                    issues.add(new MatchedIssue(issueNo, status, kind, primary, alternates, why, notThisIf, facts, noticeParas, issueFlags, clientFacts, parentIssueNo));
+                }
+            }
+
+            // Prompt self-check 1: one issue per ground (only when the model returned the v2 grounds list)
+            JsonNode groundsNode = jsonNode.path("grounds");
+            if (groundsNode.isArray() && groundsNode.size() != issues.size()) {
+                log.warn("matching_issue_count_mismatch grounds={} issues={} noticeId={}", groundsNode.size(), issues.size(), noticeId);
+                resultFlags.add(FLAG_ISSUE_COUNT_MISMATCH);
+            }
+
+            // Prompt self-check 1a (v3.4): the ten-item defect checklist, one defect ground per "defect" result
+            Map<String, DefectCheck> defectChecks = readDefectChecks(jsonNode);
+            if (defectChecks.size() < DEFECT_CHECK_NAMES.size()) {
+                log.warn("matching_defect_checks_missing entries={} noticeId={}", defectChecks.size(), noticeId);
+                resultFlags.add(FLAG_DEFECT_CHECKS_MISSING);
+            }
+            if (!defectChecks.isEmpty()) {
+                int defectResults = defectResultCount(defectChecks);
+                int defectGrounds = 0;
+                for (MatchedIssue i : issues) if (i.isDefect()) defectGrounds++;
+                if (defectResults != defectGrounds) {
+                    log.warn("matching_defect_count_mismatch defect_results={} defect_grounds={} noticeId={}", defectResults, defectGrounds, noticeId);
+                    resultFlags.add(FLAG_DEFECT_COUNT_MISMATCH);
+                }
+            }
+
+            Map<String, List<Integer>> paraMap = objectMapper.convertValue(jsonNode.path("para_map"), new TypeReference<Map<String, List<Integer>>>() {});
+            if (paraMap == null) paraMap = Map.of();
+            Map<String, String> paraStance = readParaStance(jsonNode);
+
+            List<String> missingOrDoubtful = new ArrayList<>();
+            JsonNode missingNode = jsonNode.path("missing_or_doubtful");
+            if (missingNode.isArray()) {
+                for (JsonNode m : missingNode) {
+                    missingOrDoubtful.add(m.asText());
+                }
+            }
+
+            return new MatchingResult(noticeInfo, issues, paraMap, missingOrDoubtful, List.copyOf(resultFlags), catalogueHash,
+                    totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens, defectChecks, paraStance, shortlist);
+
+        } catch (Exception e) {
+            log.error("matching_parse_failed error={}", e.getMessage(), e);
+            return createFallbackResult("matching_parse_failed", e.getMessage(), catalogueHash, totalInTokens, totalOutTokens, totalCacheReadTokens, totalCacheWriteTokens);
+        }
+    }
+
+    /** The model's card choice for one issue before validation: primary (nullable) and alternates as returned. */
+    record CardChoice(String primary, List<String> alternates) {}
+
+    /**
+     * Reads the card choice in either output shape: v2 {@code "card_id": "X", "alternates": [...]}, or
+     * v1 {@code "card_ids": ["X", ...]} where the first id is the primary and the rest are alternates.
+     * A blank or non-text {@code card_id} counts as null (no primary).
+     */
+    static CardChoice readCardChoice(JsonNode issueNode) {
+        List<String> alternates = new ArrayList<>();
+        if (issueNode.has("card_id") || issueNode.has("alternates")) {
+            String primary = cleanId(issueNode.path("card_id"));
+            JsonNode altNode = issueNode.path("alternates");
+            if (altNode.isArray()) {
+                for (JsonNode a : altNode) {
+                    String id = cleanId(a);
+                    if (id != null) alternates.add(id);
+                }
+            }
+            return new CardChoice(primary, alternates);
+        }
+        JsonNode cardsNode = issueNode.path("card_ids");
+        List<String> ids = new ArrayList<>();
+        if (cardsNode.isArray()) {
+            for (JsonNode c : cardsNode) {
+                String id = cleanId(c);
+                if (id != null) ids.add(id);
+            }
+        } else {
+            String id = cleanId(cardsNode);
+            if (id != null) ids.add(id);
+        }
+        String primary = ids.isEmpty() ? null : ids.get(0);
+        if (ids.size() > 1) alternates.addAll(ids.subList(1, ids.size()));
+        return new CardChoice(primary, alternates);
+    }
+
+    /**
+     * The v3.2 {@code client_facts_to_confirm} list of one issue: its non-blank text entries, trimmed, in order.
+     * Empty when the key is absent (v1 to v3.1 output), null, not an array, or holds no usable text.
+     */
+    static List<String> readClientFactsToConfirm(JsonNode issueNode) {
+        JsonNode node = issueNode.path("client_facts_to_confirm");
+        if (!node.isArray()) return List.of();
+        List<String> out = new ArrayList<>();
+        for (JsonNode f : node) {
+            if (f == null || !f.isTextual()) continue;
+            String s = f.asText().trim();
+            if (!s.isEmpty()) out.add(s);
+        }
+        return List.copyOf(out);
+    }
+
+    /**
+     * The v3.4 {@code parent_issue_no} of one issue: its integral value, or null when the key is absent (output before
+     * v3.4, or a demand / defect issue), null, or not a whole number.
+     */
+    static Integer readParentIssueNo(JsonNode issueNode) {
+        JsonNode node = issueNode.path("parent_issue_no");
+        if (node.isIntegralNumber()) return node.asInt();
+        if (node.isTextual()) {
+            try {
+                return Integer.valueOf(node.asText().trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The v3.4 {@code defect_checks} object of the output: one {@link DefectCheck} per entry, in the model's order,
+     * keys trimmed. An entry whose value is an object reads {@code result} and {@code basis}; a bare text value is
+     * read as the result with no basis. Empty when the key is absent (output before v3.4), null or not an object.
+     */
+    static Map<String, DefectCheck> readDefectChecks(JsonNode root) {
+        JsonNode node = root.path("defect_checks");
+        if (!node.isObject()) return Map.of();
+        Map<String, DefectCheck> out = new LinkedHashMap<>();
+        Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> e = fields.next();
+            String name = e.getKey() == null ? "" : e.getKey().trim();
+            if (name.isEmpty()) continue;
+            JsonNode v = e.getValue();
+            if (v != null && v.isObject()) {
+                out.put(name, new DefectCheck(v.path("result").asText(""), v.path("basis").asText("")));
+            } else if (v != null && v.isTextual()) {
+                out.put(name, new DefectCheck(v.asText(), ""));
+            }
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    /**
+     * The v3.5 {@code para_stance} object of the output: paragraph key (trimmed) to one of {@link #PARA_STANCES}, in
+     * the model's order. A value is normalised (case, spaces and hyphens to underscores; "n/a" and "not applicable"
+     * read as {@code not_applicable}); an entry whose value is not one of the four is dropped. Empty when the key is
+     * absent (output before v3.5), null or not an object.
+     */
+    static Map<String, String> readParaStance(JsonNode root) {
+        JsonNode node = root.path("para_stance");
+        if (!node.isObject()) return Map.of();
+        Map<String, String> out = new LinkedHashMap<>();
+        Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> e = fields.next();
+            String para = e.getKey() == null ? "" : e.getKey().trim();
+            String stance = normalizeStance(e.getValue() != null && e.getValue().isTextual() ? e.getValue().asText() : null);
+            if (para.isEmpty() || stance == null) continue;
+            out.put(para, stance);
+        }
+        return Collections.unmodifiableMap(out);
+    }
+
+    /** One of {@link #PARA_STANCES} for the model's text, or null when it is none of them. */
+    static String normalizeStance(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim().toLowerCase(Locale.ROOT).replaceAll("[\\s\\-]+", "_");
+        if (s.equals("n/a") || s.equals("na") || s.equals("not_applicable") || s.equals("noted")) return STANCE_NOT_APPLICABLE;
+        return PARA_STANCES.contains(s) ? s : null;
+    }
+
+    /** Entries of a {@code defect_checks} map whose result is "defect". */
+    public static int defectResultCount(Map<String, DefectCheck> defectChecks) {
+        if (defectChecks == null) return 0;
+        int n = 0;
+        for (DefectCheck c : defectChecks.values()) if (c != null && c.isDefect()) n++;
+        return n;
+    }
+
+    /** {@link #FLAG_PARTIAL_ON_CLIENT_FACT} heuristic: status partial and the why text contains the token "CLIENT" (upper case). */
+    static boolean isPartialOnClientFact(String status, String why) {
+        return "partial".equalsIgnoreCase(status) && why != null && why.contains("CLIENT");
+    }
+
+    private static String cleanId(JsonNode n) {
+        if (n == null || !n.isTextual()) return null;
+        String s = n.asText().trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private MatchingResult createFallbackResult(String flag, String errorDetail, String hash, int in, int out, int cRead, int cWrite) {
+        MatchedNoticeInfo noticeInfo = new MatchedNoticeInfo(null, null, null, null, null, null, null, null);
+        String whyMsg = errorDetail != null ? "Matching failed: " + errorDetail : "Matching failed or returned invalid output.";
+        MatchedIssue fallbackIssue = new MatchedIssue(1, "none", List.of(), whyMsg,
+                List.of(), Map.of(), List.of(), List.of(flag));
+        List<String> missing = errorDetail != null ? List.of(flag, errorDetail) : List.of(flag);
+        return new MatchingResult(noticeInfo, List.of(fallbackIssue), Map.of(), missing,
+                List.of(flag), hash, in, out, cRead, cWrite);
+    }
+
+    private MatchedNoticeInfo parseNoticeInfo(JsonNode n) {
+        if (n == null || n.isMissingNode()) {
+            return new MatchedNoticeInfo(null, null, null, null, null, null, null, null);
+        }
+        Double demand = n.hasNonNull("total_demand_amount") ? n.path("total_demand_amount").asDouble() : null;
+        return new MatchedNoticeInfo(
+                n.path("notice_number").asText(null),
+                n.path("din").asText(null),
+                n.path("issue_date").asText(null),
+                n.path("reply_due_date").asText(null),
+                n.path("financial_year").asText(null),
+                n.path("tax_period").asText(null),
+                demand,
+                n.path("authority").asText(null),
+                n.path("gstin").asText(null)
+        );
+    }
+
+    private void outcome(int attempt, boolean usable, String reason) {
+        if (apiUsageLogService != null) apiUsageLogService.reportOutcome("matching", attempt, usable, reason);
+    }
+
+    private String loadPromptTemplate() {
+        try {
+            ClassPathResource resource = new ClassPathResource("prompts/" + PROMPT_FILE + ".md");
+            try (InputStream is = resource.getInputStream()) {
+                return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            }
+        } catch (Exception e) {
+            log.error("Failed to load " + PROMPT_FILE + ".md prompt resource", e);
+            return "Compare notice OCR text against issue cards and return JSON.";
+        }
+    }
+}

@@ -51,7 +51,8 @@ public class NoticeTriageAgent {
         String systemPrompt = loadSystemPrompt();
         String userPrompt   = buildUserPrompt(noticeData);
 
-        LlmProvider llm = llmFactory.getLlmForAgent("triage");
+        // Force the triage step to ALWAYS use Gemini, ignoring the primary provider config.
+        LlmProvider llm = llmFactory.getGeminiProviderForAgent("triage");
         LlmResponse resp = llm.generateText(systemPrompt, userPrompt, 4000, 0.2);
 
         return parseAndRemap(resp.content(), noticeData);

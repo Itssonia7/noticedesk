@@ -1,0 +1,112 @@
+-- seed_reply_and_stage_templates_dev.sql
+-- Development seeds for v7 Stage 2 reply and stage templates
+-- NOTE: All dev blocks start with "[DEV - not CA reviewed]". Real production templates must be firm-approved.
+
+-- 1. Reply Templates
+INSERT INTO reply_templates (
+    template_id, version, card_id, effective_from, effective_to, status, summary_line, variables, blocks, documents, procedural_objection_options
+) VALUES
+(
+    'TPL-006', 1, 'CARD-006', '2017-07-01', '2099-12-31', 'draft',
+    'Input Tax Credit disallowance under Section 16(2)(aa) based on GSTR-2B static statement discrepancy of Rs {{issue.amount_tax}}.',
+    '["issue.amount_tax", "notice.din", "client.legal_name", "issue.reason_for_difference", "issue.section16_conditions_statement"]'::jsonb,
+    '[
+        {"id":"BLK-006-04A", "section":4, "html":"<p>[DEV - not CA reviewed] It is submitted that the discrepancy of Rs {{issue.amount_tax}} in GSTR-2B was due to {{issue.reason_for_difference}}, and {{issue.section16_conditions_statement}} by {{client.legal_name}}.</p>", "citations":["CIT-001"]},
+        {"id":"BLK-006-06A", "section":6, "html":"<p>[DEV - not CA reviewed] Section 16(2)(aa) cannot be applied retroactively or punitively where genuine tax has been deposited by the supplier into the public exchequer.</p>", "citations":["CIT-001"]}
+    ]'::jsonb,
+    '["GSTR-2B reconciliation report", "Supplier confirmation certificates"]'::jsonb,
+    '[]'::jsonb
+),
+(
+    'TPL-011', 1, 'CARD-011', '2017-07-01', '2099-12-31', 'draft',
+    'Interest demand under Section 50 of Rs {{issue.amount_tax}} on gross tax liability.',
+    '["issue.amount_tax", "notice.din", "client.legal_name"]'::jsonb,
+    '[
+        {"id":"BLK-011-04A", "section":4, "html":"<p>[DEV - not CA reviewed] The interest demand of Rs {{issue.amount_tax}} under Section 50 has been computed on gross tax liability instead of net cash liability. As per the proviso to Section 50(1), interest is payable only on the portion of tax paid by debiting the electronic cash ledger.</p>", "citations":["CIT-002"]},
+        {"id":"BLK-011-06A", "section":6, "html":"<p>[DEV - not CA reviewed] Proviso to Section 50(1) inserted retrospectively from 01-07-2017 mandates calculation of interest solely on net cash tax liability.</p>", "citations":["CIT-002"]}
+    ]'::jsonb,
+    '["Electronic Cash Ledger statement", "Net tax liability computation sheet"]'::jsonb,
+    '[]'::jsonb
+),
+(
+    'TPL-004', 1, 'CARD-004', '2017-07-01', '2099-12-31', 'draft',
+    'Input Tax Credit disallowance under Section 16(4) of Rs {{issue.amount_tax}}.',
+    '["issue.amount_tax", "notice.din", "client.legal_name"]'::jsonb,
+    '[
+        {"id":"BLK-004-04A", "section":4, "html":"<p>[DEV - not CA reviewed] Regarding the disallowance of ITC amounting to Rs {{issue.amount_tax}} under Section 16(4), the statutory relaxation provided under Section 16(5) extends the deadline for FY 2018-19 to 30th November 2021.</p>", "citations":["CIT-003"]},
+        {"id":"BLK-004-06A", "section":6, "html":"<p>[DEV - not CA reviewed] Retrospective statutory insertion of Section 16(5) overrides Section 16(4) time-bar for FY 2017-18 to 2020-21.</p>", "citations":["CIT-003"]}
+    ]'::jsonb,
+    '["GSTR-3B return filing acknowledgment", "Section 16(5) statutory notification copy"]'::jsonb,
+    '[]'::jsonb
+)
+ON CONFLICT (template_id, version) DO UPDATE SET
+    card_id = EXCLUDED.card_id,
+    summary_line = EXCLUDED.summary_line,
+    variables = EXCLUDED.variables,
+    blocks = EXCLUDED.blocks,
+    documents = EXCLUDED.documents,
+    procedural_objection_options = EXCLUDED.procedural_objection_options;
+
+-- 2. Stage Templates
+INSERT INTO stage_templates (
+    stage, version, effective_from, effective_to, status, sections
+) VALUES
+(
+    'asmt_10', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] Request for cross-examination of third-party portal data relied upon during scrutiny.</p>",
+        "12": "<p>[DEV - not CA reviewed] PRAYER: In view of the above facts and reconciliations, it is humbly prayed that the scrutiny proceedings under Form GST ASMT-10 be dropped in full. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.</p>",
+        "14": "<p>[DEV - not CA reviewed] CLIENT SUMMARY: Intimation of discrepancy in return under Form GST ASMT-10. Reply due within 30 days.</p>",
+        "15": "<p>[DEV - not CA reviewed] FILING CHECKLIST: 1. Form GST ASMT-11 reply 2. Reconciliation sheets 3. Authorisation Letter.</p>"
+    }'::jsonb
+),
+(
+    'scn_73', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] Request for cross-examination of departmental audit officers or third parties whose material is relied upon.</p>",
+        "12": "<p>[DEV - not CA reviewed] PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.</p>",
+        "14": "<p>[DEV - not CA reviewed] CLIENT SUMMARY: {{notice.type}} proposing a demand. Reply required before due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.</p>"
+    }'::jsonb
+),
+-- Synthetic generic text for development only. DRAFT - partner to review before any real use.
+(
+    'scn_74', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for cross-examination of every person whose statement, report or material is relied upon to allege fraud, wilful misstatement or suppression of facts.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} be dropped in full; that the allegation of fraud, wilful misstatement or suppression of facts be held not established and the extended period of limitation be held not invocable; and that no tax, interest or penalty be demanded. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} alleging fraud or suppression and invoking the extended period. Higher penalty exposure; reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures 5. Request for copies of relied-upon documents and statements.</p>"
+    }'::jsonb
+),
+(
+    'scn_74a', 1, '2024-04-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for cross-examination of every person whose statement, report or material is relied upon in the notice.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} be dropped in full and that no tax, interest or penalty be demanded; in the alternative, that any allegation of fraud, wilful misstatement or suppression of facts be held not established. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} proposing a demand. Reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.</p>"
+    }'::jsonb
+),
+(
+    'anti_profiteering', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for copies of the investigation report, the computation of the alleged profiteered amount and the material relied upon, and for cross-examination of the persons whose statements are relied upon.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} read with Rule 133 of the CGST Rules, 2017 be dropped; that no amount be held to be profiteered or directed to be deposited in the Consumer Welfare Fund; and that no interest or penalty be imposed. It is further requested that an opportunity of personal hearing be granted before any adverse order is passed.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} alleging that the benefit of a tax rate reduction or input tax credit was not passed on to recipients. Reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Price lists before and after the rate change 3. Product-wise computation workings 4. Authorisation Letter 5. Document Annexures.</p>"
+    }'::jsonb
+),
+-- Show cause notice under a provision other than 73/74/74A/171 (e.g. Section 27 / 63 / 129).
+-- Neutral wording only: no Section 73/74-specific limitation or Section 75(4) references.
+(
+    'generic_scn', 1, '2017-07-01', '2099-12-31', 'draft',
+    '{
+        "08": "<p>[DEV - not CA reviewed] DRAFT - partner to review. Request for copies of the documents, reports and statements relied upon in the notice, and for cross-examination of the persons whose statements are relied upon.</p>",
+        "12": "<p>[DEV - not CA reviewed] DRAFT - partner to review. PRAYER: It is humbly prayed that the proceedings initiated by notice {{notice.reference}} dated {{notice.issue_date}} under {{notice.section}} be dropped in full and that no tax, interest, penalty or other amount be demanded. It is further requested that an opportunity of personal hearing be granted before any adverse order is passed.</p>",
+        "14": "<p>[DEV - not CA reviewed] DRAFT - partner to review. CLIENT SUMMARY: {{notice.type}} proposing action against the taxpayer. Reply required before the due date.</p>",
+        "15": "<p>[DEV - not CA reviewed] DRAFT - partner to review. FILING CHECKLIST: 1. Written Submissions 2. Authorisation Letter 3. Document Annexures 4. Request for copies of relied-upon documents (if not supplied).</p>"
+    }'::jsonb
+)
+ON CONFLICT (stage, version) DO UPDATE SET
+    sections = EXCLUDED.sections;
