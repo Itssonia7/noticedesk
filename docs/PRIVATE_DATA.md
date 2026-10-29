@@ -114,8 +114,10 @@ git config core.hooksPath .githooks
 ```
 
 `.githooks/pre-commit` runs `scripts/check_sensitive_data.sh --staged`. The same script runs in
-CI (`.github/workflows/sensitive-data-check.yml`) on every push and pull request, on each new
-commit. It looks at **added lines only** and rejects:
+CI (`.github/workflows/sensitive-data-check.yml`): a push is scanned commit by commit (`--commits`),
+a pull request on its net diff against the base branch (`--range-diff <base>...<head>`, the files as
+they would land), so a PR whose history once held data that a later commit removed is green while the
+push scan still reported the offending commit. It looks at **added lines only** and rejects:
 
 | What | Rule |
 |------|------|

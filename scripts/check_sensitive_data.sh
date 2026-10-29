@@ -15,9 +15,12 @@
 # itself is never printed.
 #
 # Usage:
-#   check_sensitive_data.sh --staged              # pre-commit: the staged changes
-#   check_sensitive_data.sh --commits <A>..<B>    # CI / audit: every non-merge commit in the range
-#   check_sensitive_data.sh --commit <sha>        # one commit
+#   check_sensitive_data.sh --staged                     # pre-commit: the staged changes
+#   check_sensitive_data.sh --commits <A>..<B>           # CI (push) / audit: every non-merge commit in the range
+#   check_sensitive_data.sh --commit <sha>               # one commit
+#   check_sensitive_data.sh --range-diff <base>...<head> # CI (pull request): the NET diff from the merge-base of
+#                                                        # <base> and <head> to <head>, i.e. the files as they would
+#                                                        # land in <base>. Data a later commit removed is not reported.
 # Exit code: 0 clean, 1 findings, 2 usage / git error.
 
 set -uo pipefail
@@ -146,8 +149,18 @@ case "${1:-}" in
             "$0" --commit "$sha" || rc=1
         done
         ;;
+    --range-diff)
+        case "${2:-}" in
+            *...*) ;;
+            *) echo "usage: $0 --range-diff <base>...<head>" >&2; exit 2 ;;
+        esac
+        base="${2%%...*}"; head="${2##*...}"
+        [ -n "$base" ] && [ -n "$head" ] || { echo "usage: $0 --range-diff <base>...<head>" >&2; exit 2; }
+        mb="$("${GIT[@]}" merge-base "$base" "$head")" || exit 2
+        check_one "" "$mb" "$head" || rc=1
+        ;;
     *)
-        echo "usage: $0 --staged | --commit <sha> | --commits <A>..<B>" >&2
+        echo "usage: $0 --staged | --commit <sha> | --commits <A>..<B> | --range-diff <base>...<head>" >&2
         exit 2
         ;;
 esac

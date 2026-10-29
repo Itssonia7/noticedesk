@@ -94,6 +94,33 @@ try_commit "clean commit accepted" accept
 out="$(bash scripts/check_sensitive_data.sh --commits HEAD~4..HEAD 2>&1)"; rc=$?
 if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "legacy.txt:1: possible GSTIN"; then ok "--commits mode reports bypassed commit"; else bad "--commits mode"; echo "$out"; fi
 
+# 10b. --range-diff mode (CI, pull requests) scans the NET diff from the merge-base: data a later commit removed
+#      is not reported, data still present at the head is, and the base branch's own later commits are not scanned
+orig_branch="$(git rev-parse --abbrev-ref HEAD)"
+git branch -q -f pr-base HEAD
+git checkout -q -b pr-removed
+printf 'client: %s\n' "$REAL_GSTIN" > removed_later.txt; git add removed_later.txt; git commit -q --no-verify -m "adds data (bypassing hook)"
+git rm -q removed_later.txt; git commit -q -m "removes it again"
+out="$(bash scripts/check_sensitive_data.sh --commits pr-base..pr-removed 2>&1)"; rc=$?
+if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "removed_later.txt:1: possible GSTIN"; then ok "--commits mode still reports the removed-later commit"; else bad "--commits on removed-later"; echo "$out"; fi
+out="$(bash scripts/check_sensitive_data.sh --range-diff pr-base...pr-removed 2>&1)"; rc=$?
+if [ $rc -eq 0 ] && [ -z "$out" ]; then ok "--range-diff mode is clean when a later commit removed the data"; else bad "--range-diff on removed-later (exit $rc)"; echo "$out"; fi
+git checkout -q pr-base; git checkout -q -b pr-kept
+printf 'client: %s\n' "$REAL_GSTIN" > kept.txt; git add kept.txt; git commit -q --no-verify -m "adds data (bypassing hook)"
+mkdir -p docs; printf 'binary' > docs/kept_notice.docx; git add docs/kept_notice.docx; git commit -q --no-verify -m "adds a docx (bypassing hook)"
+# the base branch moves on with data of its own: a net diff against the merge-base must not report it
+git checkout -q pr-base; printf 'base: %s\n' "$REAL_GSTIN" > base_only.txt; git add base_only.txt; git commit -q --no-verify -m "base commit (bypassing hook)"
+out="$(bash scripts/check_sensitive_data.sh --range-diff pr-base...pr-kept 2>&1)"; rc=$?
+if [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "kept.txt:1: possible GSTIN ${REAL_GSTIN:0:7}\*\*\*\*${REAL_GSTIN:11:4}"; then ok "--range-diff mode reports data still present at the head, masked"; else bad "--range-diff on kept (exit $rc)"; echo "$out"; fi
+if printf '%s' "$out" | grep -Fq "docs/kept_notice.docx: new binary document"; then ok "--range-diff mode reports a new binary at the head"; else bad "--range-diff binary finding"; echo "$out"; fi
+if printf '%s' "$out" | grep -q "base_only.txt"; then bad "--range-diff scanned the base branch's own commits"; else ok "--range-diff ignores commits on the base after the merge-base"; fi
+if printf '%s' "$out" | grep -q "$REAL_GSTIN"; then bad "--range-diff printed a full GSTIN"; else ok "--range-diff never prints the full value"; fi
+out="$(bash scripts/check_sensitive_data.sh --range-diff pr-base..pr-kept 2>&1)"; rc=$?
+if [ $rc -eq 2 ]; then ok "--range-diff without the three-dot form is a usage error"; else bad "--range-diff usage check (exit $rc)"; echo "$out"; fi
+out="$(bash scripts/check_sensitive_data.sh --range-diff pr-base...no-such-branch 2>&1)"; rc=$?
+if [ $rc -eq 2 ]; then ok "--range-diff with an unknown ref is a git error, not a clean run"; else bad "--range-diff unknown ref (exit $rc)"; echo "$out"; fi
+git checkout -q "$orig_branch"
+
 # 11. a learned library entry (any extension) rejected, also when nested; a runner result rejected
 mkdir -p learned; printf '{}' > learned/2026-10-26_n1_issue1.json; git add -f learned/2026-10-26_n1_issue1.json
 try_commit "learned library entry rejected" reject

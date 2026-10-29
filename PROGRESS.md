@@ -1377,6 +1377,10 @@ commit, one test (synthetic rows, invented names, allow-listed GSTINs; no live c
   names its local input folders neutrally. The two deleted runners were superseded by `V7LiveRig` /
   `V7LivePipelineRunnerTest`; nothing else referenced them. The demo identifiers that exist unchanged on `main`
   (dev seeds, SQL tests, the demo page) stay. History is not rewritten.
+- **CI** (`sensitive-data-check.yml`): a pull request is now scanned on its NET diff against the merge-base
+  (`check_sensitive_data.sh --range-diff <base>...<head>`, the files as they would land), so a PR whose history once
+  held data that a later commit removed is green, like a push scan of the same head; a push still scans each new
+  commit. Covered by the new `--range-diff` cases in `scripts/test_check_sensitive_data.sh`.
 
 ## (c) Verification
 

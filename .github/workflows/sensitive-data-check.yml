@@ -2,6 +2,12 @@ name: sensitive-data-check
 
 # Rejects real-looking GSTINs / PANs on added lines and new .pdf/.docx/.xlsx files.
 # Same script as the committed pre-commit hook: scripts/check_sensitive_data.sh
+#
+# push:         every new commit is scanned on its own (--commits), so a commit that adds data is caught even when a
+#               later commit removes it again (git history keeps it).
+# pull_request: the NET diff of the pull request is scanned (--range-diff), the files as they would land in the base
+#               branch. A PR whose history once held data that a later commit removed is therefore green, like a push
+#               scan of the same head; the offending commit was already reported by the push scan.
 
 on:
   push:
@@ -18,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Scan the commits in this push / pull request
+      - name: Scan the commits in this push / the net diff of this pull request
         env:
           EVENT: ${{ github.event_name }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
@@ -29,7 +35,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = "pull_request" ]; then
-            range="$(git merge-base "$PR_BASE" "$PR_HEAD")..$PR_HEAD"
+            echo "Scanning the net diff $PR_BASE...$PR_HEAD"
+            bash scripts/check_sensitive_data.sh --range-diff "$PR_BASE...$PR_HEAD"
+            exit 0
           elif [ -n "$PUSH_BEFORE" ] && ! printf '%s' "$PUSH_BEFORE" | grep -q '^0*$' \
                && git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
             range="$PUSH_BEFORE..$PUSH_AFTER"
