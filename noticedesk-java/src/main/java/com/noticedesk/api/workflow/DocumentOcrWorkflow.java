@@ -48,10 +48,7 @@ public class DocumentOcrWorkflow {
     public OcrWorkflowResult processInboxItem(UUID inboxId, NamedParameterJdbcTemplate jdbc) {
         log.info("ocr.start inbox_id={}", inboxId);
 
-        // 1. Bind RLS — tenant already in context from the dispatcher; this is defensive.
-        //    The caller is expected to have called set_config before dispatching.
-
-        // 2. Fetch inbox item
+        // 1. Fetch inbox item
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT storage_key, mime_type, filename FROM documents_inbox " +
                 "WHERE inbox_id = CAST(:id AS UUID)",
@@ -66,7 +63,7 @@ public class DocumentOcrWorkflow {
         String filename   = (String) row.get("filename");
         if (mimeType == null) mimeType = "application/pdf";
 
-        // 3. Download bytes
+        // 2. Download bytes
         byte[] bytes;
         try {
             bytes = storageFactory.getStorage().retrieve(storageKey);
@@ -78,16 +75,16 @@ public class DocumentOcrWorkflow {
             throw new RuntimeException("storage download failed for " + inboxId + ": " + e.getMessage(), e);
         }
 
-        // 4. Run OCR
+        // 3. Run initial OCR
         String ocrText;
         String ocrProvider;
         int pageCount;
         try {
             com.noticedesk.api.service.ocr.OcrResult result =
                     ocrFactory.getPrimaryProvider().process(bytes, filename != null ? filename : "upload", mimeType);
-            ocrText    = result.text();
+            ocrText     = result.text();
             ocrProvider = result.providerName();
-            pageCount  = result.pageCount();
+            pageCount   = result.pageCount();
         } catch (Exception e) {
             log.error("ocr.extraction_failed inbox_id={} error={}", inboxId, e.getMessage());
             jdbc.update(
@@ -96,7 +93,7 @@ public class DocumentOcrWorkflow {
             throw new RuntimeException("OCR extraction failed for " + inboxId + ": " + e.getMessage(), e);
         }
 
-        // 5. Update inbox
+        // 4. Update inbox with OCR text and status
         jdbc.update(
                 "UPDATE documents_inbox " +
                 "SET ocr_text = :text, ocr_provider_used = :provider, page_count = :pages, " +
@@ -110,7 +107,8 @@ public class DocumentOcrWorkflow {
 
         log.info("ocr.complete inbox_id={} provider={} pages={}", inboxId, ocrProvider, pageCount);
 
-        // 6. Return result
+        // 5. Return result
         return new OcrWorkflowResult(inboxId, ocrText, pageCount, ocrProvider);
     }
 }
+

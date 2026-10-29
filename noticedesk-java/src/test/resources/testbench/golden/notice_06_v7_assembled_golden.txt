@@ -1,0 +1,147 @@
+=== NOTICE 06 V7 ASSEMBLED GOLDEN DRAFT SNAPSHOT ===
+
+================================================================================
+SECTION 1: 01 Executive Summary
+================================================================================
+Executive Summary: Reply to Notice Ref SCN/MH/2023-24/606 dated 18-09-2023 issued under Section 73 for GSTIN 27IIIJJ1234I1Z9. Total Demand Amount: Rs 1,55,918.
+  * Issue #1 (amount involved: Rs 1,50,000): Input Tax Credit disallowance under Section 16(2)(aa) of Rs 1,50,000.
+  * Issue #2 (amount involved: Rs 5,918): Interest demand under Section 50 of Rs 5,918 on gross tax liability.
+
+
+================================================================================
+SECTION 2: 02 Notice Understanding
+================================================================================
+The taxpayer M/s Vantage Logistics Pvt Ltd has received notice reference SCN/MH/2023-24/606 dated 18-09-2023, issued by the State Tax Officer, under Section 73 of the CGST Act, 2017, for Financial Year 2022-23.
+The notice raises 2 issues, each answered in Section 04 and paragraph-wise in Section 05.
+
+
+================================================================================
+SECTION 3: 03 Factual Background
+================================================================================
+M/s Vantage Logistics Pvt Ltd (GSTIN: 27IIIJJ1234I1Z9) is registered under the GST law in the State of Maharashtra.
+Notice reference SCN/MH/2023-24/606 dated 18-09-2023 pertains to Financial Year 2022-23.
+The notice covers the tax period 2022-23 and was received by the taxpayer on [[MISSING: date_of_receipt]].
+
+
+================================================================================
+SECTION 4: 04 Issue-wise Response
+================================================================================
+
+--- Issue #1 Grounds of Defence ---
+4.1 [DEV - not CA reviewed] It is submitted that the discrepancy of Rs 1,50,000 in GSTR-2B was due to [[MISSING: reason_for_difference]], and [[MISSING: section16_conditions_statement]] by M/s Vantage Logistics Pvt Ltd.
+
+--- Issue #2 Grounds of Defence ---
+4.2 [DEV - not CA reviewed] The interest demand of Rs 5,918 under Section 50 has been computed on gross tax liability instead of net cash liability. As per proviso to Section 50(1), interest is payable only on cash ledger debit.
+
+
+================================================================================
+SECTION 5: 05 Para-wise Reply
+================================================================================
+Point-by-point reply to the paragraphs of the notice:
+  * Para 1: Matter of record; no comments.
+  * Para 2: Denied. Please refer to the reply to Issue #1 at para 4.1.
+  * Para 3: Denied. Please refer to the reply to Issue #2 at para 4.2.
+  * Para 4: Matter of record; no comments.
+  * Para 5: Denied. The proposals in this paragraph are not sustainable for the reasons set out in Sections 04 and 06.
+  * Para 6: Noted. This reply is submitted in compliance with the direction.
+
+
+================================================================================
+SECTION 6: 06 Legal Submissions
+================================================================================
+
+--- Legal Submissions for Issue #1 ---
+6.1 [DEV - not CA reviewed] Section 16(2)(aa) cannot be applied retroactively or punitively where genuine tax has been deposited by the supplier into the public exchequer.
+
+--- Legal Submissions for Issue #2 ---
+6.2 [DEV - not CA reviewed] Proviso to Section 50(1) inserted retrospectively from 01-07-2017 mandates calculation of interest solely on net cash tax liability.
+
+
+================================================================================
+SECTION 7: 07 Procedural Objections
+================================================================================
+[[PARTNER: add procedural objections after checklist review]]
+
+
+================================================================================
+SECTION 8: 08 Cross-Examination Request
+================================================================================
+Not applicable.
+
+
+================================================================================
+SECTION 9: 09 Related Context from Other Registrations
+================================================================================
+Not applicable.
+
+
+================================================================================
+SECTION 10: 10 Documents Enclosed
+================================================================================
+[[PARTNER: list the documents to be enclosed]]
+
+
+================================================================================
+SECTION 11: 11 Annexure Index
+================================================================================
+[[PARTNER: prepare the annexure index once documents are listed]]
+
+
+================================================================================
+SECTION 12: 12 Prayer
+================================================================================
+[DEV - not CA reviewed] PRAYER: It is humbly prayed that the Show Cause Notice issued under Section 73 be dropped in full and no penalty or interest be levied. It is further requested that an opportunity of personal hearing be granted before passing any adverse order as mandated under Section 75(4) of the CGST Act, 2017.
+
+
+================================================================================
+SECTION 13: 13 Internal Partner Note
+================================================================================
+
+--- Internal Partner Review Note ---
+Notice: SCN/MH/2023-24/606 | Stage template: scn_73 | Section: Section 73
+Matched Issues & Templates:
+  * Issue #1: Match Status=full, Cards=[CARD-006], Template=TPL-006 (v1), Written by=template (code)
+  * Issue #2: Match Status=full, Cards=[CARD-011], Template=TPL-011 (v1), Written by=template (code)
+Procedural Objection Options (Partner to Select):
+  * Check whether an opportunity of personal hearing has been offered (Section 75(4)).
+  * Verify the limitation period under Section 73(10).
+Stage 3 Notes:
+  * Code defect checks: limitation_73=ok (SCN 18.09.2023 vs Section 73 SCN deadline 30.09.2026 for FY 2022-23); premature_74=ok (not applicable: not a Section 74 SCN); din=cannot_test (issuing authority not stated in the header); signature=ok (no blank signature block in the last 25 lines); drc01a_reply_time=ok (not applicable: not a DRC-01A).
+Code Quality Check Results & Flags:
+Check Name | Status | Severity | Details
+CHECK_ALL_SECTIONS_PRESENT | PASS | block | {missing_sections=[], total_sections=15}
+CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=2, unanswered_issues=[]}
+CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
+CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
+CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
+CHECK_MARKERS_LIST | FAIL | block | {confirm_count=0, confirm_markers=[], missing_count=3, missing_markers=[date_of_receipt, reason_for_difference, section16_conditions_statement], pending_ai_count=0, pending_ai_markers=[]}
+CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=4, unique_rendered_blocks=4}
+CHECK_PROCEEDING_CONSISTENT | PASS | block | {notice_section=Section 73, problems=[], stage=scn_73}
+FLAG_MISSING_DATE_OF_RECEIPT | FAIL | warn | {flag=warn:missing_date_of_receipt}
+Missing Data Markers:
+  * date_of_receipt (severity: block)
+  * reason_for_difference (severity: block)
+  * section16_conditions_statement (severity: block)
+Facts to confirm with the client: None
+Pending AI Markers: None
+
+
+================================================================================
+SECTION 14: 14 Client Summary
+================================================================================
+
+--- Client Summary ---
+Notice Type: Show Cause Notice under Section 73
+Notice Reference: SCN/MH/2023-24/606 dated 18-09-2023
+Total Amount Demanded: Rs 1,55,918
+Reply Due Date: Within 30 days from receipt (date of receipt: [[MISSING: date_of_receipt]])
+Documents Required from Client:
+[[PARTNER: list the documents required from the client]]
+
+
+================================================================================
+SECTION 15: 15 Filing Checklist
+================================================================================
+[DEV - not CA reviewed] FILING CHECKLIST: 1. Written Submissions 2. Form GST DRC-06 3. Authorisation Letter 4. Document Annexures.
+
+

@@ -49,3 +49,48 @@ logs/
 *.sqlite
 *.db
 pgdata/
+.pgdata/
+test_venv/
+*.pdf
+
+# Test artifacts & cache
+.opus_cache.json
+testbench/results/
+# Run outputs, scratch work, client drafts and the firm's reply corpus: local only, never committed
+# (see docs/PRIVATE_DATA.md)
+output/
+scratch/
+generated_drafts/
+comparision/
+formating/
+/*.zip
+NoticeDesk_GST_Corpus*/
+# learned library entries (notice text) belong in $PRIVATE_SEED_DIR/learned only
+learned/*.json
+# PDF runner privacy files belong in $PRIVATE_SEED_DIR/results only: the anonymisation map holds the real
+# identifiers, the *_anon files the anonymised notice / draft, the restored draft and summary the real ones
+*_anon_map.json
+*_ocr_anon.txt
+*_draft_anon.txt
+results/*_ocr.txt
+results/*_draft.txt
+results/*_draft.docx
+results/*_summary.txt
+
+# Private data protection
+private/
+*.real.json
+*.real.sql
+*.real.docx
+*.real.pdf
+noticedesk-private/
+
+
+
+# Private / real client data: never committed (see docs/PRIVATE_DATA.md)
+private/
+noticedesk-private/
+*.real.json
+*.real.sql
+*.real.docx
+*.real.pdf

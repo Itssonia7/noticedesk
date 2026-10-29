@@ -1,0 +1,26 @@
+{
+  "id": "msg_fixture_match_trunc",
+  "type": "message",
+  "role": "assistant",
+  "model": "fixture-matching-model",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Synthetic fixture: reasoning summary withheld.",
+      "signature": "fixture-signature-not-real"
+    },
+    {
+      "type": "text",
+      "text": "{\"notice\": {\"notice_number\": \"SCN/DL/2021-22/740\", \"din\": null, \"issue_date\": \"20-11-2021\", \"reply_due_date\": \"30 days from service\", \"financial_year\": \"2020-21\", \"tax_period\": \"Ap"
+    }
+  ],
+  "stop_reason": "max_tokens",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 4200,
+    "output_tokens": 8000,
+    "cache_read_input_tokens": 9000,
+    "cache_creation_input_tokens": 0
+  },
+  "_fixture_note": "Synthetic: output cut at max_tokens (thinking used most of the budget); text is an unclosed JSON object."
+}

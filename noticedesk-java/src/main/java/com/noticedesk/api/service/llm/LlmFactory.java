@@ -33,14 +33,48 @@ public class LlmFactory {
     // -----------------------------------------------------------------------
 
     /**
-     * Returns the primary LLM provider with its model resolved for {@code agentName}.
+     * Returns the provider for {@code agentName} with its model resolved: the primary provider, or the agent's own
+     * provider when one is set ({@code llm.provider-new-issue} / {@code llm.provider-high-stakes}, see
+     * {@link AppProperties.Llm#providerForAgent}).
      *
-     * @param agentName  one of {@code "drafting"}, {@code "triage"}, {@code "parsing"}
+     * @param agentName  one of {@code "drafting"}, {@code "triage"}, {@code "parsing"}, {@code "new_issue"}, ...
      */
     public LlmProvider getLlmForAgent(String agentName) {
-        String providerName = properties.getLlm().getProviderPrimary();
+        String providerName = properties.getLlm().providerForAgent(agentName);
+        if ("matching".equals(agentName)) {
+            String matchingModel = properties.getLlm().getModelMatching();
+            if (matchingModel == null || matchingModel.isBlank()) {
+                throw new LlmException("LLM_MODEL_MATCHING environment variable or noticedesk.llm.model-matching property is empty");
+            }
+        }
         String model = properties.modelForAgent(agentName, providerName);
+        if ("matching".equals(agentName) && (model == null || model.isBlank())) {
+            throw new LlmException("LLM_MODEL_MATCHING environment variable or noticedesk.llm.model-matching property is empty");
+        }
         return getOrCreate(providerName, model);
+    }
+
+    /**
+     * Returns the Gemini provider with its model resolved for {@code agentName}.
+     */
+    public LlmProvider getGeminiProviderForAgent(String agentName) {
+        String model = properties.modelForAgent(agentName, "gemini");
+        return getOrCreate("gemini", model);
+    }
+
+    /**
+     * Returns a dedicated Claude Opus provider for unmatched template generation.
+     */
+    public LlmProvider getOpusProvider() {
+        String apiKey = properties.getLlm().getAnthropic().getApiKey();
+        if (apiKey != null && !apiKey.isBlank()) {
+            String opusModel = properties.getLlm().getModelOpus();
+            if (opusModel == null || opusModel.isBlank()) {
+                opusModel = properties.getLlm().getAnthropic().getModel();
+            }
+            return getOrCreate("anthropic", opusModel);
+        }
+        return getLlmForAgent("formatting");
     }
 
     /**
@@ -78,24 +112,42 @@ public class LlmFactory {
                 AppProperties.Llm.Anthropic cfg = properties.getLlm().getAnthropic();
                 if (cfg.getApiKey() == null || cfg.getApiKey().isBlank()) {
                     throw new LlmException(
-                            "noticedesk.llm.anthropic.api-key must be set for anthropic provider");
+                            "noticedesk.llm.anthropic.api-key must be set for anthropic provider (set ANTHROPIC_API_KEY)");
                 }
                 String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
-                yield new AnthropicLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds());
+                if (resolvedModel == null || resolvedModel.isBlank()) {
+                    throw new LlmException(
+                            "Anthropic model name must not be empty. Please set ANTHROPIC_MODEL or LLM_MODEL_* env var");
+                }
+                yield new AnthropicLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds(), cfg.getWorkspaceId(),
+                        cfg.getEffortModels(), cfg.getMaxTokensCeiling() != null ? cfg.getMaxTokensCeiling() : 0);
             }
             case "openai" -> {
                 AppProperties.Llm.OpenAi cfg = properties.getLlm().getOpenai();
                 if (cfg.getApiKey() == null || cfg.getApiKey().isBlank()) {
                     throw new LlmException(
-                            "noticedesk.llm.openai.api-key must be set for openai provider");
+                            "noticedesk.llm.openai.api-key must be set for openai provider (set OPENAI_API_KEY)");
                 }
                 String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
+                if (resolvedModel == null || resolvedModel.isBlank()) {
+                    throw new LlmException(
+                            "OpenAI model name must not be empty. Please set OPENAI_MODEL env var");
+                }
                 yield new OpenAiLlmProvider(cfg.getApiKey(), resolvedModel,
                         cfg.getTimeoutSeconds(), cfg.getBaseUrl());
             }
+            case "gemini" -> {
+                AppProperties.Llm.Gemini cfg = properties.getLlm().getGemini();
+                String resolvedModel = (model != null && !model.isBlank()) ? model : cfg.getModel();
+                if (resolvedModel == null || resolvedModel.isBlank()) {
+                    throw new LlmException(
+                            "Gemini model name must not be empty. Please set GEMINI_MODEL env var");
+                }
+                yield new GeminiLlmProvider(cfg.getApiKey(), resolvedModel, cfg.getTimeoutSeconds());
+            }
             case "stub" -> new StubLlmProvider(properties.getLlm().getStubDefaultCanned());
             default -> throw new LlmException(
-                    "Unknown LLM provider: '" + name + "' (valid: anthropic, openai, stub)");
+                    "Unknown LLM provider: '" + name + "' (valid: anthropic, openai, gemini, stub)");
         };
     }
 }

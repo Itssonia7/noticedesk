@@ -1,0 +1,26 @@
+{
+  "id": "msg_fixture_hs_002",
+  "type": "message",
+  "role": "assistant",
+  "model": "fixture-high-stakes-model",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Synthetic fixture: reasoning summary withheld.",
+      "signature": "fixture-signature-not-real"
+    },
+    {
+      "type": "text",
+      "text": "{\"section01_html\": \"<p>The notice invokes the extended period under Section 74 without any evidence of intent to evade; the demand of Rs 5,00,000 is contested in full.</p>\", \"section03_html\": \"<p>The taxpayer filed all GSTR-3B returns for FY 2020-21 on time; the alleged difference arises from a reconciliation of bank receipts that include non-taxable inflows.</p>\", \"citations\": []}"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 4200,
+    "output_tokens": 1800,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 9000
+  },
+  "_fixture_note": "Synthetic high-stakes writer output (sections 01/03) for bench notice-bench-002 (fake taxpayer)."
+}

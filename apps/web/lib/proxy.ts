@@ -12,7 +12,7 @@ import { NextResponse } from "next/server";
 
 import { readDevSession } from "@/lib/session";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:9090";
 
 const HEADERS_TO_FORWARD: ReadonlySet<string> = new Set([
   "content-type",

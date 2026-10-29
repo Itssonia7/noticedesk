@@ -1,0 +1,3 @@
+# Binary documents (.pdf/.docx/.xlsx) already tracked when the privacy hook was introduced.
+# A NEW .pdf/.docx/.xlsx is rejected unless its exact repo path is listed here. Do not add real client documents.
+# (empty: no binary document is tracked on this branch; add a synthetic document here only with its exact path)

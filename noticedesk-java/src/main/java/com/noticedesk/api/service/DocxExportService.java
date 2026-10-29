@@ -13,6 +13,8 @@ import java.io.ByteArrayOutputStream;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -132,20 +134,46 @@ public class DocxExportService {
             // Handle list items
             if (el.tagName().equals("ul") || el.tagName().equals("ol")) {
                 for (Element li : el.select("li")) {
+                    // a nested list's items are their own lines: the item's text without them, indented by depth
+                    Element own = li.clone();
+                    own.select("ul, ol").remove();
+                    String itemText = own.text().strip();
+                    if (itemText.isBlank()) continue;
                     XWPFParagraph lp = doc.createParagraph();
-                    lp.setIndentationLeft(720);
-                    XWPFRun lr = lp.createRun();
-                    lr.setText("• " + li.text().strip());
-                    lr.setFontFamily("Times New Roman");
-                    lr.setFontSize(11);
+                    long depth = li.parents().stream().filter(a -> a.tagName().equals("ul") || a.tagName().equals("ol")).count();
+                    lp.setIndentationLeft((int) (720 * Math.max(1, depth)));
+                    addRuns(lp, "• " + itemText, false);
                 }
                 continue;
             }
-            XWPFRun run = p.createRun();
-            run.setText(text);
-            run.setFontFamily("Times New Roman");
-            run.setFontSize(11);
+            addRuns(p, text, el.tagName().matches("h[1-6]"));   // issue headings and sub-headings are bold
         }
+    }
+
+    /**
+     * A draft marker the partner must resolve before filing: [[MISSING: x]], [[CONFIRM: fact]], [[PENDING_AI: ...]]
+     * or [[PARTNER: ...]]. Rendered in bold so it stands out in the Word document.
+     */
+    static final Pattern MARKER = Pattern.compile("\\[\\[\\s*(?:MISSING|CONFIRM|PENDING_AI|PARTNER)\\b[^\\]]*\\]\\]");
+
+    /** The text as runs: plain text in the paragraph's weight, every marker ({@link #MARKER}) in bold. */
+    static void addRuns(XWPFParagraph p, String text, boolean bold) {
+        Matcher m = MARKER.matcher(text);
+        int last = 0;
+        while (m.find()) {
+            if (m.start() > last) addRun(p, text.substring(last, m.start()), bold);
+            addRun(p, m.group(), true);
+            last = m.end();
+        }
+        if (last < text.length()) addRun(p, text.substring(last), bold);
+    }
+
+    private static void addRun(XWPFParagraph p, String text, boolean bold) {
+        XWPFRun run = p.createRun();
+        run.setText(text);
+        run.setBold(bold);
+        run.setFontFamily("Times New Roman");
+        run.setFontSize(11);
     }
 
     private String nvl(String s) {

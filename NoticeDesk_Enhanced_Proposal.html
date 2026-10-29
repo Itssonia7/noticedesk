@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NoticeDesk Architecture Proposal — Enhanced RAG & Hybrid Pipeline</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      margin: 0; padding: 0;
+      background: #f4f6f9;
+      color: #1a1d20;
+      line-height: 1.6;
+    }
+
+    .cover-band {
+      background: linear-gradient(135deg, #0b192c 0%, #1e3e62 100%);
+      color: white;
+      padding: 40px 60px;
+      border-bottom: 5px solid #00adb5;
+    }
+    .cover-band h1 {
+      margin: 0 0 10px;
+      font-size: 24pt;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .cover-band h1 span { color: #00adb5; }
+    .cover-band .subtitle {
+      font-size: 13pt;
+      color: #b0c4de;
+      margin-bottom: 20px;
+    }
+    .meta-row {
+      display: flex;
+      gap: 30px;
+      font-size: 10pt;
+      color: #d1d8e0;
+    }
+
+    .page {
+      max-width: 900px;
+      margin: 30px auto;
+      background: white;
+      padding: 40px 50px;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+    }
+
+    h2 {
+      color: #0b192c;
+      border-bottom: 2px solid #eef2f5;
+      padding-bottom: 8px;
+      margin-top: 35px;
+      font-size: 15pt;
+    }
+    h3 { color: #1e3e62; font-size: 12pt; margin-top: 25px; }
+
+    /* CRITIQUE TABLE */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 20px 0;
+      font-size: 9.5pt;
+    }
+    thead th {
+      background: #0b192c;
+      color: white;
+      padding: 10px 14px;
+      text-align: left;
+      font-weight: 600;
+    }
+    tbody tr:nth-child(even) { background: #f8fafc; }
+    tbody td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #e2e8f0;
+      vertical-align: top;
+    }
+
+    .badge-red { background: #ffe5e5; color: #c53030; padding: 3px 8px; border-radius: 4px; font-size: 8.5pt; font-weight: 600; }
+    .badge-green { background: #e6fffa; color: #234e52; padding: 3px 8px; border-radius: 4px; font-size: 8.5pt; font-weight: 600; }
+    .badge-blue { background: #ebf8ff; color: #2b6cb0; padding: 3px 8px; border-radius: 4px; font-size: 8.5pt; font-weight: 600; }
+
+    /* DIAGRAM BOX */
+    .flow-container {
+      background: #0d1b2a;
+      color: #e2e8f0;
+      padding: 25px;
+      border-radius: 8px;
+      font-family: 'Fira Code', monospace;
+      font-size: 9pt;
+      line-height: 1.6;
+      margin: 20px 0;
+    }
+    .flow-step {
+      background: #1b263b;
+      border-left: 4px solid #00adb5;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      border-radius: 4px;
+    }
+    .flow-step h4 { margin: 0 0 6px; color: #00adb5; font-size: 10pt; font-family: 'Inter', sans-serif; }
+
+    .highlight-box {
+      background: #eef8ff;
+      border-left: 4px solid #3182ce;
+      padding: 15px 20px;
+      margin: 20px 0;
+      border-radius: 4px;
+      font-size: 10pt;
+    }
+
+    /* COST CARDS */
+    .cost-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin: 20px 0;
+    }
+    .cost-card {
+      border-radius: 6px;
+      padding: 16px;
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+    }
+    .cost-card h4 { margin: 0 0 8px; color: #0b192c; font-size: 10.5pt; }
+    .cost-amount { font-size: 14pt; font-weight: 700; color: #00adb5; }
+
+    @media print {
+      body { background: white; }
+      .page { box-shadow: none; padding: 0; margin: 0; max-width: 100%; }
+      .cover-band { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      thead th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="cover-band">
+  <div class="subtitle">NoticeDesk Internal — Architecture Proposal v2.0</div>
+  <h1>Enhanced Pipeline Architecture<br><span>RAG Integration & Hybrid Precedent Matching</span></h1>
+  <div class="meta-row">
+    <div><strong>Prepared by:</strong> Sonia (NoticeDesk Engineering)</div>
+    <div><strong>Date:</strong> September 2026</div>
+    <div><strong>Purpose:</strong> Proposal Review & Mentor Alignment</div>
+  </div>
+</div>
+
+<div class="page">
+
+  <h2>1. Executive Summary</h2>
+  <p>The original proposal introduced a smart issue-level routing strategy to lower drafting costs. However, a detailed technical audit reveals <strong>critical legal & operational vulnerabilities</strong>: relying on raw vector search for template matching causes false positives, and drafting novel grounds without live legal context causes LLM hallucinations.</p>
+  
+  <div class="highlight-box">
+    <strong>Core Upgrade:</strong> We replace raw vector matching with <strong>Hybrid Metadata-Keyword Search</strong> and insert a <strong>Legal Citation RAG Engine</strong> (retrieving High Court judgments & CBIC circulars) to guarantee 100% legal accuracy while maintaining average per-notice costs under <strong>₹7.50</strong>.
+  </div>
+
+  <h2>2. What Was Missing & High-Risk Flaws</h2>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Component</th>
+        <th>Original Proposal</th>
+        <th>Flaw & Risk</th>
+        <th>Enhanced Solution</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Matching Engine</strong></td>
+        <td>Pure Vector Search</td>
+        <td><span class="badge-red">High Risk</span> Cosine similarity measures word overlap, not legal nuance. High false-positive rate.</td>
+        <td><span class="badge-green">Hybrid Search</span> Hard Metadata Filter + Keyword Score + Vector Fallback.</td>
+      </tr>
+      <tr>
+        <td><strong>Novel Ground Drafting</strong></td>
+        <td>Opus "from scratch"</td>
+        <td><span class="badge-red">Hallucination Risk</span> LLM relies on memory without live case law or CBIC Circulars.</td>
+        <td><span class="badge-green">Grounded RAG</span> Injects top-3 retrieved High Court judgments & Circular clauses.</td>
+      </tr>
+      <tr>
+        <td><strong>Precedent Corpus</strong></td>
+        <td>Static templates</td>
+        <td><span class="badge-red">Stale Knowledge</span> No mechanism to learn from newly generated grounds.</td>
+        <td><span class="badge-green">Auto-Caching</span> Approved novel grounds automatically become ₹0 templates for future notices.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>3. The Enhanced 4-Phase Architecture</h2>
+
+  <div class="flow-container">
+    <div class="flow-step">
+      <h4>Phase 1: Split & Extract (Haiku / Gemini Flash)</h4>
+      Splits multi-issue notice into sub-issues (e.g. Sec 16(4) ITC + Sec 50 Interest). Extracts structured JSON payload containing <code>section_refs</code>, <code>tax_period</code>, and <code>issue_tags</code>. (Cost: ~₹0.50)
+    </div>
+
+    <div class="flow-step">
+      <h4>Phase 2: Hybrid Precedent Matching (GstCorpusMatcherService)</h4>
+      Filters corpus manifest by exact metadata (Section + Form) → Keyword Score → Vector Fallback.<br>
+      • <strong>Match ≥0.90:</strong> Route to FAST-TRACK (Mechanical template fill | <strong>₹0 LLM cost</strong>).<br>
+      • <strong>Match &lt;0.90:</strong> Escalate to Phase 3.
+    </div>
+
+    <div class="flow-step">
+      <h4>Phase 3: Legal RAG Engine & Grounded Generation (Claude 3.7 / Opus)</h4>
+      Queries NoticeDesk Vector DB for landmark High Court rulings & CBIC Circulars. Injects top-3 judgment excerpts into LLM prompt. Output is auto-cached for future ₹0 lookup. (Cost: ~₹3.80)
+    </div>
+
+    <div class="flow-step">
+      <h4>Phase 4: Assembly & Code Gateways (Sonnet + Code)</h4>
+      Sonnet writes overarching Facts & Prayer once. Code stitches paragraphs, renumbers, and enforces hard rules: <em>No Empty Slots</em> & <em>Every Allegation Answered</em>. (Cost: ~₹3.20)
+    </div>
+  </div>
+
+  <h2>4. Updated Economics & Per-Notice Cost Breakdown</h2>
+
+  <div class="cost-grid">
+    <div class="cost-card">
+      <h4>Scenario A: All Routine Notice</h4>
+      <p style="font-size: 9pt; color: #64748b; margin-bottom: 8px;">4 Issues — 4 Template Matches (0 LLM Calls for Drafting)</p>
+      <div class="cost-amount">₹3.71 <span style="font-size: 9pt; color: #64748b; font-weight: normal;">/ notice</span></div>
+    </div>
+    
+    <div class="cost-card">
+      <h4>Scenario B: Typical Notice (Recommended)</h4>
+      <p style="font-size: 9pt; color: #64748b; margin-bottom: 8px;">4 Issues — 3 Templates + 1 RAG Novel Ground</p>
+      <div class="cost-amount">₹7.50 <span style="font-size: 9pt; color: #64748b; font-weight: normal;">/ notice</span></div>
+    </div>
+
+    <div class="cost-card">
+      <h4>Scenario C: Complex Notice</h4>
+      <p style="font-size: 9pt; color: #64748b; margin-bottom: 8px;">4 Issues — 2 Templates + 2 RAG Novel Grounds</p>
+      <div class="cost-amount">₹11.30 <span style="font-size: 9pt; color: #64748b; font-weight: normal;">/ notice</span></div>
+    </div>
+
+    <div class="cost-card">
+      <h4>Scenario D: Fully Novel Notice</h4>
+      <p style="font-size: 9pt; color: #64748b; margin-bottom: 8px;">4 Issues — 0 Templates + 4 RAG Novel Grounds (Opus)</p>
+      <div class="cost-amount">₹26.10 <span style="font-size: 9pt; color: #64748b; font-weight: normal;">/ notice</span></div>
+    </div>
+  </div>
+
+  <h2>5. Key Takeaways for Mentor Discussion</h2>
+  <ul>
+    <li><strong>RAG is essential for legal accuracy:</strong> Drafting without retrieving actual judgments/circulars exposes NoticeDesk to hallucinated case laws.</li>
+    <li><strong>Hybrid Search replaces pure vector search:</strong> Adding metadata filtering eliminates dangerous template false-positives.</li>
+    <li><strong>Economics remain hyper-efficient:</strong> Typical notice cost is <strong>₹7.50</strong> (down from original estimate of ₹9.22 due to Sonnet 3.7 optimization).</li>
+  </ul>
+
+</div>
+
+</body>
+</html>

@@ -38,7 +38,7 @@ export function DemoBanner() {
     };
   }, []);
 
-  if (!info) return null;
+  if (!info || !info.llm) return null;
 
   const allReal =
     !info.llm.is_stub &&

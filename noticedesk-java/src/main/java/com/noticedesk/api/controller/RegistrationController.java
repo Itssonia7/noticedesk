@@ -33,34 +33,65 @@ public class RegistrationController {
 
     @GetMapping("/registrations/{id}/notices")
     @Transactional
-    public List<Map<String, Object>> getNoticesForRegistration(@PathVariable UUID id) {
+    public Map<String, Object> getNoticesForRegistration(@PathVariable UUID id) {
         String tenantId = TenantContextHolder.getTenantId();
 
         jdbc.queryForObject("SELECT set_config('app.current_tenant', :tid, true)",
                 Map.of("tid", tenantId), String.class);
 
-        // Verify registration exists
         var regRows = jdbc.queryForList(
-                "SELECT registration_id FROM client_registrations WHERE registration_id = :rid",
+                """
+                SELECT r.registration_id, r.registration_type, r.identifier_value,
+                       r.state_code, r.state_name, r.jurisdiction_office,
+                       r.registration_status,
+                       c.client_id, c.legal_name, c.pan
+                FROM client_registrations r
+                JOIN clients c ON c.client_id = r.client_id
+                WHERE r.registration_id = :rid
+                """,
                 Map.of("rid", id));
+
         if (regRows.isEmpty()) {
             throw new NotFoundException("Registration not found: " + id);
         }
 
-        List<Map<String, Object>> notices = jdbc.queryForList(
+        var regRow = regRows.get(0);
+
+        List<Map<String, Object>> noticeRows = jdbc.queryForList(
                 """
-                SELECT n.notice_id, n.law, n.document_type, n.due_date, n.lifecycle_status,
-                       n.financial_year, n.assessment_year
-                FROM notices n
-                WHERE n.registration_id = :rid
-                ORDER BY n.due_date ASC NULLS LAST
+                SELECT notice_id, document_type, due_date, hearing_date,
+                       authority, financial_year, assessment_year,
+                       lifecycle_status, ingest_channel, din_or_rfn
+                FROM notices
+                WHERE registration_id = :rid
+                ORDER BY due_date ASC NULLS LAST
                 """,
                 Map.of("rid", id));
 
-        return notices.stream()
-                .map(HashMap::new)
-                .map(m -> (Map<String, Object>) m)
-                .toList();
+        Map<String, Object> regMap = Map.of(
+                "registration_id", regRow.get("registration_id").toString(),
+                "registration_type", regRow.get("registration_type"),
+                "identifier_value", regRow.get("identifier_value"),
+                "state_code", regRow.get("state_code") != null ? regRow.get("state_code") : "",
+                "state_name", regRow.get("state_name") != null ? regRow.get("state_name") : "",
+                "jurisdiction_office", regRow.get("jurisdiction_office") != null ? regRow.get("jurisdiction_office") : "",
+                "registration_status", regRow.get("registration_status") != null ? regRow.get("registration_status") : "active",
+                "sync_method", "manual",
+                "last_synced_at", null
+        );
+
+        Map<String, Object> clientMap = Map.of(
+                "client_id", regRow.get("client_id").toString(),
+                "legal_name", regRow.get("legal_name"),
+                "pan", regRow.get("pan")
+        );
+
+        return Map.of(
+                "registration", regMap,
+                "client", clientMap,
+                "notices", noticeRows,
+                "total", noticeRows.size()
+        );
     }
 
     @PatchMapping("/registrations/{id}")

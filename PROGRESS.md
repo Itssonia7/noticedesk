@@ -1,0 +1,1487 @@
+# Implementation Progress: v7 Drafting Pipeline
+
+Branch: `feature/v7-drafting` (not merged; no PR). Production still runs the old pipeline
+(`DRAFTING_PIPELINE=rag` by default), so nothing in v7 is live yet.
+
+Last updated: 28-10-2026 (b31: anonymiser: a digit inside a row-layout vendor name, a real GSTIN / PAN with digits starting in 0 mistaken for a placeholder, the fragment self-check per piece, a lone capital word in a row)
+
+---
+
+## (a) Status by stage
+
+| Stage | What it does | Status | Commits |
+|---|---|---|---|
+| 0. Setup | Branch, `rag` / `v7` pipeline switch, confidentiality and template hardening | Done, review fixes applied | `5203ada`, `8220190` |
+| 1. Issue matching | Reads the notice, matches each issue to a catalogue card (full / partial / none); 15-notice benchmark + eval runner | Done; benchmark not re-run since Stage 3 changes | `6f2a2b9`, `7e6bf07`, `bac98e1` |
+| 2. Template fill + checks | Fills templates in code, assembles the 15-section reply, runs automatic quality checks (`draft_flags`) | Done, two rounds of CA review applied | `c021cfb`, `d6ae2c8`, `9e7ea4f` |
+| 3. AI writers + citation check | AI writes partial / unmatched issues and high-stakes sections; every AI citation checked against IndianKanoon | Done (wired and tested with mocks) | `d4041fa`, `9a8e454` |
+| Privacy safeguards | Commit hook + CI check for real GSTINs / PANs / documents; private data loader outside the repo | Done | `dfe2fdb` |
+
+## (b) What Stage 3 now does (`9a8e454`)
+
+- **Writers called by the pipeline**: partial issues go to the partial writer, unmatched issues to the
+  new-issue writer, high-stakes notices (Section 74/74A, appeal stage, or demand at or above
+  `HIGH_STAKES_DEMAND_THRESHOLD`) to the high-stakes model. If a writer fails, the draft keeps a
+  `[[PENDING_AI]]` marker and is blocked; no stub text is inserted.
+- **Citation check**: a case is VERIFIED only when name, court and year all match (plus the quote, if one
+  is given). Partial matches and unchecked citations (no token, call limit, API error) block the draft;
+  cases not found are removed from the text with the argument kept.
+- **Notice-specific drafting**: Sections 01/02/12/14 use the notice's own section (no default
+  "Section 73"); para-wise reply follows this notice's paragraphs; documents come from the template used
+  or the AI output; internal notes and errors appear only in Section 13 (Internal Partner Note).
+- **Extra checks**: leftover placeholders, "null", "[ref]", internal text, and a mismatch between the
+  notice's section and the stage template now block the draft.
+- **Database**: V26 rewritten (the original could never apply); V27 allows the new citation statuses.
+  V23 to V27 tested on Postgres 16.
+
+## (b2) Live-run fixes (first live run on `0816a44`)
+
+- **Para-wise reply (notice 010)**: the matcher returns `para_map` as paragraph -> issues (`{"3": [1]}`);
+  assembly read it as category -> paragraphs, so a 5-paragraph notice printed only Para 1. Both forms
+  are now read, and the paragraph count is the largest of the matcher map, the numbered paragraphs in
+  the notice text and the AI replies. AI replies are never dropped; a reply beyond the notice gets a warn flag.
+- **Tax period (notice 002)**: one `PeriodNormalizer` reads "April 2020 to March 2021", "Apr-2020 to
+  Mar-2021", "FY 2020-21", "F.Y. 2020-2021", "01.04.2020 to 31.03.2021", "July 2019", "07/2019" and
+  FY ranges. The template version in force on the period's START date is used; a period crossing a
+  version boundary gets a warn flag. (CARD-002 itself has no dev reply template, so it still goes to the AI writer.)
+- **High-stakes writer (notice 002)**: JSON is extracted from fences/prose and unescaped quotes inside
+  HTML are repaired; one retry that quotes the validation error, then the issue gets
+  `[[PARTNER: AI draft failed — write manually]]` + block flag. Logs name the high-stakes model correctly.
+  Likely causes of the 4/4 failures: double quotes inside HTML strings (Jackson "Unexpected character
+  ('i')") and calls ending in the old 180 s timeout (now 600 s). Unusable responses log their shape;
+  `LLM_DEBUG_LOG_RAW_OUTPUT=true` (live runner only) also logs a 400-char sample.
+- **Cost control**: `LLM_HIGH_STAKES_MAX_CALLS_PER_NOTICE` (6) and `LLM_MAX_COST_INR_PER_NOTICE` (60);
+  past either cap the remaining AI issues get the PARTNER placeholder + block flag, no call. The notice
+  text is sent as a cached prefix block, so the 2nd and later issues of a notice read it from cache.
+- **Duplicate prayer (notice 010)**: writer prompts forbid a prayer; code removes a trailing AI prayer
+  (info flag). Section 12 is the only prayer.
+- **Citations**: de-duplicated (case name, reporter citation, section / notification / circular number)
+  before IndianKanoon checks and the citation list.
+- **Stage templates**: stage now follows the notice's section (171 -> `anti_profiteering`, 74A -> `scn_74a`,
+  74 -> `scn_74`, 73 -> `scn_73`) over the triage label. Dev seeds (DRAFT, partner to review) added for
+  `scn_74`, `scn_74a`, `anti_profiteering`. A stage with no template gets a placeholder + block flag,
+  never `scn_73`.
+- **Tax period / date of receipt**: printed in Section 03 from the matcher / notice record
+  (`notices.receipt_date`); `[[MISSING: ...]]` + warn flag when absent.
+- **Runners**: the live runner inserts synthetic notice rows (tenant set for RLS) before the run and loads
+  the dev seeds (skipped when `PRIVATE_SEED_DIR` is set). The matching eval runner writes no notice-linked
+  rows, so it needed no change.
+- **Answer key**: notice 007 -> none, 009 -> none, 015 -> full (CARD-009); CARD-004 summary tightened.
+
+## (b3) Cost safeguards (`f558ef6`)
+
+About Rs 350 was lost in live test runs that kept calling the API after the code had failed, ran
+stale code, or could not parse a response. Now:
+
+- **Fail fast**: HTTP 400 "credit balance is too low", 401 and 403 are fatal (`LlmFatalException`):
+  never retried, never turned into a fallback result; the run stops with a one-line reason. Both
+  live runners also stop after `LIVE_MAX_CONSECUTIVE_FAILURES` (default 2) failed or unusable calls
+  in a row (truncated, refused, no text, bad JSON, exception).
+- **Failed matching**: the notice is marked FAILED with the reason; no scaffold draft and no writer
+  call (`MatchingFailedException`; in production the drafting job fails).
+- **Version check**: both runners print `git rev-parse HEAD`; with `LIVE_EXPECTED_COMMIT` set (7+
+  characters, prefix match) a different HEAD is refused. No git: a warning, the run continues.
+  Uncommitted changes in tracked files print a warning.
+- **Smoke mode**: `LIVE_SMOKE=true` runs the first notice only and prints its cost and status.
+- **Test caps**: Rs 50 per run (`LIVE_MAX_RUN_COST_INR`), Rs 30 per notice (`LIVE_MAX_NOTICE_COST_INR`,
+  applied by the runners only; each notice also gets at most what is left of the run cap).
+  Production defaults in `application.yml` are unchanged (Rs 60 per notice).
+- **Models**: the runners take models only from `LLM_MODEL_*` / `application.yml` (none built in) and
+  refuse a model with no price, since its cost would bypass every cap. For a cheap plumbing run,
+  point the writers at the matching model, e.g. `LLM_MODEL_NEW_ISSUE` and `LLM_MODEL_HIGH_STAKES` set
+  to the same value as `LLM_MODEL_MATCHING`; pricing follows the override. A dated snapshot id
+  returned by the API (`<model>-YYYYMMDD`) is priced as its base model.
+- **Offline replay tests** (`LlmFixtureReplayTest`, fixtures in `src/test/resources/llm-fixtures/`):
+  synthetic Messages API responses (thinking block first, then text; max_tokens; unescaped quotes
+  inside a JSON string; billing and auth errors) are served by a local HTTP server, and the matcher
+  and all three writers run end-to-end through the real Anthropic provider. Zero API cost. The
+  matcher now uses the writers' JSON reader (fences, prose and stray quotes handled).
+- **No tracked files touched by `mvn test`**: `RealNoticesBatchRunnerTest` runs only with
+  `ENABLE_E2E_TESTS=true`; the stub-mode Scenarios / ClaudeOpusBatch runners write to `target/`
+  (they still write to `output/` in an E2E run).
+
+## (b4) Draft cleanup (`5bd1be1`, CA review of notices 002, 007, 010)
+
+- **Documents (10 / 11 / 14)**: listed once across issues; duplicates after normalising case,
+  whitespace and punctuation are removed, and a narrower entry ("GSTR-3B returns for April 2020 to
+  March 2021") is merged into a wider one ("Copies of all GSTR-3B and GSTR-1 returns for ..."),
+  keeping the first position.
+- **Missing markers**: keys normalised (lower case, underscores) and de-duplicated in the Missing
+  Data Markers list and `CHECK_MARKERS_LIST`; "date of service of notice" / "date and mode of
+  service" -> `date_of_service`; `date_of_receipt` stays separate.
+- **Para-wise reply (05)**: replies of several issues to the same notice paragraph are merged,
+  ordered by sub-para ("Sub-para (a): ... Sub-para (c): ..."), repeated sentences dropped.
+  Unmapped paragraphs keep the PARTNER placeholder.
+- **High-stakes executive summary (01)**: AI narrative capped at 150 words plus one line per issue;
+  the rest moves to the end of Section 03 (noted in Section 13), nothing dropped.
+- **CHECK_PROCEEDING_CONSISTENT**: reads only the code-built notice description (01 / 02 / 14), the
+  prayer (12) and the filing checklist (15); AI legal text may discuss Section 73 in a Section 74
+  reply (Section 75(2) fallback, Section 73(9) comparison).
+- **Partner note**: "Written by" shows `high_stakes` for issues the high-stakes writer wrote;
+  anti-profiteering notices get Rule 133 / DGAP report points instead of Section 75(4) / 73(10) /
+  74(10).
+- **Matching eval vs live pipeline (notice 002)**: both send the same prompt, notice text, notice
+  type (`scn_74`), effort and max_tokens. They can differ in the catalogue (the live runner reloads
+  the dev seeds first; the eval runner uses the DB as it is) and the model is not deterministic
+  (effort models take no temperature). Both runners now print the catalogue hash and the match
+  statuses so two runs can be compared.
+
+## (b5) Hard cost caps and two output fixes
+
+The smoke run (notice cap Rs 5) spent Rs 13.19: matching cost Rs 2.61, then an Opus new_issue call
+was allowed because only money already spent was checked, and it cost Rs 10.58. Now:
+
+- **Hard caps**: before every billed call (matching, partial, new_issue, high_stakes; first attempt
+  and retry) `NoticeCallBudget` computes the call's worst case and refuses it when
+  `spent + worst case > cap`. Worst case = estimated input tokens (`ceil(characters / 2)` of system
+  prompt + catalogue / notice prefix + user prompt, each token at the higher of the input and
+  cache-write price) + the call's max_tokens (the value actually sent, retry cap included) at the
+  output price, in INR from `noticedesk.pricing`. With a cap set, an unpriced model is refused.
+  Applies in production (`llm.max-cost-inr-per-notice`) and in both live runners, where each notice
+  gets the smaller of `LIVE_MAX_NOTICE_COST_INR` and what is left of `LIVE_MAX_RUN_COST_INR`.
+  Every check logs a `[call-check]` (or `[call-refused]`) line with the estimate.
+- **Refusals**: a refused writer call leaves `[[PARTNER: AI draft skipped — cost cap]]` and the
+  `FLAG_AI_BUDGET_EXHAUSTED` block flag; a refused matching call fails the notice
+  (`matching_cost_cap`) and the live runners stop.
+- **Minimum caps** (current config): Opus 5.5 new_issue at 16,000 max_tokens has a worst case of
+  about Rs 29 (Rs 28.16 output + about Rs 1 input); its retry at 24,000 about Rs 43. Sonnet 5.5
+  matching at 8,000 max_tokens: Rs 7.04 output + input. A Rs 5 notice cap now refuses matching
+  itself; one matching call + one Opus new_issue call needs a notice cap of about Rs 32+ (the
+  default test cap of Rs 30 is not enough).
+- **"Rs Rs"**: a template written `Rs {{issue.amount_tax}}` printed "Rs Rs 1,00,000". Filled
+  template and stage-template text now drop a currency prefix (Rs / Rs. / INR / ₹) that directly
+  precedes the filled "Rs X" value. The three dev reply templates use this pattern; the stage
+  templates have no amount placeholders.
+- **Readable missing markers**: markers are still de-duplicated by the normalised key (synonyms such
+  as the date-of-service variants merged), but the Missing Data Markers list and
+  `CHECK_MARKERS_LIST` show the original wording of the first occurrence.
+
+## (b6) Live-run fixes (bench notices 004, 006, 010, 011)
+
+- **State name (011)**: "State of Unknown State" came from a 3-code lookup. `GstStateCodes` has every
+  GST state code (01-38, 97, 99; 25/26 both = Dadra and Nagar Haveli and Daman and Diu). A blank or
+  placeholder state is taken from the GSTIN; an unknown code prints `[[MISSING: state]]` + warn flag.
+- **Stage (011, Sections 27 / 63 / 129)**: an SCN under a provision other than 73/74/74A/171 now gets
+  stage `generic_scn` (DRAFT dev template, neutral prayer and checklist, no Section 73/75(4) wording;
+  neutral procedural options). It no longer falls back to `scn_73`.
+- **Repeated paragraph (004)**: the partial prompt forbids restating an anchored block, and code drops
+  an AI paragraph with token Jaccard >= 0.6 against a reused block (info flag
+  `ai_paragraph_restates_template_block`, note in Section 13).
+- **Issue splitting (001, 010)**: matching prompt rules: one issue per ground; consequential interest /
+  penalty stays in the main issue unless it is the only demand or is challenged on its own ground;
+  every numbered paragraph goes in `para_map`. Matching effort default `low` -> `medium`. Answer keys
+  unchanged (all 15 already follow the rule); the eval runner also reports issue-count match.
+- **Cost estimate**: input tokens now estimated at 2 characters per token (live matching call: estimate
+  ~5,900 vs actual ~7,770 at 3). Worst cases rise slightly (e.g. Opus new_issue at 16,000 max_tokens
+  about Rs 30).
+
+## (b7) Cache-aware cost estimate, provisional templates, citation-only runner
+
+- **Cache-aware worst case** (`NoticeCallBudget.estimate`, `PromptCacheRegistry`): the hard cap priced the
+  whole prompt (rules + ~330k-character catalogue) at the cache-write rate on every call, so one Sonnet
+  matching call was estimated at about Rs 36 + Rs 7.04 output and refused under the test caps even when
+  the catalogue was already cached. The estimate is now split: the cacheable prefix (system prompt +
+  catalogue; for the writers system prompt + notice prefix) is priced at the cache-READ rate when this
+  process wrote or read the same prefix hash for the same model within the cache's warm window (5 min
+  TTL minus 30 s), else at cache-write (first call of a run); the per-call part at the input rate
+  (`CHARS_PER_TOKEN=2`); output = max_tokens x output price. The token count the API reports for the
+  prefix (cache_creation / cache_read tokens) is recorded on the first call and reused for later
+  estimates of the same prefix. `[call-check]` logs the breakdown (`prefix_tokens`, `prefix_pricing`,
+  `prefix_INR`, `per_call_INR`, `output_INR`). Sonnet 5.5 matching on an 83,000-token catalogue at
+  max_tokens 8000: first call Rs 25.30 (prefix Rs 18.26 cache-write + Rs 7.04 output), later calls
+  Rs 8.50 (prefix Rs 1.46 cache-read + Rs 7.04), plus the notice text at the input rate (about Rs 1.76
+  for a 20,000-character notice). A Rs 12 notice cap refuses the first call and allows the next.
+- **AI section -> provisional template** (`ProvisionalTemplateService`, `TemplateScrubber`, V28): an
+  approved `ai_issue_sections` row becomes a 'draft' issue card (`NDK-AI-nnn`, or a new version of the
+  card given in the request) and a 'provisional' `reply_templates` row whose blocks are the section's
+  04/05/06 paragraphs with every notice-specific value replaced by a placeholder (`{{client.legal_name}}`,
+  `{{client.gstin}}`, `{{notice.reference}}`, `{{notice.issue_date}}`, `{{issue.amount_tax}}`,
+  `{{issue.period}}`, `{{issue.<fact>}}` for identifying / numeric facts, `{{notice.total_demand_amount}}`),
+  in every form the writers use (Rs 4,82,310/-, 482310, 4.82 lakh, 15.10.2023, 15th October 2023,
+  FY 2022-23, April 2022 to March 2023, M/s ABC Pvt. Ltd. / ABC Private Limited). A value that is still
+  present afterwards refuses the promotion (nothing written). Citations are carried per block with their
+  check status, documents from Section 10; provenance (source section, notice, tenant, approver, time)
+  on the card, the template and the section. Idempotent: a second promotion returns the existing
+  template. Endpoints `POST /api/v7/ai-sections/{id}/promote` (body `{approvedBy, cardId?}`) and
+  `GET /api/v7/ai-sections?noticeId=` (tenant from the auth claims, RLS tenant set for the transaction).
+  Matching sees promoted cards when `CATALOGUE_INCLUDE_PROVISIONAL=true` (default); `TemplateFillService`
+  uses 'provisional' templates like 'active' and adds the info flag `FLAG_PROVISIONAL_TEMPLATE`; the
+  partner note shows "Template status=PROVISIONAL". `notice.reference` is now a fill variable.
+  Note: issue_cards / reply_templates are the global catalogue (no tenant, no RLS), so a promoted
+  template is shared by every tenant of the deployment: hence the strict placeholder replacement.
+- **IndianKanoon cost and failures**: each v7 search / fragment call is logged at
+  `INDIANKANOON_COST_INR_PER_SEARCH` / `_FRAGMENT` (default 0, set from the firm's plan; step
+  `ik_search` / `ik_fragment` in api_usage_logs and the run ledger) and counted against the per-notice
+  cap; past the cap the remaining citations are NOT_CHECKED with `IK_COST_CAP_REACHED`. HTTP 401 / 403 /
+  429 from IndianKanoon throw `IndianKanoonFatalException` (an `LlmFatalException`): the run stops
+  instead of silently marking citations NOT_CHECKED.
+- **Citation-only live runner** (`CitationCheckRunnerTest`, `ENABLE_E2E_TESTS=true` +
+  `INDIANKANOON_API_TOKEN`): runs the citation agent only (no model calls) on `CITATION_CHECK_LIST`
+  ("case|court|year;...") or five defaults (Hindustan Steel 1969, CIT v Vatika Township 2014, Whirlpool
+  v Registrar of Trade Marks 1998, Mangalore Chemicals 1991, one invented name that must be NOT_FOUND)
+  and prints the status per citation, the IndianKanoon call count and the cost.
+
+## (b8) High-stakes mode off by default (13-10-2026)
+
+- The high-stakes drafting mode is now OFF unless switched on by env var: `HIGH_STAKES_SECTION_74=true`
+  (Section 74/74A notices), `HIGH_STAKES_APPEAL_STAGE=true` (appeal-stage notices) or
+  `HIGH_STAKES_DEMAND_THRESHOLD=<amount>` (demand at or above the amount). All three default to off /
+  blank in `application.yml` and `AppProperties`; the high-stakes code and prompt are unchanged.
+- With the mode off, every notice (Section 74/74A and appeal stage included) takes the normal path:
+  code template fill for full matches, the partial writer for partial matches, and the new-issue writer
+  only for issues with no card.
+
+## (b9) Private notice set for the live runners (13-10-2026)
+
+- The firm's real catalogue (269 cards NDK-001..NDK-269, 269 templates TPL-001..TPL-269) and 308
+  private test notices now live in `$PRIVATE_SEED_DIR` (never in the repo); the 20 dummy cards were
+  deleted from the dev database. Test code only, no production change.
+- `MatchingEvalRunnerTest`: `MATCHING_EVAL_SETS` (`both` default | `dummy` | `private`) and
+  `MATCHING_EVAL_NOTICES` (chosen private files, in order; a missing name refuses the run before any
+  call). `LIVE_SMOKE=true` with `MATCHING_EVAL_SETS=private` runs the first private notice.
+- Card-level accuracy added next to the old status-level metrics: an expected issue counts as correct
+  only when a returned issue has the same status and one of its card ids (status `none` needs no card);
+  the runner also counts "status right, wrong card", missed and extra issues, and notices with every
+  issue correct. Wrong-match details for the private set show notice id, statuses and card ids only.
+- `V7LivePipelineRunnerTest`: `V7_LIVE_NOTICES` names resolve on the classpath first, then in
+  `$PRIVATE_SEED_DIR/notices`, or as an absolute path; a missing name refuses the run. Header reading
+  moved to `BenchNoticeHeader` (unit-tested offline): `Date:`/`Dated:` with `-` or `.`, `Reference No.:`,
+  `FY 2019-20` / `F.Y.`, `Section 73(1)` -> `Section 73`; bracket / underscore placeholders are null.
+  A notice without a GSTIN uses the synthetic allow-listed bench GSTIN for its DB rows only.
+- Both runners refuse to run when `PRIVATE_SEED_DIR` is set and `CARD-*` cards remain in the database,
+  and print the catalogue size and hash first. Details in `docs/PRIVATE_DATA.md`.
+
+## (b10) Matching prompt v2: one primary card + alternates (13-10-2026)
+
+- Live finding on 40 private notices against the 269-card catalogue: the matcher returned 2-3 card ids per
+  issue instead of choosing one, called a match "partial" even when the right card was among its candidates,
+  bundled several distinct grounds into one issue (96 expected grounds came back as 56 issues) and missed
+  date-regime traps between sibling cards.
+- `prompts/issue_matching_v2.md` (v1 kept untouched; `IssueMatchingAgent.PROMPT_VERSION` = `issue_matching_v2`):
+  the model first lists every distinct ground (`grounds`), then returns exactly one issue per ground; per issue
+  ONE primary `card_id` (or null) plus up to two `alternates`; the primary is chosen on the card's DECISIVE facts
+  and every NOT THIS IF rule ("Not this if <fact> (use NDK-xxx)" forces the sibling); status `full` = all
+  DECISIVE facts present and no NOT THIS IF triggered (missing amounts do not matter), `partial` = the card's
+  ground but a DECISIVE fact absent / contradicted or a material element the card does not cover (named in
+  `why`), `none` = no card; doubt between siblings is never "partial"; a period-regime check (order / notice /
+  tax-period dates against each sibling's PERIOD and date boundaries) precedes the choice; a self-check list
+  closes the prompt. The rules on no invention, para_map and issue splitting 4(a)-(c) are kept.
+- Result shape: `MatchedIssue.cardIds` now holds ONLY the primary (one element, or empty for `none`), so
+  template fill and every downstream consumer are unchanged; the new field `alternateCardIds` (at most two,
+  never the primary) holds the other candidates. The parser reads both the v2 shape (`card_id` + `alternates`)
+  and the old v1 shape (`card_ids`: first = primary, rest = alternates). Unknown primary -> status `none` +
+  issue flag `unknown_card_id` (as before); unknown alternate -> dropped with a log line. New non-failing
+  flags: issue flag `hedged` (status full / partial without a primary), result flag `issue_count_mismatch`
+  (`issues.length != grounds.length`). Alternates are not persisted (`issue_matches` has no spare JSON column
+  and no migration was added); they live in the result object only.
+- `MatchingEvalRunnerTest` scores the PRIMARY card only: the answer key's expected issues are first
+  de-duplicated by card_ids set (keys that list interest / penalty as a separate issue on the main card), then
+  each expected issue is paired as correct primary (status + card), primary card right but status wrong, right
+  card only in alternates, wrong, missed; extra counts against the de-duplicated expected count. The "Got"
+  column of WRONG MATCH DETAILS shows the alternates (`full[NDK-006] alt[NDK-007]`).
+
+## (b11) Matching prompt v3: visible-defect issues, written date-boundary checks (13-10-2026)
+
+- Live finding on 40 private notices (269 cards, prompt v2): (1) the matcher never raised procedural /
+  visible defects as issues because v2 defined an issue as a "ground of demand" (a corrigendum with no DIN
+  -> none; a Section 74 SCN dated before the GSTR-9 due date -> none; a Section 73 SCN after the Section
+  73(10) limitation -> partial), although the catalogue has about 40 cards for such defects (missing
+  DIN/RFN, unsigned SCN, premature Section 74 SCN, time-barred Section 73 SCN, no DRC-01A, no hearing,
+  wrong officer, garnishee while the SCN is pending, Section 83 attachment, refund rejected without
+  RFD-08); (2) on two clear date-boundary traps the model still picked the sibling card (order served
+  21.07.2023 with the return in 26 days -> the on/after-01.10.2023 card; tax paid before the SCN -> the
+  "paid after SCN" card); (3) "partial" was overused and the eval withheld the model's reasons for private
+  notices, so the cause could not be diagnosed.
+- `prompts/issue_matching_v3.md` (v1 and v2 kept; `IssueMatchingAgent.PROMPT_VERSION` = `issue_matching_v3`):
+  - Every ground and issue carries `kind`: `demand` (a ground of demand or action, as before) or `defect`
+    (a procedural, jurisdictional, limitation, service, signature, DIN, hearing or form defect visible in
+    the document even though the department does not state it). A new Step 1b scans the document against
+    a checklist: DIN/RFN missing or placeholder on a central-tax document dated on/after 08.11.2019;
+    unsigned / not digitally authenticated; SCN date vs the Section 73(10)/74(10)/74A limitation for the
+    FY (computed, with the extended Section 73 deadlines in the prompt); Section 74 SCN before the GSTR-9
+    due date; no DRC-01A in the Rule 142(1A) mandatory window (09.10.2019 to 14.10.2020); no personal
+    hearing where an adverse order is proposed; reply time below the statutory minimum; officer's rank /
+    jurisdiction vs the power exercised; recovery / attachment / garnishee without an adjudicated demand;
+    order silent on the reply; refund rejection without RFD-08/RFD-09/hearing. A defect ground maps to a
+    card exactly like a demand ground; its paras are `"header"` or the paragraphs that reveal it; a
+    placeholder in the DIN field is a missing DIN; a defect is never invented.
+  - Date-boundary discipline replaces the v2 period-regime section: for every candidate card with a date,
+    FY or before/after boundary the model writes in `why` the line
+    `<fact>: <notice value> vs <card boundary> -> satisfied|not satisfied`; a card with a "not satisfied"
+    line can never be the primary. Two worked examples: order-service date vs 01.10.2023 (Section 62(2)
+    30-day vs 60-day cards) and tax paid before the SCN vs within 30 days after it (Section 73(5)/(6) vs 73(8)).
+  - Status discipline: `partial` must quote the card's DECISIVE text for the absent or contradicted fact;
+    all DECISIVE facts present = `full` even when amounts, DIN, hearing dates or annexures are missing and
+    even when alternates exist; the stage is read from the form name / heading and counts as a DECISIVE fact.
+  - `para_map`: header-only defect grounds need no entry; the demand paragraphs map to all demand issues
+    as before. The JSON example shows one demand ground + one missing-DIN defect ground with the written
+    date lines; the self-check list covers the kind, the boundary lines and the partial rule.
+- `IssueMatchingAgent`: `MatchedIssue` gains the field `kind` (`demand` default for v1/v2 output, `defect`
+  when the model says so; `isDefect()`); `cardIds` still holds only the primary; no DB change (the
+  informational issue flag `defect_without_card` is set for a defect ground with status `none` and is stored
+  with the other flags). Downstream (template fill, assembly, writers) is untouched: kind is additive.
+- `MatchingEvalRunnerTest`: `MATCHING_EVAL_SHOW_WHY=true` prints the per-issue `why` and
+  `not_this_if_checked` lines for the private set too (console, one line each per issue with notice id and
+  issue number, and WRONG MATCH DETAILS); the notice text and the results JSON stay as before. The
+  per-notice issue line now shows the kind (`demand:full[NDK-006] alt[NDK-007]`, `defect:none[]`). Per set:
+  "Defect issues: returned=N | expected=M", the expected count read from the optional
+  `$PRIVATE_SEED_DIR/defect_cards.txt` (one card id per line; absent = skipped). See `docs/PRIVATE_DATA.md`.
+
+## (b12) Matching prompt v3.1: written checks trimmed to the chosen cards; max_tokens 12000/20000 (14-10-2026)
+
+- Live finding on 29 private notices (prompt v3): output tokens doubled, from about 2,000 to about 5,000 per
+  notice on average, because v3 made the model write a boundary line for EVERY candidate card and a
+  `not_this_if_checked` entry for the alternates too. One notice hit the 8,000 max_tokens cap and its retry at
+  16,000 was refused by the per-notice cost cap, so that notice got no match. Accuracy improved under v3, so
+  the mechanism stays and only the volume is cut.
+- `prompts/issue_matching_v3.md` edited in place as **v3.1** (heading "(v3.1)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_1`, the resource name stays `issue_matching_v3` via the new `PROMPT_FILE` constant):
+  - Date-boundary lines (`<fact>: <notice value> vs <card boundary> -> satisfied|not satisfied`) are written
+    ONLY for the chosen primary card and for each listed alternate (at most 2), and only for boundaries that
+    exist on those cards; candidates considered and rejected get no lines. A primary still never carries a
+    "not satisfied" line.
+  - `not_this_if_checked` holds only the primary card's rules, one short entry per rule
+    (`<rule in 12 words or fewer> - triggered|not triggered|cannot test`); no entries for alternates.
+  - `why` is at most 60 words of prose plus the boundary lines; "Do not restate the notice; cite paragraph
+    numbers."
+  - Visible-defect guard: a defect ground is raised only when the document itself shows the defect; a header
+    with a DIN, a reference number and a signed or digitally signed block has no DIN/signature defect; a
+    "proper officer" defect needs the officer's designation in the document AND a card stating the monetary
+    limit or jurisdiction rule it breaches.
+  - Self-check items 5 to 7 and the JSON example follow the trimmed form.
+- `application.yml`: `max-tokens-matching` 12000 (was 8000) and `max-tokens-matching-retry` 20000 (was 16000),
+  env vars `LLM_MAX_TOKENS_MATCHING` / `LLM_MAX_TOKENS_MATCHING_RETRY`; the `AppProperties` fallbacks match.
+  `NoticeCallBudget` is unchanged: its worst case prices the full max_tokens of the call, so the matching
+  estimate moves automatically from Rs 7.04 to Rs 10.56 of output (Sonnet, Rs 88 per USD): 83k-token
+  catalogue cold Rs 28.82 (was 25.30), warm Rs 12.02 (was 8.50); the retry at 20,000 prices Rs 17.60 of output.
+- Tests: `MatchingPromptRulesTest` asserts the v3.1 wording (primary-only `not_this_if_checked`, boundary
+  lines for the primary and alternates only, the DIN/signature guard, the "proper officer" guard, the 60-word
+  cap on the example's `why`); `ApiUsagePricingTest`, `HardCostCapTest`, `CacheAwareCostEstimateTest` and
+  `IssueMatchingAgentTest` use the new max_tokens (the warm-catalogue cap test now runs at Rs 15).
+
+## (b13) Matching prompt v3.2: status on notice-visible facts only; client facts to confirm (14-10-2026)
+
+- Live finding on 35 private notices (prompt v3.1): about a third of the CORRECT primary cards came back
+  "partial" because the model reported a DECISIVE fact "absent from the notice" when that fact is a
+  client-side fact the department's document can never state ("no consignment note issued", "recipient
+  holds invoices and bank proof", "nil returns were filed", "supplier active on the portal", "interest and
+  late fee paid"). The catalogue cards are being rewritten in parallel so each SUMMARY reads
+  "ALLEGES: ... DECISIVE: <facts visible in the department's document> CLIENT: <facts to confirm with the
+  client; 'none' if none> DEFENCE: ...".
+- `prompts/issue_matching_v3.md` edited in place as **v3.2** (heading "(v3.2)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_2`; the resource name stays `issue_matching_v3`):
+  - The new SUMMARY shape is explained: DECISIVE facts are what the document states or shows and alone decide
+    the status; CLIENT facts are what only the taxpayer can supply, so one that is absent from the notice is
+    expected to be absent.
+  - Status rules: "full" and "partial" are decided ONLY on DECISIVE facts and on NOT THIS IF rules that can be
+    tested from the document. CLIENT facts never affect status in either direction. A NOT THIS IF rule whose
+    fact cannot be determined from the document is `cannot test` with NO effect on status (v3.1 made any
+    "cannot test" at most partial); the only untestable check that still makes a match partial is a DATE
+    boundary whose date the notice does not state (`-> cannot test (date not stated)`).
+  - New per-issue output field `client_facts_to_confirm`: the primary card's CLIENT facts, one short line
+    each in the card's words, minus any the notice already evidences; `[]` for `CLIENT: none` and for status
+    none. Never a DECISIVE fact; never a CLIENT fact in `why` as a reason for the status.
+  - Partial still quotes the specific DECISIVE fact absent or contradicted. Self-check gains "No issue is
+    partial because of a CLIENT fact.", the no-downgrade rule for "cannot test" and a `client_facts_to_confirm`
+    check. Grounds, visible defects, boundary lines for primary + alternates only and the 60-word `why` are
+    unchanged from v3.1. The JSON example carries the field on both issues and a client-side rule recorded as
+    "cannot test" on an issue that stays full.
+- Parser (`IssueMatchingAgent`): `MatchedIssue` gains `clientFactsToConfirm` (`List<String>`, empty by default;
+  the v3 / v3.1 ten-argument constructor is kept and delegates). Non-text, blank and null entries are dropped;
+  a missing or non-array value reads as an empty list. New informational issue flag `partial_on_client_fact`
+  when status is partial and the `why` text contains the token "CLIENT" (heuristic, never a failure, status kept).
+- Partner note (`ReplyAssemblyService`, Section 13 "Internal Partner Review Note", the per-issue `<li>` that shows
+  Match Status / Cards / Template / Written by): one extra line per issue, `Confirm with client: <fact 1>;
+  <fact 2>; ...`, only when the list is non-empty. The surrounding code appends its values without HTML
+  escaping and this line follows it. Client-facing sections are untouched. `issue_matches` rows are unchanged
+  (no new column).
+- `MatchingEvalRunnerTest`: with `MATCHING_EVAL_SHOW_WHY=true` the per-issue `not_this_if` console line ends
+  with `| client_facts_to_confirm: <count>` (count only, never the facts); each set prints and stores
+  "issues with client facts" and "partial_on_client_fact flags" (`issues_with_client_facts`,
+  `partial_on_client_fact_flags` per set and per notice in the results JSON). `docs/PRIVATE_DATA.md` updated.
+- Tests: `IssueMatchingAgentTest` (field present, absent, non-array; flag on a partial mentioning CLIENT, no flag on
+  full / none / a DECISIVE-only partial; record defaults), `ReplyAssemblyServiceTest` (the partner-note line for
+  the one issue with facts, none for the other, nothing in client-facing sections), `MatchingEvalCardScoreTest`
+  (count line and set totals), `MatchingPromptRulesTest` (v3.2 wording, example).
+
+## (b14) Matching prompt v3.3: card stage tested against the response the input document calls for (14-10-2026)
+
+- **Live finding (35 private notices)**: the catalogue cards describe the stage of the FIRM'S RESPONSE (an APL-01
+  appeal, a reply to an SCN, a REG-21 revocation application, an RFD-09 reply), while the input document is the
+  DEPARTMENT'S document that the response answers. The model read a card's "APL-01 appeal stage" and wrote
+  "contradicted - the document is the DRC-07 order", downgrading a correct card to partial.
+- `prompts/issue_matching_v3.md` edited in place as **v3.3** (heading "(v3.3)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_3`; the resource name stays `issue_matching_v3`). Prompt-only change; no parser, output or
+  database change.
+  - New section "Stage of the response" right before the status rules, with an input-document to response-stage
+    table: DRC-07 order -> APL-01 appeal; RFD-06 refund rejection order -> APL-01 appeal; REG-19 cancellation
+    order -> REG-21 revocation application or APL-01 appeal; MOV-09 penalty order -> APL-01 appeal; REG-17 SCN ->
+    REG-18 reply; RFD-08 -> RFD-09 reply; ASMT-10 -> ASMT-11 reply; DRC-01A -> Part B reply; DRC-01 / Section
+    73/74/74A SCN -> reply to the SCN; DRC-22 attachment -> Rule 159(5) objection; recovery letter / DRC-13 ->
+    representation.
+  - Rule: a card's STAGES value and any stage word in its DECISIVE text ("appeal", "APL-01", "reply", "RFD-09",
+    "REG-21", "objection", "representation") describe the RESPONSE the firm will draft and are satisfied when the
+    input document is the one that response answers per the table. The stage is never "contradicted" merely
+    because the input document is the order, notice or intimation itself; it is contradicted only when the input
+    calls for a different response (an appeal card against a DRC-01 SCN that still awaits a reply; a reply card
+    against a confirmed order). Sibling cards that differ only by response stage are picked by the table, the
+    other sibling goes to `alternates`. The test is written in `why` as
+    `stage: <input document> -> <response> vs card <stage> -> satisfied|not satisfied`.
+  - The "Stage" bullet of the status rules now names the response stage as the DECISIVE fact tested (the input
+    document's form still comes from its form name and heading). Self-check gains "Every stage test was made
+    against the response stage from the table, not against the input document's own name". The JSON example
+    carries a stage line.
+- Tests: `MatchingPromptRulesTest` (version, section placement, table header and rows, rule wording, example and
+  self-check lines; the v3.2 stage wording is asserted gone).
+
+## (b15) Matching prompt v3.4: forced ten-item defect checklist; consequential interest / penalty with a dedicated card (15-10-2026)
+
+- **Live findings (40 private notices on v3.3)**: (1) procedural defects were found in 3 of 12 expected cases; the
+  same time-barred Section 73 notice was caught in two earlier runs and missed in this one, so the free-form defect
+  scan (Step 1b) was being treated as optional. (2) The catalogue has cards whose ground is the interest or penalty
+  itself ("no Section 50(3) interest on ITC availed but never utilised", "Section 50(1) interest on net cash
+  liability only", "interest-only DRC-01 cannot carry penalty", "late fee only, no Section 125 penalty"); rule 4(b)
+  folded consequential interest / penalty into the main issue, so those cards were never selected and the reply lost
+  that defence paragraph. The firm's own drafts argue them separately in 28 of 288 cases.
+- `prompts/issue_matching_v3.md` edited in place as **v3.4** (heading "(v3.4)"; `IssueMatchingAgent.PROMPT_VERSION`
+  = `issue_matching_v3_4`; the resource name stays `issue_matching_v3`). No change to writers, assembly, caps, models,
+  the loader or the database.
+  - **Forced defect checklist.** Step 1b is now a mandatory top-level `defect_checks` object the model fills for
+    every notice, ten entries in this order, each `{"result": "ok" | "defect" | "cannot test", "basis": "<15 words
+    citing the header line or paragraph>"}`: `din_rfn`, `signature`, `limitation` (SCN or order date vs the Section
+    73/74/74A deadline computed as in section 5, both dates written in the basis), `premature_74`, `drc01a_missing`,
+    `hearing` (no hearing offered on a proposed adverse order, an order with no hearing, an order silent on a hearing
+    after a reply; the refund-rejection-without-RFD-08 case sits here), `reply_time`, `officer` (only when the
+    designation and the rule are both stated), `recovery_without_demand`, `non_speaking`. A check that does not apply
+    to the document is `ok` with basis `not applicable: <reason>`; `cannot test` only when the text is cut off,
+    unreadable or the date not stated. Rule: every `defect` result produces a ground of kind `defect` (matched to a
+    card as before, status none when no card covers it) and every defect ground corresponds to a `defect` result.
+    Self-check 1a: "`defect_checks` has all ten entries; the number of defect grounds equals the number of entries
+    with result `defect`". The guard lines stay (a placeholder counts as a missing DIN; a DIN present and a signed
+    block means ok; do not invent a defect).
+  - **Consequential interest / penalty with a dedicated card.** Rule 4(b)/(c) amended: interest or penalty
+    consequential to a demand stays inside the main issue UNLESS the catalogue has a card whose ground is that
+    interest or penalty itself (its TITLE or ALLEGES is about Section 50 interest, Section 47 late fee, Section
+    122/125 penalty, or an "interest-only" / "penalty-only" demand). Then it becomes its own ground with kind
+    `consequential`, placed immediately after the demand ground it rides on, with `parent_issue_no` = that ground's
+    number, matched to the card like any other ground (primary, alternates, status by DECISIVE facts, CLIENT facts).
+    Never created when no such card exists. The old exceptions (interest-only notice, interest challenged on an
+    independent ground) stay as demand grounds under 4(d). `para_map`: the interest / penalty paragraph maps to both
+    the parent demand issue and the consequential issue. The JSON example now has three issues (demand, consequential
+    with parent 1, defect) and the ten checks.
+- **Parser** (`IssueMatchingAgent`): kind `consequential` (`KIND_CONSEQUENTIAL`, `MatchedIssue.isConsequential()`)
+  and `MatchedIssue.parentIssueNo` (Integer, nullable; integral or numeric-string `parent_issue_no`, null otherwise);
+  `MatchingResult.defectChecks` (`Map<String, DefectCheck{result, basis}>` in the model's order, empty before v3.4);
+  `DEFECT_CHECK_NAMES` (the ten names). Result flags: `defect_checks_missing` (object absent, not an object, or fewer
+  than ten entries) and `defect_count_mismatch` (number of defect issues differs from the number of `defect` results;
+  tested only when the object has at least one entry, so a pre-v3.4 output carries only the missing flag). Both
+  informational: the issues are kept. Older constructors keep working (no parent, no checks). Downstream was read:
+  no code outside the agent switches on `kind` (`TemplateFillService`, `ReplyAssemblyService`, the writers and the
+  pipeline read `cardIds`, `status`, `facts`, `why`, `clientFactsToConfirm` only), so a consequential issue is
+  already filled, written and assembled exactly like a demand issue. Nothing new is stored in the database.
+- **Eval runner** (`MatchingEvalRunnerTest`): with `MATCHING_EVAL_SHOW_WHY=true` one compact `defect_checks` line per
+  notice (`din_rfn=defect, signature=ok, ...`, basis never printed, `(absent)` when none); per set "Defect checks
+  (v3.4): present on N of M successful | defect results total | defect_checks_missing flags | defect_count_mismatch
+  flags" (`defect_checks_present`, `defect_results_total`, `defect_checks_missing_flags`,
+  `defect_count_mismatch_flags` in the results JSON, `defect_checks_present` and `defect_results` per notice). The
+  "got" column shows `consequential(parent 1):...`. Scoring unchanged: a consequential issue is scored like a demand
+  issue against the answer key.
+- Tests: `IssueMatchingAgentTest` (consequential kind and parent, defect_checks read in order with result normalised,
+  the two flags: absent, nine entries, not an object, too many / too few defect grounds, all-ok with a consequential
+  issue and no flag, readers and record defaults; the pre-v3.4 fixtures now assert the `defect_checks_missing` flag),
+  `MatchingPromptRulesTest` (version, the ten check names in order and their wording, not-applicable / cannot-test
+  rule, the one-ground-per-defect-result rule both ways, the kept guard lines, rule 4(b)/(c)/(d) wording, Step 2 and
+  `para_map` lines, self-check lines, the example's checks and consequential issue), `MatchingEvalCardScoreTest`
+  (defect_checks line, set counts, got column, consequential scored like demand).
+
+## (b16) Template version by period overlap; writer skipped for empty grounds; defect issues in Section 07 (16-10-2026)
+
+- **Live findings (10 private notices, full pipeline on v3.4; private catalogue of 269 cards, one template each,
+  `effective_from` mostly 2017-07-01, a few with a legal date window such as 2020-03-01 to 2022-02-28 for the
+  COVID-limitation card)**:
+  1. `TemplateFillService.selectTemplate` picked the version "in force on the period START". "FY 2017-18"
+     normalises to 2017-04-01, before 2017-07-01, so no version matched, the fill returned NONE
+     ("No template available for card NDK-037") and five full matches fell through to the AI writers: about
+     INR 65 wasted and the per-notice budget exhausted. The same happened for a card whose window is a legal
+     regime date rather than a tax period.
+  2. An issue with status none and no substantive allegation (a corrigendum changing the figures of an earlier
+     SCN) was sent to the new-issue writer (INR 13.5).
+  3. An issue of kind `defect` matched to a procedural card rendered as an empty "Issue #3 Grounds of Defence"
+     in Section 04 while Section 07 kept the "[[PARTNER: add procedural objections ...]]" placeholder.
+- **Fix 1: template version by period overlap** (`TemplateFillService`). The period is normalised and its start
+  clamped to 2017-07-01 (`GST_START`; a wholly pre-GST period collapses to that day). Among the versions whose
+  `[effective_from, effective_to]` OVERLAPS the period, the one in force on the period END is chosen, else the one
+  in force on the start, else the highest overlapping version; `warn:period_crosses_template_version` is kept and
+  now fires whenever any version boundary falls inside the period (also when the period starts before the chosen
+  window). When no version overlaps but the card has template rows, the version with the nearest window (smallest
+  gap in days, ties to the highest version) is used with the new flag **`warn:template_window_mismatch`**; its
+  details carry `card_id`, `period`, `period_start`, `period_end`, `template_id`, `template_version`,
+  `template_effective_from`, `template_effective_to`, `gap_days`. When the period cannot be normalised, the latest
+  version is used with the new flag **`warn:period_not_normalised`** (details: `card_id`, `period`, `template_id`,
+  `template_version`); the issue still gets the template (before: only an undated template matched). The NONE /
+  `no_template_available` result now exists only when the card truly has no active / provisional (/ draft)
+  template row. `FilledTemplateResult` gained `flagDetails` (old 11-argument constructor kept) and `hasTemplate()`;
+  `TemplateSelection` gained `flags` and `flagDetails`. The pipeline merges those details into the
+  `FLAG_TEMPLATE_WINDOW_MISMATCH` / `FLAG_PERIOD_NOT_NORMALISED` check rows (`draft_flags.details`), and the
+  Section 13 line of the issue explains the window or period used. Behaviour change to note: a period crossing a
+  version boundary now takes the END version (e.g. FY 2020-21 against v1 to 2020-12-31 / v2 from 2021-01-01 gives
+  v2, before v1), still with the crossing warn flag.
+- **Fix 2: writer routing** (`V7DraftingPipelineService.lacksSubstantiveGround`). Before the new-issue writer is
+  called for an issue with status none and no card, the issue must carry a substantive ground: the writer is
+  skipped when `facts.amount` and `facts.legal_section` are both absent, OR the issue's why / label (facts `label`,
+  `ground`, `title`, `allegation`, `issue`) contains any of "corrigendum", "hearing date", "acknowledg",
+  "reminder", "no ground", "no demand". A skipped issue gets one Section 04 line
+  `[[PARTNER: no catalogue card and no substantive demand identified for this ground; review the document]]`
+  (also its Section 01 bullet), the flag **`info:new_issue_writer_skipped`**, a Section 13 note, "Written by=AI
+  none (new-issue writer skipped: no substantive ground)" and no `ai_issue_sections` row. The skip applies only
+  when a new-issue writer is configured (the Stage 1+2-only runner keeps its `[[PENDING_AI]]` markers). Verified
+  and tested: a full match filled from a template (any version chosen by fix 1, including FY 2017-18 and a
+  mismatched window) never reaches the partial or the new-issue writer. Partial matches still go to the partial
+  writer with their template, as designed.
+- **Fix 3: section routing** (`ReplyAssemblyService`). Issues of kind `defect` render their template blocks and AI
+  text (template / writer sections 04 and 06) under **Section 07 Procedural Objections** as "Issue #n Procedural
+  Objection", numbered 7.1, 7.2 ...; they no longer appear in Sections 04 or 06. When at least one defect issue
+  exists the "[[PARTNER: add procedural objections after checklist review]]" placeholder is replaced by the
+  rendered objections (the checklist options list stays in the Section 13 partner note); Section 02 adds
+  "(procedural objections in Section 07)". Section 04 shows demand and consequential issues only; a consequential
+  issue renders right after its parent with the heading "Issue #n (consequential to Issue #m) Grounds of Defence"
+  (an orphan consequential issue stays in matcher order). Cross-references (`{{ref:ISSUE-n}}`) resolve to 7.x for
+  a defect issue, so Section 01 and the Section 05 para-wise reply keep pointing at the right paragraph. Section
+  13 names the kind ("Kind=defect (rendered in Section 07)", "Kind=consequential (parent Issue #m)").
+  `DraftCheckService.CHECK_EVERY_ISSUE_ANSWERED` (one-line change) accepts a defect issue answered in Section 07.
+  No change to prompts, caps, models, the loader or the matching agent.
+- Tests: `TemplateFillServiceTest` (FY 2017-18 against a 2017-07-01 window; legal window 2020-03-01..2022-02-28
+  against July 2019 - March 2020 -> overlap; no overlap -> nearest version + flag with details; unparseable period
+  -> latest + flag; card without templates -> NONE; `clampToGst`), `PeriodNormalizerTest` (selection table and
+  crossing test updated to the END preference; unreadable period -> latest + flag), `V7Stage3PipelineTest`
+  (corrigendum / hearing-date issues skip the writer while a substantive unmatched issue is still written; the
+  rule table; template present for FY 2017-18 and for a mismatched window -> no writer call, warn check with
+  details; defect issues answered in Section 07 pass `CHECK_EVERY_ISSUE_ANSWERED`), `ReplyAssemblyServiceTest`
+  (defect issue in Section 07 with 7.1 / 7.2, consequential heading after its parent, Section 05 references,
+  AI-written defect, placeholder kept without defects, partner-note lines for the two new flags).
+
+## (b17) Template variable extraction step; per-paragraph stance in the para-wise reply (16-10-2026)
+
+- **Live findings (10 private notices, full pipeline on v3.4 after (b16))**:
+  (A) Template variables the notice states were printed as `[[MISSING: issue.return_filing_date]]`, and a template's
+  "order dated {{notice.issue_date}}" printed the covering letter's date instead of the assessment order's date. The
+  matcher extracts only the generic facts (`period`, `amount`, `legal_section`) while the private templates use
+  card-specific variables. (B) Section 05 printed "Denied. Please refer to ..." for EVERY paragraph, factual
+  recitals and the department's own description of the proceedings included.
+- **Fix A: `TemplateVariableAgent`** (new, `prompts/template_variables_v1.md`, `PROMPT_VERSION template_variables_v1`),
+  called by `V7DraftingPipelineService` ONCE per notice after matching and template selection and before the fill
+  (Stage 1b). Input: the notice OCR text (cut to `drafting.ocr-excerpt-chars`) and, per matched issue whose card has
+  a template, the issue number, the card title and the template's declared variables that are still unknown
+  (`TemplateFillService.unknownVariables`: a `client.*` / `notice.*` value the pipeline already has and the matcher's
+  own `issue.period` / `issue.amount_tax` / `issue.legal_section` are excluded; `ref:` entries are never variables),
+  each with a one-line hint derived from the name (`hintFor`: "date" -> dd.mm.yyyy, amount / tax / interest /
+  penalty / turnover / demand / fee -> digits, "period" -> as written). Output
+  `{"issues":[{"issue_no":1,"variables":{"issue.return_filing_date":"16.08.2023"}}],"not_found":["issue.xyz"]}`;
+  prompt rules: copy values exactly as the document states them, never invent, leave out what the document does not
+  state. Parser: unknown variable names and issues are ignored, blank values dropped, numbers rendered as digits.
+  The values are merged into the issue's facts map under `TemplateFillService.factKeyForVariable` (`issue.X` /
+  `facts.X` -> `X`, read back by `buildContextMap` as `issue.X`; a `notice.*` / `client.*` name is kept whole and is
+  only a fallback for a value the pipeline lacks), so the fill resolves the placeholders; a value the document does
+  not contain stays a `[[MISSING: ...]]` marker. The merged facts are what `issue_matches` persists. Model: the
+  partial-drafting model (`LLM_MODEL_PARTIAL_DRAFTING`; agent key `template_variables`, effort
+  `LLM_EFFORT_TEMPLATE_VARIABLES` default `low`, max_tokens `LLM_MAX_TOKENS_TEMPLATE_VARIABLES` default 2000,
+  retry cap `LLM_MAX_TOKENS_TEMPLATE_VARIABLES_RETRY` default 4000; nothing new to price). The call goes through
+  `WriterCall` like the other writers: budget pre-check against the per-notice cap, `[call] step=template_variables`
+  usage line, one retry on unusable output, `LlmFatalException` passed on. Flags: **`info:variable_agent_skipped`**
+  when no issue has a template with an unknown variable (no call), **`warn:variable_agent_not_called`** when the
+  budget refused the call, **`warn:variable_agent_failed`** when it returned no usable output twice; the Section 13
+  note lists the values read per issue and the variables the document does not state. The live runner prints a
+  new per-notice line `Variables Step: INR=...` (the Writer Step line no longer includes it).
+  Date semantics (`TemplateFillService.buildContextMap`): `{{notice.issue_date}}` is the date of the document being
+  answered (matcher notice block / intake record); a template that needs the ORDER's date uses `{{issue.order_date}}`,
+  which the agent extracts; an `issue.*` value present in the facts always wins over a `notice.*` fallback. No
+  template was rewritten.
+- **Fix B: `para_stance`** (matching prompt **v3.5**, `PROMPT_VERSION issue_matching_v3_5`, rule 7a, example and
+  self-check 2a). For every `para_map` key the matcher returns one of `admitted` (factual recital: jurisdiction,
+  dates, returns filed, notice received, the department's description of the proceedings), `denied` (an allegation
+  or proposed demand), `explained` (a correct fact that needs context, e.g. payment under protest) or
+  `not_applicable` (closing formalities: reply time, hearing offer, ex-parte warning). Parser:
+  `Map<String,String> paraStance` on `MatchingResult` (default empty; the 10- and 11-argument constructors are kept;
+  values normalised, "n/a" / "noted" read as `not_applicable`, anything else dropped). `ReplyAssemblyService`
+  Section 05 prints "Para N: Admitted." / "Para N: Denied. Please refer to the reply to Issue #k at para 4.x." /
+  "Para N: Explained. Please refer to ..." / "Para N: Noted." (not_applicable); a whole-paragraph key wins over a
+  sub-paragraph key of the same paragraph; a writer's own para reply still prints first; when no stance is available
+  (earlier output) today's wording stays.
+- Tests: `TemplateVariableAgentTest` (good JSON, unknown names / issues, not_found only, neither key -> validation
+  error, hints, capped payload, stub mode, live call on the partial model with effort low / max_tokens 2000 and the
+  `template_variables` usage step), `V7Stage3PipelineTest` (agent called once with only the unknown variables and the
+  values fill the template; skipped with the info flag when none; failure and not_found leave the markers),
+  `ReplyAssemblyParaAndFactsTest` (the four stances; no stance keeps today's wording; AI para replies win;
+  `stanceByPara`), `IssueMatchingAgentTest` (para_stance parsed and normalised; absent -> empty; `withIssues` /
+  `withFacts`), `TemplateFillServiceTest` (issue.order_date vs notice.issue_date, `factKeyForVariable`,
+  `unknownVariables`), `MatchingPromptRulesTest` (v3.5 wording, example keys), `ApiUsagePricingTest` (defaults).
+
+## (b18) Deterministic stage correction for order-type inputs; summary wording uses the detected section (17-10-2026)
+
+Findings from the 10-notice full-pipeline run on `99bb118`. No prompt, cap, model or loader change; no LLM call added.
+
+- **Fix A: stage correction after matching** (`V7DraftingPipelineService.applyStageCorrection`, Stage 1a, before the
+  template variable step and the template fill). On an RFD-06 refund rejection ORDER the matcher chose the reply-stage
+  refund cards (NDK-225, NDK-221) although the appeal-stage siblings (NDK-224, NDK-222) exist; another run chose
+  correctly. New `StageResolver` (matching package) maps the input document to the response it calls for, from the
+  document type, then the first form name in the heading (first 1,500 characters; the triage label `scn_73` yields to a
+  form name in the heading): DRC-01, DRC-01A, ASMT-10, ADT-01, REG-17, RFD-08, MOV-07, summons, Section 46 -> reply;
+  Section 62 / ASMT-13, DRC-13, recovery letter -> representation; DRC-22 -> objection; DRC-07, RFD-06, REG-05,
+  MOV-09, order-in-original, order-in-appeal -> appeal; REG-19 -> revocation (no correction); anything else -> no
+  correction. A card is appeal-stage when its STAGES contain `order_appeal` or its title starts with "Appeal" /
+  "APL-01", reply-stage otherwise. When the class is wrong, the candidates are the catalogue cards named in the
+  primary card's NOT THIS IF rules plus the matcher's alternates, of the right class: exactly one -> it becomes the
+  primary, the old primary the first alternate, the status is kept, issue flag `stage_corrected: <old> -> <new>` and
+  draft flag **`info:stage_corrected`** (detail: the corrections); none or several -> card kept, issue flag
+  `stage_mismatch: <input stage> vs <card stage>` and draft flag **`warn:stage_mismatch`**. Mirror swap for a reply /
+  objection / representation input matched to an appeal card. One log line and one Section 13 note per issue; the
+  Section 13 issue line reads "Note=stage corrected from NDK-225 to NDK-224". `CatalogueService.cardsById()` gives the
+  pipeline read access to the cards' stages and NOT THIS IF rules (setter-injected; absent in tests -> no correction).
+- **Fix B: the provision the draft names** (`ReplyAssemblyService.resolveNoticeSection`). The executive summary and
+  notice understanding said "under Section 73" for a Section 50 interest letter and a Section 75 order (the notice
+  record's header section). Order now: the matcher's reading (its notice block carries no section, so the
+  `legal_section` of the main issue, the first demand issue that has one, when it names a proceeding provision:
+  50, 54, 61-64, 73, 74, 74A, 75, 76, 122, 125, 129, 130, 171; a charging provision such as 16(4) falls back), then
+  the notice record's section (the one the StageDetector used); never a default. When it differs from the record,
+  the pipeline re-detects the stage template from it (`StageDetector.detect`), and the checks receive the same
+  section and stage. A document that is not an SCN (order, letter, intimation, other notice, by `StageResolver`) is
+  worded "Reply to Order Ref ... issued under Section 75", "has received order reference ... issued under", and
+  "Order issued under Section 75" on the notice type line; never "Show Cause Notice".
+- Tests: `StageResolverTest` (mapping table, heading over the scn label, specific type over the heading, first form
+  wins, document kinds, unknown -> null), `V7StageCorrectionTest` (RFD-06 + NDK-225 with NDK-224 in NOT THIS IF ->
+  swapped with flag; sibling from the alternates; no sibling -> warn only; two candidates -> warn; mirror swap;
+  right stage / revocation / unknown unchanged; pipeline step flags, details and notes),
+  `ReplyAssemblySectionWordingTest` (Section 50 letter and Section 75 order: wording, no "Section 73" or
+  "Show Cause Notice" in 01/02/14, CHECK_PROCEEDING_CONSISTENT passes; charging-provision fallback; notice type line).
+
+## (b19) Procedural defect checks in code; stage-sibling tie-break; issue flags visible (17-10-2026)
+
+Why: across four live 10-notice runs on the same input the matcher found the procedural defects 2, 3, 4 and 2 times
+out of the 5 expected; the same time-barred Section 73 SCN and the same short-reply DRC-01A were caught in one run and
+missed in the next. These are date arithmetic and form checks, so code now does them. No prompt, cap, model, loader
+or writer change; no LLM call added (the matcher's `defect_checks` stay as a second opinion).
+
+- **`DefectChecker`** (matching package, pure, no network). Reads the matcher's notice block (issue date, FY, DIN) and
+  the StageDetector / StageResolver results, falling back to regex on the text when a field is null (dates dd.mm.yyyy,
+  dd-mm-yyyy, dd/mm/yyyy; "FY 2019-20" / "Financial Year 2019-20"; "Section 73(1)" / "Section 74(1)" / "Section 74A").
+  Each check returns defect / ok / cannot_test with a basis of at most 20 words naming the dates used:
+  - `limitation_73`: Section 73 SCN dated after the SCN deadline of its FY (2017-18 30.09.2023; 2018-19 31.01.2024;
+    2019-20 31.05.2024; 2020-21 30.11.2024; 2021-22 30.09.2025; 2022-23 30.09.2026; 2023-24 30.09.2027; the deadline
+    day itself is in time). Reply card NDK-105 only for FY 2017-18 / 2018-19; other FYs have no card (see below).
+  - `premature_74`: Section 74 SCN dated before the GSTR-9 due date of its FY (07.02.2020 ... 31.12.2024) -> NDK-104.
+  - `din`: central-tax document (header or officer designation says Central Tax / CGST / Central Goods and Services
+    Tax, Act names ignored) dated on or after 08.11.2019 with no DIN line, or a blank / bracket / underscore / X /
+    "not generated" value -> NDK-141 (reply), NDK-142 (appeal). "Central / State Tax" with no central designation ->
+    cannot_test; a State Tax document -> not applicable.
+  - `signature`: no evidence in the last 25 lines (Digitally signed, Sd/-, Signature valid, e-signed, Signed by
+    <name>) AND a blank signature line / empty "Signature:" or "Name:" field, or "does not require signature" ->
+    NDK-143 (reply), NDK-144 (appeal).
+  - `drc01a_reply_time`: DRC-01A whose Part B / reply date (or "within N days") is fewer than
+    `drafting.defects.drc01a-min-days` days away (**`DEFECT_DRC01A_MIN_DAYS`**, default 15, firm to confirm) -> NDK-148.
+  Both date tables sit in `DefectDeadlines` with "[VERIFY: partner to confirm the extended dates]".
+- **Merge** (`CodeDefectMerger`, `V7DraftingPipelineService.applyCodeDefects`, Stage 1a0: after matching, before the
+  stage correction and template selection). A code defect the matcher also raised (a defect issue on one of the
+  check's cards, or whose why names the check's `defect_checks` entry) is kept with issue flag
+  **`info:defect_confirmed_by_code`**; one it missed is ADDED as a kind=defect issue (card of the response stage,
+  status full; no card or a card not in the catalogue -> status none with
+  "[[PARTNER: <basis>; no catalogue card for this regime]]", no writer call), why "Code check <check>: <basis>",
+  notice_paras ["header"], flag **`info:defect_added_by_code`**; a check the code tested ok while the matcher raised
+  it keeps the issue with **`warn:defect_disputed_by_code: <basis>`** ("not applicable" and cannot_test never dispute).
+  Issues are renumbered so defects follow the demand / consequential issues (parent numbers and para_map follow).
+  Section 13 notes list every check's result and each added / confirmed / disputed issue.
+- **Stage-correction tie-break**: with more than one sibling of the right stage, candidates already the primary card
+  of another issue of the notice are dropped; exactly one left is swapped as before; otherwise the warn stays.
+- **Visibility**: issue-level flags (stage_corrected, stage_mismatch, defect_added_by_code, defect_confirmed_by_code,
+  defect_disputed_by_code) are listed on the issue's Section 13 line ("Issue flags=[DEFECT_ADDED_BY_CODE:info]") and
+  added to the draft's check results as `<FLAG>#<issue no>`, so the live runner's "Flags:" line reads e.g.
+  `DEFECT_ADDED_BY_CODE#3:info`.
+- Golden drafts: notice 07 (Central Tax SCN dated 22-10-2023 with no DIN line) now gets defect issue #2 on NDK-141;
+  notices 06 / 07 / 10 list the code checks in Section 13.
+- Tests: `DefectCheckerTest` (positive, negative and cannot_test case per check with the synthetic header styles;
+  limitation and GSTR-9 table boundary days; configurable DRC-01A minimum; regex fallbacks; 20-word basis),
+  `CodeDefectMergerTest` (add, confirm by card and by why, dispute, appeal-stage card, null / unknown card -> status
+  none + partner placeholder, renumbering with parents and para_map), `V7StageCorrectionTest` (two appeal siblings,
+  one already primary elsewhere -> swap to the other; both free -> warn), `V7CodeDefectPipelineTest` (full pipeline:
+  variable step on the renumbered issue, template fill, Section 07 rendering, Section 13 flags, runner flag line).
+
+## (b20) Code shortlist of catalogue cards before matching; runner wiring fix (20-10-2026)
+
+Why: every matching call carried all 269 cards. Plain code now picks the cards a notice can need and only those
+are rendered into the prompt. No model, cap or writer change; the matching prompt is v3.6.
+
+- **`CardShortlister`** (matching package, pure). Step 1 stage filter: the card's `stages` against a notice-key table
+  (`NOTICE_STAGES`, one place: scn_73 -> scn_73 + generic_scn; scn_74 -> scn_74 + generic_scn; drc_01a / asmt_10 ->
+  themselves + generic_scn; appeal / DRC-07 -> order_appeal, RFD-06 + refund, REG-05 + registration, MOV-09 +
+  inspection; REG-17 -> registration; REG-19 -> registration + order_appeal; refund / RFD-08 -> refund; DRC-13 /
+  DRC-22 / recovery letter -> recovery; MOV-07 / Section 129 / 130 -> inspection; ADT-01 -> audit). Keys come from
+  the detected notice type, the StageResolver response stage and the forms in the heading; their stages are
+  united. other / unknown / a type not in the table: no stage filter. A card with stage `other` passes everything.
+  Step 2 keyword filter on LABEL keywords only (sections, rules, forms, e-way bill, notifications, circulars; free
+  text ignored), normalised on both sides ("Sec." / "u/s" / spacing / hyphens / leading zeros); a section or rule
+  hit is exact at the keyword's sub-section level ("Section 16" hits 16(4); "Section 16(4)" does not hit 16(2)(c)).
+  Step 3 siblings named in kept cards' NOT THIS IF rules (one level). Step 4 floor: fewer than 3 -> stage filter
+  only (level `stage`), still fewer -> full catalogue (level `full`). Dynamic size, no cap, catalogue order.
+- **Matching agent**: `matching.shortlist.enabled` (**`MATCHING_SHORTLIST`**, default true). With a shortlist the
+  system prompt is the rules alone (cached) and the shortlisted cards go in the per-call user message before the
+  notice; with every card shown (shortlist off, level full, widening call) the catalogue stays in the cached system
+  prompt. The budget's worst-case pre-check uses that split. The catalogue hash is always the full catalogue's.
+- **Widening on miss**: shortlist level not full and an issue with status none on a substantive ground (the
+  new-issue writer's test) -> matching runs ONCE more on the full catalogue through the same budget and that result
+  is used (**`info:shortlist_widened`**: sizes, issue numbers). A failed / refused second call keeps the first result
+  with a partner note. Every shortlist adds **`info:shortlist`** {size, level, catalogue size, step counts} and one
+  Section 13 line; the live runner prints "Shortlist: 23 cards (level keyword; stage 61, keyword 19, siblings 4)".
+- **Runner fix**: `V7LivePipelineRunnerTest` built the pipeline by hand and never called `setCatalogueService`, so
+  the stage correction (and the code-defect card lookup) never ran in live tests. It is called now.
+- Dev seeds (20 cards, code only, no calls): notices 01 / 06 / 08 / 09 / 13 / 14 -> 3-4 cards (keyword); 02 / 03 /
+  04 / 07 / 10-12 / 15 -> 10-18 (stage); 05 -> full (dev card stage `rfd_08` is not in the table). Two answer-key
+  cards fall outside: notice 08 CARD-010 (no label keyword at all) and notice 13 CARD-004 (keyword "section 16(5)",
+  the defence; the notice cites 16(4) and CARD-003 names CARD-004 by text, not id). Both depend on the matcher
+  answering none (then widening fires) rather than forcing CARD-001 / CARD-003.
+- Tests: `CardShortlisterTest` (stage table, normalisation, sub-section exactness, forms, notifications, siblings,
+  floor levels, determinism), `V7ShortlistWideningTest` (widening with a stubbed matcher, no widening for a
+  non-substantive ground, failed widening kept, stage correction active only with a CatalogueService),
+  `CacheAwareCostEstimateTest` (prompt layout, rules as the cached prefix, full-catalogue hash).
+
+## (b21) Shortlist v2: label scoring + AI title pass; stage-pool widening; dry-run tool (20-10-2026)
+
+Why: the first live run of (b20) gave 66 to 128 cards per notice (target 15 to 40) and cost more than the full
+cached catalogue. Measured causes and the fix for each are in open item 9. Matching prompt is v3.7.
+
+- **`CardShortlister` v2** (pure). Stage pool as before, plus letter patterns for documents with no form name and
+  no known type (Section 62 / ASMT-13, "recovery", Section 79 -> recovery; Section 129 / 130 / MOV-07 ->
+  inspection; Section 65 / ADT-01 -> audit; REG-17 / 19, RFD-08 / 06, DRC-13 / 22), earliest match in the text wins.
+  Label scoring: each label keyword weighs ln(N / df) (df = cards carrying it, cached per catalogue); a card scores
+  the sum over its DISTINCT keywords found; kept = score >= `relative-cutoff` x best (0.35), topped up to
+  `min-cards` (15) by score, positive scores only. Full cards = label picks + AI picks + in-pool NOT THIS IF
+  siblings of the AI picks; every other named sibling goes in a closing "OTHER CARDS NAMED BY NOT THIS IF RULES"
+  block by id and title. Floor: fewer than 3 full cards -> stage pool.
+- **`ShortlistTitleAgent`** (new, `prompts/shortlist_titles_v1.md`): one call per notice before matching; system
+  prompt = instructions + `NDK-001 | <title>` for the whole catalogue (cached prefix), user message = notice type +
+  text; `LLM_MODEL_SHORTLIST` (blank: matching model), effort `LLM_EFFORT_SHORTLIST` low, max_tokens
+  `LLM_MAX_TOKENS_SHORTLIST` 1500 (6000 / 9000 from (b22)); budgeted through `WriterCall`. `MATCHING_SHORTLIST_AI` (default true). A failed
+  or refused call -> labels only + **`warn:shortlist_ai_skipped`**.
+- **Matcher**: shortlist render drops the KEYWORDS line (the full-catalogue render keeps it, so the hash is
+  unchanged). A full match whose primary is a titles-only card is lowered to partial (issue flag
+  `titles_only_primary`).
+- **Widening**: one more call on the STAGE POOL only (full catalogue only when the pool is the catalogue), never when
+  the shortlist already is the pool; refused by the budget -> no call, **`info:shortlist_widening_skipped`**.
+- Log / runner line: "Shortlist: 27 cards (pool 128; labels 19, ai 14, siblings 6; titles-only 11)". Both live
+  runners wire the title agent and price-check its model.
+- **`ShortlistDryRunTest`** (skipped unless `SHORTLIST_DRY_RUN_DIR` is set; zero cost unless
+  `SHORTLIST_DRY_RUN_AI=true`): per notice pool, label picks, full / titles-only counts and each answer-key card as
+  full / titles-only / MISSED; summary median / p90 / max size and recall. Card JSON read by
+  `PrivateSetSupport.readCards`. Prints ids and counts only.
+- Tests: `CardShortlisterTest` (weights, distinct keywords, cutoff, min-cards, letter stages, union, titles-only
+  block, render), `ShortlistTitleAgentTest` (prompt, parser, settings, degrade, budget refusal, fatal errors, union
+  in the matcher, titles-only primary), `V7ShortlistWideningTest` (stage-pool widening, skip flag, ai-skipped flag),
+  `MatchingPromptRulesTest` (v3.7), `ShortlistDryRunTest` offline run on a synthetic set.
+
+## (b22) Shortlist title pass fixes after the first live dry run (20-10-2026)
+
+- **Measured** (live dry run, 40 private notices, cheap title model, effort low): the title call hit max_tokens=1500
+  on 11 of 14 notices (1,500 output tokens, then 1,200 to 2,800 on the 3,000-token retry; one notice overran even
+  3,000 and the consecutive-failure guard stopped the run). Thinking counts toward max_tokens on this model, and the
+  answer likely echoed titles or reasons. Recall of the union 100% (37 of 37 expected cards), but union size median
+  41, p90 65 (labels 15 to 39 + AI 9 to 34 + siblings).
+- **Output limit**: `matching.shortlist.title-max-tokens` 6000 and `title-retry-max-tokens` 9000
+  (`MATCHING_SHORTLIST_TITLE_MAX_TOKENS` / `_RETRY_MAX_TOKENS`; replace `LLM_MAX_TOKENS_SHORTLIST(_RETRY)`), read
+  through `AppProperties.maxTokensForAgent`. Effort stays low.
+- **Prompt v1.1** (`shortlist_titles_v1.md`, header line): the answer is ONLY `{"card_ids": [...]}`, ids only, no
+  titles / reasons / prose / fences; every plausible card, none left out for brevity. No JSON output mode in the LLM
+  abstraction, so the parser is tolerant: fences stripped; unreadable JSON -> catalogue ids found by
+  `NDK-(AI-)?nnn` regex, flag **`warn:shortlist_ai_parse_fallback`** (shortlist detail `ai_parse_fallback`).
+- **Failure guard**: `WriterCall` can report only the outcome of the attempt pair (`finalOutcomeOnly`, used by the
+  title agent): truncated-then-ok is one usable outcome; a pair that fails is one failure. Writers unchanged.
+- **Stricter label cut-off with AI picks**: `relative-cutoff-with-ai` 0.5 and `min-cards-with-ai` 8 apply when the
+  title pass named at least one catalogue card; 0.35 / 15 otherwise (pass off, failed, or empty). Siblings
+  unchanged.
+- **Dry run**: AI-mode lines add `ai N | labels with-AI cut-off N | union ...`; a title call that fails after its
+  retry -> `AI FAILED after retry: labels only` and the run goes on; two failed notices in a row still stop it.
+  Summary adds the median of AI picks. Offline AI-mode test with a mocked provider.
+
+## (b23) After live run pipe10g on `6f37ab5` (24-10-2026)
+
+- **Widening removed**: no second matching call on the stage pool; an issue with status none goes straight to the
+  writer path (new-issue writer, or the no-substantive-ground placeholder). Flags `info:shortlist_widened` /
+  `info:shortlist_widening_skipped`, the matcher's `widen` variant and `CardShortlister.widened` deleted; the shortlist,
+  its `info:shortlist` flag and partner note line stay. `V7ShortlistWideningTest` reduced to
+  `V7ShortlistInPipelineTest` (asserts one matching call only).
+- **Shortlist floor with AI picks**: `min-cards-with-ai` 12 (was 8); `relative-cutoff-with-ai` stays 0.5.
+- **Absence cards**: a show cause notice / intimation (notice key scn_73 / scn_74 / scn_74a / scn / generic_scn /
+  drc_01a / asmt_10, or a DRC-01 / DRC-01A / ASMT-10 heading) whose text cites no section and no rule gets, in full,
+  every catalogue card whose title contains a pattern of `matching.shortlist.absence-title-patterns`
+  (`MATCHING_SHORTLIST_ABSENCE_TITLE_PATTERNS`, default `no section,vague`, case-insensitive). Log / runner line adds
+  `absence N`; flag detail `absence`.
+- **Stage correction tie-break**: when several right-stage siblings are still left, the one whose own NOT THIS IF
+  rules name the current primary (mutual sibling) is swapped in when exactly one is (`stage_corrected`); otherwise
+  `stage_mismatch` as before.
+- **Writer provider per agent**: `LLM_PROVIDER_NEW_ISSUE` / `LLM_PROVIDER_HIGH_STAKES` (blank = primary provider),
+  resolved in `LlmFactory.getLlmForAgent`; with `gemini` the model is `LLM_MODEL_NEW_ISSUE` / `LLM_MODEL_HIGH_STAKES`,
+  else `GEMINI_MODEL`. `GeminiLlmProvider` implements the writer entry points (effort not sent: this SDK's thinking
+  config has no budget; no cache_control; max_tokens sent as max output tokens) and returns stop reason (STOP ->
+  end_turn, MAX_TOKENS -> max_tokens retry, safety -> refusal), prompt / output (+ thinking) tokens. Writer JSON goes
+  through the same tolerant parser (fences stripped). Every writer call logs `provider=... model=...`; the runner's
+  `models:` line shows `provider:model` for new_issue and high_stakes.
+- **Free-tier price**: the GEMINI_MODEL default is priced 0 in application.yml (key in `[..]` form: a dotted model id
+  without brackets is split by the binder and the price is lost, so the model looked unpriced). A zero-priced model
+  passes the cap (worst case 0); a model missing from the table is still refused.
+- **Live runner**: accepts a real notice without `answer_key` ("Expected Status (Answer Key): none (real notice)",
+  no scoring) and `text` for `full_ocr_text`; minimal JSON `{"notice_id", "document_type" ("unknown" allowed),
+  "full_ocr_text"}`. Prints the shortlist, `Matched issues: #1 full [NDK-...]; ...` (this run's issue_matches rows),
+  flags and the draft path.
+- **Run budget**: the pipeline runner no longer shrinks the per-notice cap to what is left of the run cap (that
+  starved the last notice's writers mid-way); it stops BEFORE a notice when the remaining run budget is below
+  `LIVE_MAX_NOTICE_COST_INR` (`LiveRunGuard.stopBeforeNotice`). Set `LIVE_MAX_RUN_COST_INR` to at least the notice cap
+  plus the expected spend of the earlier notices. The matching-only runners keep `noticeCapFor`.
+
+## (b24) After the first real notice run (RFD-08 refund show cause, 25-10-2026)
+
+- **Taxpayer GSTIN by code** (`NoticeHeaderFacts.taxpayerGstin`, applied in the pipeline right after matching): the first
+  GSTIN within 120 characters after a party designation ("M/s", "noticee", "taxpayer", "RTP", "registered person", "To,")
+  in the first 1,500 characters, else the first GSTIN of the text. The matcher's notice block now has `gstin` (prompt
+  line added); its value is kept only when it is the code's choice. The intake GSTIN is replaced when it differs from a
+  GSTIN named next to the party (kept against a mere first-GSTIN choice, with a partner note). Override: log line and
+  flag `info:gstin_corrected` (details matcher / intake / chosen / source). Every other GSTIN is another party's; a
+  template variable for the client GSTIN that gets one is dropped.
+- **Financial year**: no `financial_year` from the matcher -> derived from its tax period (else the issues' periods),
+  April to March ("JAN-2026", "January 2026", "Jan-2026 to Mar-2026", "FY 2025-26", "2025-26"); a period crossing years
+  renders "FY 2025-26 and FY 2026-27". Fills the notice block and, when the intake has none, the reply header (02 / 03).
+- **State** from the chosen GSTIN's state code; "Centre Jurisdiction" / "Other Territory" are never a state (else
+  "State of [[MISSING: state]]" and `warn:missing_state`). Authority kind ("State Tax" / "Central Tax") from the heading
+  fills a blank matcher authority (notice_07 golden now reads "issued by the Central Tax authorities").
+- **Documents** (10 / 11 / 14): near-duplicates merged after the existing dedupe (normalised lines, containment or token
+  Jaccard >= 0.6, plurals folded, longer line kept; different form codes such as GSTR-1 / GSTR-3B never merged). The
+  run's 22-line list gives 12.
+- **Para-wise**: a statutory paragraph (heading "Contravention of the Law" / "Provisions" / "Statutory provisions", or
+  opening "(A) Section", "Section ... provides", "Rule ... provides", "(1) Every registered person shall") is "Noted. The
+  statutory provisions are reproduced; ..." over a matcher / writer denial; flag `info:statutory_para_noted`, partner note.
+- **Shortlist**: the reply- and appeal-stage cards of every code defect check that applies to the document
+  (`DefectChecker.applicableCardIds`) are always added in full (fourth source, `defects N` in the log / flag). Card ids
+  logged at DEBUG, at INFO with `MATCHING_SHORTLIST_LOG_IDS=true` (runner reads the env).
+- **Refund notices** (RFD-08): executive summary "Refund proposed to be rejected: Rs <sum of grounds>" (client summary
+  likewise); prayer `{{issue.amount_tax}}` / `{{notice.refund_amount}}` from the one ground's amount, else the amount
+  after "refund" / "Refund Application" / "for Rs." in the first 1,500 characters, else [[MISSING]].
+
+## (b25) PDF end-to-end runner; learned library (26-10-2026)
+
+- **Gemini OCR provider** (`GeminiOcrProvider`, `OCR_PROVIDER_PRIMARY=gemini`): the repo had no Gemini OCR provider
+  (OcrFactory built only the stub), so the upload path's `OcrFactory.getPrimaryProvider()` now builds one. The PDF /
+  image is sent inline with a transcription instruction (`=== PAGE n ===` per page; page count = markers). Model
+  `OCR_GEMINI_MODEL`, else `GEMINI_MODEL` (default = the zero-priced `GEMINI_MODEL` default, so the OCR model is
+  priced; same bracket-key rule as b23), `OCR_GEMINI_MAX_OUTPUT_TOKENS` 65536, `OCR_GEMINI_TIMEOUT_SECONDS` 300, key
+  `GEMINI_API_KEY`. `OcrResult` gains `usage` (provider, model, input / output tokens with thinking, `tierInfo`). Tier:
+  this SDK (google-genai 0.3.0) exposes no response headers; the response JSON is scanned for a tier / traffic /
+  project / billing / quota field, none expected ("tier: not reported by API").
+- **PDF runner** (`V7PdfPipelineRunnerTest`, skipped unless `ENABLE_E2E_TESTS=true` and `V7_PDF_NOTICES`): names under
+  `$PRIVATE_SEED_DIR/pdf/` or absolute paths, all resolved before any call. Per PDF, under the live-run guard (commit
+  check, run cap checked before each PDF, per-notice cap = notice cap minus the OCR + triage spend, fail-fast counts
+  OCR and triage outcomes): (1) OCR via `OcrFactory.getPrimaryProvider().process(bytes, filename, contentType)` (stub
+  provider refused), usage logged as step `ocr`; (2) `DocumentParsingAgent` document_type as ParseAndRouteWorkflow
+  (`LLM_MODEL_PARSING`, step `triage`); (3) the v7 pipeline with the OCR text and that label. Report = the live
+  runner's lines plus `OCR: provider=.. model=.. pages=.. chars=.. elapsed=.. tokens in/out cost INR` and
+  `Triage: document_type=..`; the tier line once. Files: `testbench/results/<notice-id>_ocr.txt` and
+  `<notice-id>_v7_draft.txt` (git-ignored). Notice id = file name without extension, lower-cased, non-alphanumerics
+  to '-'. No answer key, no scoring.
+- **Shared rig**: the live runner's set-up and per-notice report moved to `V7LiveRig` (no behaviour change);
+  `PdfNoticeSteps` holds the OCR / triage steps (offline test with a stub OCR provider and the stub LLM).
+- **Learned library** (`service/learned`): every issue the new-issue writer (plain or high-stakes tier) drafts with
+  status none, no card and a substantive ground is saved as `$PRIVATE_SEED_DIR/learned/<yyyy-mm-dd>_<notice-id>_issue<N>.json`
+  (entry_id `LRN-<8 hex>`, notice_id, issue_no, created_at, document_type, stage (response stage), stage_template,
+  ground, legal_section, amount, period, grounds_of_defence / legal_submissions (sections 04 / 06 as stored in
+  ai_issue_sections), documents, summary_line, citations with check_status, writer provider:model, prompt_version,
+  notice_facts (client name / GSTIN / reference, for scrubbing on reuse), status "provisional", approved_by null,
+  source_run = commit sha). Skipped when `PRIVATE_SEED_DIR` is unset; refused inside a git working tree; a re-run the
+  same day replaces a provisional file (same id), never an approved one (`_2`, `_3` ...). Never in the catalogue files.
+- **DB mirror**: V29 adds `ai_issue_sections.entry_id` / `source_run` (status existed and keeps its V26 meaning); the
+  entry's other fields go into the existing `output` JSONB (`learned_entry_id`, `learned_source_run`, `learned_status`,
+  ground, legal_section, amount, period, stage, document_type).
+- **Loader**: `LearnedLibraryLoader` (profile `private-seed`) reads `learned/*.json` into memory and logs
+  `learned library: N entries (M provisional, K approved)`. Not part of `CatalogueService.getActiveCards()`.
+- **Use**: `CATALOGUE_INCLUDE_LEARNED=true` (`catalogue.include-learned`, default false): APPROVED entries are appended
+  to the matcher's cards (id LRN-..., title from the ground, summary from the first two sentences of the grounds of
+  defence, stages from the response stage / stage template, sections and keywords = the provisions cited) and are a
+  provisional reply template of their own (sections 04 / 06 split into blocks, notice values replaced by placeholders
+  via `ProvisionalTemplateService.build`; `info:provisional_template` names it). Provisional entries never reach the
+  matcher. `LearnedLibraryTool` (`LEARNED_TOOL=true`, `-Dtest=LearnedLibraryTool`) lists entries;
+  `LEARNED_APPROVE=<entry_id> LEARNED_APPROVED_BY=<name>` approves one and writes the file back.
+- **Privacy**: `.gitignore` adds `learned/*.json`; the commit hook (it checked file types only) now also rejects an added
+  `.json` in a `learned/` folder and any file under `testbench/results/` (the Java package `service/learned` is not
+  matched; hook tests 22 passed).
+- **Runners**: both print `Learned: saved LRN-xxxx for issue #N` per saved entry and the library counts at start and
+  end (`NOTICEDESK_SOURCE_RUN` sets source_run in the app; the runners use the commit sha).
+
+## (b26) Mechanical draft fixes from the RFD-08 run (26-10-2026)
+
+Code-side only; no prompt change, no live run. Proved offline by `V7DraftMechanicsFixesTest` (14 tests, synthetic text)
+and `V7FirstRealNoticeFixesTest.clientLegalNameFromTheNoticeWhenTheClientRecordHasNone`.
+
+- **A. Client name from the notice**: `NoticeHeaderFacts.taxpayerLegalName(text, taxpayerGstin)` reads the name in the
+  first 1,500 characters next to the taxpayer GSTIN: a labelled name ("Name of the RTP:", "Legal Name:", "Name of the
+  taxpayer / registered person / noticee / applicant") or an "M/s ..." name whose nearest GSTIN (within 160 characters,
+  before or after) is the taxpayer's. A name nearest another GSTIN (a supplier's) is never used; two different names,
+  a sentence ("M/s the supplier has availed ...") or no taxpayer GSTIN give null and the MISSING marker stays. Applied
+  in `applyHeaderFacts` only when the client record has no name (flag `info:client_name_from_notice`, partner note), so
+  templates, Sections 02 / 03 / 12 and the learned library all get it; `ReplyAssemblyService.clientLegalName` falls back
+  the same way for direct callers.
+- **B. Markers**: a visible `[[MISSING: x]]` never shows the variable prefix (`DraftTextCleanup.markerName`: issue. /
+  facts. / notice. dropped, client. -> client_ so it merges with the code's client_legal_name / client_gstin); applied in
+  template fill, stage placeholders and over every assembled section (AI text included). `normaliseMarkerKey` strips the
+  prefix, so CHECK_MARKERS_LIST and the partner note's marker list show "supplier_gstr1_filing_date" once.
+  `missingVariables` keeps the full variable name. notice_06 golden updated accordingly.
+- **C. Writer enumerators**: before 4.n / 6.n / 7.n numbering, an AI paragraph's own leading "5." / "5)" / "(5)" / "(a)" /
+  "A." / "(iv)" / "4.1" (also inside `<strong>`) is removed; "1.5 lakh ..." is never cut. A lettered line (A. / (B) / IV.)
+  under 15 words with no closing full stop is an unnumbered `<h4>` sub-heading (letter kept), not a numbered paragraph.
+- **D. Para-wise**: several issues answering one notice paragraph are one sub-entry each (`<ul>` under the paragraph),
+  labelled "As to Para 2(a):" (or "As to Issue #k:" when the sub-para is unknown); a single sub-para reply reads "As to
+  Para 2(c): ...". A sentence of 6+ words repeating (exactly or with word overlap >= 0.85) one already used for another
+  paragraph is dropped ("See also the reply to Para N above."; a reply left empty becomes "Please refer to the reply to
+  Para N above."); exact repeats within the same paragraph are dropped as before; a bare "Denied." / "Noted." is never a
+  repeat. Inline "* item" lists become real bullets. The DOCX export now prints nested list items once, indented.
+- **E. Citations**: `citationIdentity` also folds "&" to "and", "v/s", "Commr." / "Govt." / "Asst." etc., and drops a
+  trailing place (one to three words after the respondent's last comma: ", Delhi", ", New Delhi"). The pipeline list, the
+  IndianKanoon check (one call per case) and CHECK_AI_CITATIONS_VERIFIED (now also counts by identity) see one case.
+- **F. Refund prayer**: for a refund notice Section 12 is built by code (`ReplyAssemblyService.refundPrayer`): drop the
+  proposed rejection of Rs <sum of grounds> in notice <ref> dated <date>, listing each ground (matcher label, else "the
+  ground at Issue #n") with its amount; sanction the refund of Rs <amount named in the notice> as claimed; personal
+  hearing before any adverse order; other orders. "Not a ground for rejection under Section 54 ... and the Rules" is added
+  only to a ground whose own template / AI text (sections 04 / 06) argues that point. The stage template's Section 12
+  is not used for refund notices (partner note says so); Section 15 still comes from the stage template.
+
+## (b27) Citation matching, assumed facts, shortlist cap, citation limit (27-10-2026)
+
+Four fixes from the citation-only live run and the RFD-08 draft, all proved offline (synthetic text, mocked IndianKanoon
+client, no model call): `CitationNameMatchingTest` (6), `V7ConfirmMarkersAndCitationLimitTest` (7), three new tests in
+`ShortlistTitleAgentTest` and one in `AnthropicLlmProviderTest`.
+
+- **1. IndianKanoon name matching** (`CitationVerificationAgent.namesMatch`): the live run returned NOT_FOUND for 10 of
+  11 real cases because 80% of each party's raw words had to appear in the title. Now both sides go through
+  `partyWords`: a second case merged in brackets ("X v. Y (A v. B)") and a reporter citation after the respondent are cut
+  (the search query too: `searchQuery`; a petitioner named "Air India" is no longer cut at "AIR"), the title's trailing
+  " on 13 December, 2021" and bracketed parts ("(Data Cell)") are dropped, "(P)" / Pvt / Ltd / Co / Commr / Asst / Govt /
+  CCE / CIT / UOI / "&" are folded, punctuation inside initials ("M/S.D.Y.Beathel") becomes spaces, and "The", "M/s",
+  "And Another", "& Ors", "Etc" and company suffixes are dropped. Each cited party is compared with the title party in
+  the same position (both orders tried): >= 60% of its words, or every word of the shorter side (two or more words),
+  and the petitioner's key word (first word of three or more letters) is mandatory. The eleven real titles of the run
+  (Suncraft, D.Y. Beathel, Ecom Gill, Oryx Fisheries, Brindavan Beverages, Arise India, Diya Agencies, Coca Cola, LGW ...)
+  now match; a different respondent ("Arise India v Union of India") and the invented default-list case do not.
+  `courtMatches` tells Supreme Court / high court / tribunal / authority apart, folds high-court places (Bombay / Mumbai,
+  Madras / Chennai / Madurai, Calcutta / Kolkata, Karnataka / Bengaluru, Delhi / New Delhi ...), ignores "Hon'ble",
+  "of Judicature", "at", a bench word, "HC" / "SC", and accepts "CESTAT" / "Appellate Tribunal" docsource strings
+  (tribunals agree on their subject, CESTAT / ITAT, and ignore the bench place).
+- **1b. Citation list parser** (`CitationCheckRunnerTest.parseList`): the "year not numeric in 'E v. F|High Court of
+  Delhi|x'" warning in the result file came from the offline parsing test's own deliberately bad entry, not from a live
+  list. The parser now refuses a year that is not a four-digit number and a fifth field with a message naming the entry
+  (instead of a WARNING line and a silently unset year), and accepts an optional fourth field: the quoted text
+  (`case|court|year|quoted text`, one fragment call).
+- **2. Writers must not invent facts** (prompts `partial_drafting_v2.md` / `new_issue_v2.md`, rule 1a): every fact
+  comes from the notice text or the client facts given; a fact an argument needs but the input does not establish is
+  written as `[[CONFIRM: <fact>]]` inside a conditional sentence and returned in `assumed_facts` (fact + the sentence it
+  supports; parsed by `AiOutputParser.assumedFacts`, a plain string accepted, on `PartialDraftingResult` /
+  `NewIssueDraftingResult`, stored in the `ai_issue_sections` output as `assumed_facts`). Code: `CHECK_ASSUMED_FACTS`
+  (warn) lists "Issue #n: fact" lines and the CONFIRM markers found in the draft; `CHECK_MARKERS_LIST` counts CONFIRM
+  markers like MISSING markers (`confirm_count` / `confirm_markers`; the check fails, block); the Section 13 partner note
+  gets one Stage 3 line per fact ("Issue #1 fact to confirm with the client: ... (supports: ...)") and a "Facts to
+  confirm with the client" list next to the missing-data markers; `DraftTextCleanup` treats `[[CONFIRM: ...]]` like
+  `[[MISSING: ...]]` (prefix stripping, de-duplication, `confirmMarkers`); CHECK_NO_UNRESOLVED_PLACEHOLDERS knows the
+  marker; `DocxExportService` prints every `[[MISSING]]` / `[[CONFIRM]]` / `[[PENDING_AI]]` / `[[PARTNER]]` marker as
+  its own bold run. The RFD-08 template for card NDK-006 is private content (`$PRIVATE_SEED_DIR`), not in the repo:
+  its "the supplier filed its GSTR-1 belatedly" wording is for the partner to change there.
+- **3. Shortlist title pass repeatable** (`shortlist_titles_v1.md` v1.2, `ShortlistTitleAgent`): the model answers a
+  RANKED list (most likely first, each id once); the first `matching.shortlist.title-max-cards` (default 15, env
+  `SHORTLIST_TITLE_MAX_CARDS`, 0 = no cap) are kept in rank order (`Picks.returnedCount` / `capped()` say how many came
+  back; the regex fallback is capped too). The call goes through `LlmProvider.withTemperature(0.0)`: the Anthropic
+  provider returns a view that sends `temperature: 0` on every call to a sampling model (previously 0.0 meant "not
+  sent", so the API default applied); a thinking (effort) model keeps its effort setting and never gets a temperature
+  (the cap still bounds the list); other providers and mocks are unchanged. `CardShortlister` already rendered the
+  union in catalogue order; `theMergedShortlistIsTheSameForTheSameInputs_whateverTheOrderOfTheIds` proves it with the
+  15 ids shuffled. `ShortlistDryRunTest` prints the kept title-pass ids per notice ("ai 15 of 30 returned [NDK-...]")
+  and the cap in its settings line.
+- **4. Citation count limit** (prompt rule 6a: at most 3 cases per issue, the ones that matter most, the template's
+  cases preferred, each case once by its own name; `matching.citations.max-per-issue`, default 3, env
+  `CITATIONS_MAX_PER_ISSUE`, 0 = no limit): `V7DraftingPipelineService.applyCitationLimit` keeps the first N distinct
+  cases of each issue (statutory references never count); a case beyond the limit for every issue that cites it stays
+  in the text, is `NOT_CHECKED` with details "beyond per-issue citation limit", is never sent to IndianKanoon, and is
+  listed in the partner note ("Issue #1: 2 citation(s) beyond the per-issue limit of 3 not sent to IndianKanoon ...")
+  with flag `info:citation_limit_applied`. A case within the limit for one issue is checked once for all. As every
+  NOT_CHECKED citation, it fails CHECK_AI_CITATIONS_VERIFIED (block) until the partner removes or verifies it.
+- **Docs**: README and `docs/PRODUCTION-CONFIG.md` list `CITATIONS_MAX_PER_ISSUE`, `SHORTLIST_TITLE_MAX_CARDS` and the
+  four-field `CITATION_CHECK_LIST`.
+
+## (b28) Privacy-first PDF path: local text, anonymiser, de-anonymised outputs (27-10-2026)
+
+The firm's gemini key is on the FREE tier (data may be used for training). Until now the PDF runner sent the raw PDF
+bytes to `GeminiOcrProvider`, so the client's name, GSTIN and address reached the model before anything else ran.
+All proved offline with synthetic text (fictional party "ZETA ALLOYS", allow-listed placeholder GSTINs); no live call.
+
+- **1. Local text extraction** (`service/ocr/LocalOcrProvider`, `OcrFactory` name `local`, PDFBox 3.0.3 added to the
+  pom): a digital PDF's text layer is read page by page with `PDFTextStripper` (reading order, so a table row stays on
+  one line) with the same `=== PAGE n ===` markers as the gemini provider, so page count, header facts and the
+  anonymiser are unchanged. A page with fewer than 40 letters / digits counts as scanned; when fewer than half the
+  pages have text the PDF is scanned: every text-less page is rendered at 300 dpi and run through the system
+  `tesseract <png> stdout -l eng`; without tesseract on the PATH the provider fails with `OcrException` "scanned PDF
+  needs tesseract or a paid OCR provider; refusing to send raw bytes to a free-tier model" (an image needs tesseract
+  too). Usage reports provider `local`, "model" `pdfbox` / `tesseract` (priced 0 in application.yml), 0 tokens: the
+  runner logs the step `ocr` at INR 0.0000. `OCR_PROVIDER_PRIMARY=local` also works for the app's upload path.
+  Proved by `LocalOcrProviderTest` (7: PDFs built in the test, a fake tesseract runner present / absent).
+- **2. Anonymiser** (`service/privacy/NoticeAnonymiser`, `AnonymisationMap`; pure code): one pass collects spans from
+  every detector over the original text, resolves overlaps (GSTIN before PAN, names before addresses) and writes the
+  placeholders; the same real value always gets the same placeholder. GSTIN `27AAACB....` -> `27AAAAA0001A1Z1` (state
+  code and entity digit kept; the PAN inside is the standalone PAN's placeholder `AAAAA0001A`; check character = the
+  GSTIN's sequence); TAN `AAAA00001A`, CIN, IEC / Aadhaar / bank account (labelled) and IFSC keep their shape; phones
+  `9000000001` (also `98765 43210` and `022-...`), e-mails `person1@example.com`, PIN codes `900001`; ARN / DIN /
+  reference numbers after their labels (`Ref. No`, `DIN`, `ARN`, `Notice No`, `Case ID`, `Temporary ID`, ...) and bare
+  ARN / portal / DIN shapes keep letters and separators and replace each digit run by the sequence number (a 4-digit
+  year and the "-24" after it in `SCN/MH/2023-24/606` are kept), so the DIN defect check still sees a DIN-shaped value
+  (`DefectChecker.looksLikeDinValue`). Names: the taxpayer's core (from `NoticeHeaderFacts.taxpayerLegalName`, the
+  labelled Legal / Trade / "Name of the taxpayer" names, an "M/s" name nearest the taxpayer GSTIN, the addressee line
+  after "To,") -> `NOTICEE COMPANY` (a second distinct taxpayer name `NOTICEE COMPANY 2`), the legal-form suffix
+  ("Private Limited", "Pvt. Ltd.", "LLP", "& Co", ...) stays in the text; other parties ("M/s" names nearest another
+  GSTIN, labelled supplier / vendor names, the table cell next to another party's GSTIN, a business after "Shri")
+  -> `SUPPLIER n` plus the trailing trade word (`SUPPLIER 1 TRADERS`); persons after Shri / Smt / Mr / Ms / Dr /
+  Proprietor / Director / Partner / Authorised Signatory -> `PERSON n` (the honorific stays). Every occurrence of a
+  core is replaced case-insensitively (a title-case occurrence gets the title-case placeholder, so the mapping restores
+  each spelling exactly); a one-word core shorter than five letters or in a common-word list is replaced only with its
+  suffix attached. Addresses: the text after `Address` / `Add.` / `Regd. office` / `Principal place of business` and
+  the lines of the "To," block up to the PIN -> `ADDRESS n`, keeping the trailing segments that are a State or a known
+  city (jurisdiction); the PIN becomes `90000n`. Kept: amounts, dates, periods, sections, form names, officer
+  designations, the office, tax rates, HSN, invoice numbers. `deAnonymise(text, map)` matches placeholders longest
+  first, as whole tokens, case-insensitively (a writer that re-cases "Noticee Company" is still restored). A second
+  pass over an anonymised text changes nothing (placeholder shapes are recognised). The mapping is JSON
+  `{version, counts, entries:[{kind, placeholder, value}]}`; `summaryLine()` gives counts only. Proved by
+  `NoticeAnonymiserTest` (8): nothing identifying survives, consistency and shape, DIN check, exact round trip (also
+  through the JSON file), idempotence, `NoticeHeaderFacts` still finds the taxpayer GSTIN / name / State on the
+  anonymised text, persons / labelled names / other ids, empty text.
+- **3. Pipeline order in the PDF runner** (`V7PdfPipelineRunnerTest`, `PdfNoticeSteps`, `V7LiveRig`): `OCR_PROVIDER`
+  (default `local`) -> anonymise (`NOTICE_ANONYMISE`, default on) -> `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` and
+  `<id>_anon_map.json` -> triage on the anonymised text (file name sent as `notice.pdf`, never the PDF's name) -> v7
+  pipeline on the anonymised text (unchanged) -> outputs restored before saving: `<id>_draft_anon.txt` (as produced),
+  `<id>_draft.txt`, `<id>_draft.docx` (internal mode, cover from the restored header, partner note restored),
+  `<id>_summary.txt` (the report lines, restored; printed restored too). Guards: a non-local OCR provider with the
+  anonymiser on is refused before any file is read ("REFUSED: OCR_PROVIDER=gemini sends the raw PDF bytes to a model
+  before anonymisation ... set NOTICE_ANONYMISE=off to accept that explicitly"); `PRIVATE_SEED_DIR` must be set and
+  outside a git working tree (the map is never written inside one: `saveAnonymised` refuses). The learned library
+  stores the anonymised text only (the pipeline never sees anything else; the entry's `notice_id` is the PDF's file
+  name, so PDFs should be named neutrally). One `Privacy: anonymised GSTINs a, PANs b, names c (taxpayer, other
+  parties, persons), addresses d, references e, other ids f` line per notice. `V7LivePipelineRunnerTest` (JSON notices)
+  is unchanged (`runNotice` without a restorer still writes `<id>_v7_draft.txt`). Proved by
+  `V7PdfPrivacyPipelineOfflineTest` (4: settings and guard, git-tree refusal, local text -> anonymise -> triage with a
+  capturing provider -> mocked pipeline -> learned entry -> restored TXT / DOCX, per-agent triage provider).
+- **4. Triage**: `DocumentParsingAgent` ran, and still runs by default, on the PRIMARY provider (Anthropic in the
+  rig) with `model-parsing` (`LLM_MODEL_PARSING`, default an Anthropic Haiku model id), not on gemini; only
+  `NoticeTriageAgent` (the checklist triage, not used by the runner) is pinned to gemini. New `provider-parsing`
+  (`LLM_PROVIDER_TRIAGE`, blank = primary) in `AppProperties.Llm.providerForAgent("parsing")`; with gemini the model
+  is `LLM_MODEL_PARSING` when it names a gemini model, else `GEMINI_MODEL`. The runner reads `LLM_PROVIDER_TRIAGE`
+  (default anthropic) and `LLM_MODEL_TRIAGE` (else `LLM_MODEL_PARSING`, else application.yml), requires the model
+  to be priced and `GEMINI_API_KEY` for gemini. The triage prompt and logic are unchanged; it works on the anonymised
+  text (document type, period, sections, grounds need no identifier).
+- **5. Privacy hook, ignore list, docs**: `scripts/check_sensitive_data.sh` rejects `*_anon_map.json`,
+  `*_ocr_anon.txt`, `*_draft_anon.txt` anywhere and `*_ocr.txt` / `*_draft.txt` / `*_draft.docx` / `*_summary.txt`
+  inside a `results/` folder (hook tests 32 passed, 10 new); `.gitignore` the same patterns;
+  `.githooks/allowed_ids.txt` lists the synthetic test GSTINs and the placeholders the tests assert. README (env
+  vars), `docs/PRIVATE_DATA.md` (the privacy order, `results/`), `docs/PRODUCTION-CONFIG.md` 2b (table, env vars, the
+  copy-paste Linux laptop block with `LIVE_EXPECTED_COMMIT`, the caps and the Sonnet writer).
+- Not done: a live run (no key, no PDF here); tesseract is not installed in this container, so the tesseract branch is
+  proved with a fake runner only; the anonymiser is regex-based (an unusual name layout can survive: read
+  `<id>_ocr_anon.txt` once before the first live run).
+
+## (b29) Anonymiser gaps found on a real refund notice; residual self-check and strict mode (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run offline on a real 4-page Maharashtra State GST RFD-08 refund show
+cause notice (digital PDF, PDFBox text layer). The taxpayer name and the whole GSTINs were replaced and the round trip
+was exact, but four kinds of identifying values survived. Each gap is one commit with its own test (synthetic text,
+invented names, allow-listed GSTINs; no live call).
+
+- **Gap 1, split GSTINs** (`13af7db`): the PDF text layer breaks each GSTIN of the Para 2(c) vendor table in two
+  ("27AAACB2" / line end / "894G1ZN"), so the contiguous pattern let four through. The anonymiser now collects every
+  GSTIN whole or split (`SPLIT_GSTIN`: the same structure with an optional break of up to six spaces / line ends /
+  hyphens between any two characters, anchored on the state code and the Z check character, upper case only), replaces
+  a split one by its placeholder written with the same break (`withBreaksOf`: "27AAAAA0\n001A1Z1", so the layout and
+  the line count are unchanged), maps the joined pair too (a model that joins the halves in its output is still
+  restored), and `AnonymisationMap.counts()` counts a split and a whole occurrence of one GSTIN once. The nearest-GSTIN
+  rule for "M/s" names sees split GSTINs. Proved by `gstinsSplitOverALineBreakOrAHyphenAreReplaced`.
+- **Gap 2, vendor names in capitals** (`27f54d5`): eight supplier names survived (the privacy line said "other
+  parties 1") in three layouts: prose with the name before a bracketed "(GSTIN:...)"; "supplier i.e. NAME" with the
+  GSTIN on the next line and "supplier of NAME"; a table whose cells are each on their own line (split GSTIN, blank
+  line, the name in capitals, blank line, amounts), the same vendor twice. New rules in `findBusinessNames`: (6) a name
+  after the word "supplier" / "vendor" / "seller" (optionally "i.e.", "namely", "viz.", "of", "being", "M/s"; upper
+  case, or title case when a GSTIN or its label follows within 60 characters) and after "Trade/Legal Name"
+  (`PARTY_WORD_LABEL`, `TRADE_LEGAL_NAME_LABEL`); (7) the last upper-case business phrase of 2 to 6 words within 200
+  characters before a GSTIN (whole, split or placeholder) with no other GSTIN in between, and an upper-case line of its
+  own within 3 lines before or after a GSTIN in a table block (`findUpperCasePhrasesNearGstins`). A phrase is read with
+  `businessPhraseCore`: words of `BUSINESS_STOP_WORDS` (form, statute, tax, office, designation, table heading, amount,
+  letter and address words: SHOW CAUSE NOTICE, GSTIN, GSTR, ITC, IGST / CGST / SGST, RTP, ARN, DIN, RFD, DRC, ASMT,
+  CENTRAL / STATE TAX, COMMISSIONER, OFFICE OF, GOVERNMENT OF, ACT, RULES, SECTION, PAN, INPUT TAX CREDIT, TOTAL,
+  SR. NO., TRADE / LEGAL NAME, ...) are cut from both ends, a stop word left inside, a State / city name, a placeholder,
+  a lone suffix or trade word ("COMPANY", "POLYMERS" after "SUPPLIER 5") or fewer than two words (one word of five or
+  more letters when a legal-form suffix followed) is not a name. The holder of the taxpayer's GSTIN stays the
+  taxpayer (for the taxpayer's GSTIN only a phrase on its line or the line before counts, the head of a notice being
+  full of upper-case office lines); every other holder is "SUPPLIER n" plus its trailing trade word, every occurrence.
+  Proved by `upperCaseVendorNamesInProseAndTableBlocksAreReplaced` (asserts that no upper-case business phrase
+  outside the stop list survives: `upperCaseBusinessPhrases(anonText)` is empty).
+- **Gap 3, the signing officer** (`a085665`): a person's name on a line of its own next to the designation line
+  survived. `findSignatureNames`: a name on its own line within two lines of a designation line (`DESIGNATION_LINE`:
+  "Dy. Commissioner of State Tax", "State Tax Officer", "(Proper Officer)", "Assistant Commissioner (ST), Mumbai"),
+  after "Sd/-" / "Sd." / "Signed by" / "Digitally signed by" / "Signature" on the same or the next line (brackets and an
+  honorific set aside), or right before a designation on one line ("Sunita Gaikwad, State Tax Officer") -> "PERSON n",
+  numbered in text order, every occurrence; the designation, the office line ("Mumbai Nodal Division 3"), place and
+  date stay (`readsAsPersonName`: two to four capitalised words, none a designation, office, form, place or trade word).
+  Proved by `personNamesInTheSignatureBlockAreReplaced`.
+- **Gap 4, the self-check** (this commit): `NoticeAnonymiser.residualRisks(anonText)` -> `Residual` counts what still
+  looks like a value in the anonymised text, by shape only: `gstin`, `gstin-split`, `pan` (outside a GSTIN), `email`,
+  `phone-10-digits` (not an amount after "Rs"), `caps-phrase-N-words` (an upper-case business phrase outside the stop
+  list); a placeholder's own shape never counts, so a clean text gives 0. `Result.residual()` is computed with every
+  anonymisation and `privacyLine()` ends with ", residual: 0" (or "residual: 3 (caps-phrase-2-words, gstin-split,
+  pan)"). The PDF runner prints it in the Privacy line; with residual > 0 it prints a WARNING with the shapes (never a
+  value) and sets the warn flag `warn:anonymiser_residual` on the notice (check row `FLAG_ANONYMISER_RESIDUAL`, added
+  to the pipeline result's check results by `V7LiveRig.withExtraChecks`, so it shows in the "Flags:" line and the
+  summary); with `NOTICE_ANONYMISE_STRICT` (default true) it REFUSES to send the text to a non-Anthropic provider (the
+  gemini triage, or a non-Anthropic primary provider) and stops the notice with "STOPPED: the anonymiser's self-check
+  found residual: n (...) ... No model call was made for this notice" (status `STOPPED (anonymiser residual n,
+  NOTICE_ANONYMISE_STRICT on)`, the run goes on to the next PDF); Anthropic calls proceed with the flag set.
+  `NOTICE_ANONYMISE_STRICT=off` accepts the residual explicitly. Gemini triage logic is unchanged. Proved by
+  `NoticeAnonymiserTest.residualRisksCountWhatStillLooksLikeAValueByShapeOnly` and
+  `V7PdfPrivacyPipelineOfflineTest.residualSelfCheckFlagsAndStrictModeRefusal` (settings, Privacy line, warning
+  and flag without values, the flag on the result, every refusal / proceed case).
+- **Docs**: README (`NOTICE_ANONYMISE_STRICT`), `docs/PRODUCTION-CONFIG.md` 2b (env var, the "residual" field of the
+  Privacy line and the STOPPED message), `docs/PRIVATE_DATA.md` (step 2: the self-check and strict mode).
+- Not done: a live run on the RFD-08 notice after these fixes (no key here); the anonymiser stays regex-based, so the
+  residual self-check is the guard: read `<id>_ocr_anon.txt` whenever the Privacy line shows residual > 0.
+
+## (b30) Anonymiser on the RFD-08 vendor table as PDFBox reads it: fragments a row apart, row-layout names (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b29): four GSTIN fragments and
+five vendor names still survived, and the self-check did not count the fragments. The cause is PDFBox's reading order
+for the Para 2(c) vendor table: each table ROW comes out on ONE line, and the GSTIN cell wraps so that its second half
+lands at the START of the next line, about 60 characters away (far beyond the six-character break the (b29) split rule
+allows). Three row shapes (masked: A capital, a lower case, 9 digit): "9 99AAAAA9 NAME NAME 99999 9 9999 9999 9 Reason
+start\n999A9AA AAAAAAA reason goes on" (the first 8 characters, the last 7 on the next line); "9 99AAAAA99 NAME NAME &
+999999 ...\n99A9AA ASSOCIATES-like ..." (9 + 6, the name's last word after the remainder); "9 99AAAAA NAME NAME 99999
+...\n9999A9AA AND WORD ..." (7 + 8, two more name words after the remainder). A name "X GOLD AND DIAMONDS"-like was half
+replaced ("AND DIAMONDS" survived). Two commits, each with its test (synthetic rows, invented names, allow-listed
+GSTINs; no live call).
+
+- **Step 1, fragments a row apart** (`4ad17df`): `scanFragments` pairs a leading fragment (`LEADING_FRAGMENT`:
+  `\d{2}[A-Z]{5}\d{0,4}`, 7 to 11 characters as a token of its own, outside the whole / split GSTINs already found)
+  with the characters that complete the 15-character GSTIN structure at the START of one of the next 3 lines (after
+  optional whitespace; first line first), such that leading + remainder is a structurally valid GSTIN. The pair is one
+  `GstinHit` (`paired()`: [start, end) on the lead, [remStart, remEnd) on the remainder), so the nearest-GSTIN and
+  phrase rules see it. Both pieces are replaced by the same placeholder split at the same position ("24AAAAA0" /
+  "002A1Z2", kind `gstin_fragment`), the joined value is mapped under `gstin` (counted once: "GSTINs n" counts
+  distinct GSTINs), and the same real GSTIN split differently elsewhere maps to the same placeholder. The leading
+  placeholder is the same for every GSTIN of a State ("24AAAAA00" for two vendors of Gujarat), so `deAnonymise`
+  first restores every fragment pair in the text from its joined value and only then runs the token pass: the round
+  trip is exact. A leading fragment or a line-start remainder (`LONE_REMAINDER`: 6 to 8 characters) that pairs with
+  nothing still carries the PAN letters / digits: replaced by the fragment shape ("24AAAAA1", "002A1Z2", the digits
+  carrying a sequence) under `gstin_fragment`; a placeholder-shaped fragment is left alone (idempotence).
+  `residualRisks` counts an unpaired fragment as `gstin-fragment` and a surviving real pair as `gstin-split`. Proved by
+  `gstinFragmentsARowApartArePairedAndReplaced` (the three row shapes, two GSTINs of one State, the same GSTIN split
+  8 + 7 and 9 + 6, zero fragments survive, exact round trip also of the joined form, second pass unchanged, the
+  unpaired case counted / replaced / restored). `.githooks/allowed_ids.txt` gained the placeholder `24AAAAA0005A1Z5`.
+- **Step 2, vendor names in the row layout** (this commit): `findRowNames` (rule 7 of `findBusinessNames`, before the
+  phrase rules): in a line that starts with a row number and a GSTIN token (`ROW_START`: whole, placeholder or leading
+  fragment), the capitals phrase that FOLLOWS the GSTIN and ends before the first amount (a token of 3+ digits) is the
+  holder's name: 1 to 6 words of capitals, "&", "AND", "OF", '.', '-', apostrophe (`ROW_NAME_WORD`); trailing
+  connectors stay in the text. The holder of the taxpayer's GSTIN is the taxpayer, every other one "SUPPLIER n" plus
+  its trailing trade word, every occurrence of the phrase (a second row, the prose). When the GSTIN wrapped (a paired
+  remainder), 1 to 3 capital words right after the remainder, before the first lower-case word, are the rest of the
+  name (`ROW_CONTINUATION_MAX_WORDS`; a trailing form word such as "SUPPLIER" is not); the full name is one core
+  (numbered where the row stands: `rowNameAt`), the prose occurrence gets the whole placeholder ("SUPPLIER 3
+  ASSOCIATES"), and the wrapped occurrence is replaced piece by piece (`WrappedName`): the part on the row ->
+  "SUPPLIER 3", the identifying words after the remainder -> "SUPPLIER 3 CONTD" (connectors, the trade word and the
+  legal form stay: "SUPPLIER 3 & 234567 ... \n04A1Z4 ASSOCIATES"); the whole name is mapped too (`extraMappings`, a
+  model writes it in one piece), and `AnonymisationMap.counts()` counts the pieces once with the name (the same
+  "SUPPLIER n"). The phrase rules (8) leave a row's name spans alone. Connectors: "AND" / "&" / "OF" inside a capitals
+  phrase never end it (`CONNECTOR_WORDS` are exempt from the inner stop-word test in `businessPhraseCore` and
+  `readsAsBusinessPhrase`: "LUNAR GOLD AND DIAMONDS" is one name), and an upper-case run that starts with a connector
+  is joined to the capital words before it on the same line (`capsRuns`, used by `upperCaseBusinessPhrases` and the
+  phrase-before-GSTIN rule). Stop list extended with GOODS, PURCHASE(S), SALE(S), RAW, MATERIALS ("GOODS AND
+  SERVICES", "PURCHASE OF RAW MATERIALS" are not names) and CONTD. The taxpayer's own wrapped name is left to the core
+  rule (its bare placeholder is the legal name's). Proved by `vendorNamesInTableRowsReadAsOneLineAreReplaced` (the
+  three row shapes, a wrapped two-line name, the same name in prose and in a second row, the connector case, form
+  words in capitals kept, `residualRisks` 0, `upperCaseBusinessPhrases(anonText)` empty, exact round trip, second
+  pass unchanged).
+- Known limit: a wrapped name without a trade word shares its bare placeholder between the row piece and the whole
+  name ("SUPPLIER 4" restores "COSMIC DRIP", "SUPPLIER 4 CONTD" restores "FITTINGS"; a model's "SUPPLIER 4" alone
+  restores the first part). The anonymiser stays regex-based: read `<id>_ocr_anon.txt` whenever the Privacy line shows
+  residual > 0.
+- Not done: the live run on the RFD-08 notice after these fixes (no key here).
+
+## (b31) Anonymiser: a digit inside a row-layout name, a leading-zero GSTIN taken for a placeholder, the self-check per fragment (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b30): everything was hidden
+except one vendor in two consecutive identical table rows (masked: "9 99AAAAA9 AAAAAAAA 9 AAA 99999 9999 9 9 9 Aaaaa
+... \n999A9A9 aaaaa ..."), whose name holds a single-digit token ("ORBIT 3 LTD"-like); both leading fragments, both
+remainders and the name survived, and the self-check reported only one "caps-phrase-2-words". One commit, two tests
+(synthetic rows, invented names, allow-listed GSTINs; no live call). Two causes, one of them not the one first assumed:
+
+- **Row names with a digit inside** (`findRowNames`): the row parser took the "3" of "ORBIT 3 LTD" for the first
+  amount, so the row was skipped and the name survived. Now a token of one or two digits between capital words
+  (`ROW_SMALL_NUMBER`) is part of the name and an amount is a token of three or more digits or digits with commas / a
+  decimal point (`ROW_AMOUNT`: "12345", "1,00,000.50"); the name runs from the first capital word after the GSTIN token
+  to the last capital word before the first amount (trailing connectors and digits stay in the text; a name that did
+  not wrap is built from that span, so a trailing digit never enters the core) and maps to "SUPPLIER n" + suffix as
+  before ("ORBIT 3" -> "SUPPLIER 1", "LTD" stays; the prose "Orbit 3 Ltd" -> "Supplier 1 Ltd"). A wrapped
+  continuation after the remainder takes up to four tokens with a digit inside too (`ROW_CONTINUATION_MAX_WORDS`:
+  "AND FITTINGS 1 INDIA" -> "AND SUPPLIER 2 CONTD", mapped to "FITTINGS 1 INDIA"). Two identical rows map to the same
+  placeholder GSTIN and the same "SUPPLIER n".
+- **A real GSTIN / PAN whose digits start with 0 was "already a placeholder"**: `ALREADY_PLACEHOLDER` accepted any
+  five letters before "0ddd" (`[A-Z]{5}0\d{3}[A-Z]`), so a GSTIN such as "24TTTTT0333T1Z3" (PAN "TTTTT0333T") was
+  returned as its own placeholder, nothing was replaced or mapped, and the self-check took the surviving pair for a
+  placeholder as well. That is why the two leads were neither replaced nor counted (the "unpaired lead" reading was
+  wrong: they paired, then the pair was waved through). The placeholder letters are now exactly "AAAAA" for a PAN
+  (`AAAAA0\d{3}A`) and a GSTIN (`\d{2}AAAAA0\d{3}A[0-9A-Z]Z[0-9A-Z]`), as they already were for TAN / IFSC / CIN.
+  Every leading fragment with real letters is replaced by the placeholder-shaped prefix (state code, "AAAAA", the
+  sequence digits) under `gstin_fragment`, paired or not.
+- **Self-check** (`residualRisks`): a leading fragment with real letters counts as `gstin-lead` and a remainder with
+  real characters as `gstin-remainder`, each piece on its own whether paired a row apart or not (a real lead next to
+  a placeholder remainder is still reported; `gstin-fragment` is gone, `gstin-split` stays for a GSTIN split within
+  six characters). New `caps-word-in-row`: a capital word of four or more letters standing on its own between a table
+  row's GSTIN token (whole, placeholder or fragment) and the row's first amount, so a one-word vendor name left
+  behind is reported; a word of a counted upper-case phrase is not counted twice, and placeholder, form, connector,
+  legal-form (`LEGAL_FORM_WORDS`) and trade words never count.
+- Proved by `rowNamesWithADigitInsideAndGstinsWithALeadingZeroAreReplaced` (the two-row shape with "ORBIT 3 LTD" and
+  GSTIN `24TTTTT0333T1Z3`, added to `.githooks/allowed_ids.txt`; the prose spelling; the wrapped continuation with a
+  digit; a lead that pairs with nothing replaced by "33AAAAA1" and absent from the residual; residual 0; exact round
+  trip, joined and whole-name forms; second pass unchanged; a bare leading-zero GSTIN / PAN replaced) and
+  `residualRisksReportLeadsRemaindersAndLoneCapitalWordsInRows` (the same two rows un-anonymised -> "residual: 6
+  (caps-word-in-row x2, gstin-lead x2, gstin-remainder x2)", the mixed real / placeholder pairs, a lone word after a
+  GSTIN placeholder, an amount with commas and a decimal point, no double count with `caps-phrase-2-words`, clean rows
+  0, no value in the report). Before the fix the same input left both rows untouched with "residual: 0" (checked with
+  a throwaway probe on `51355ae`).
+- Not done: the live run on the RFD-08 notice after this fix (no key here); the anonymiser stays regex-based.
+
+## (b32) Anonymiser: a name wrapped over three cell lines is one party; the self-check never counts a placeholder's tail (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b31): 11 GSTINs and 11 names
+hidden, exact round trip, two small things left, both in the Para 2(c) vendor table (one row per line, the GSTIN cell
+wrapped to the next line). One commit, two tests (synthetic rows, invented names, allow-listed GSTINs; no live call).
+
+- **A name wrapped over THREE cell lines** (masked: "9 99AAAAA9 SUPPLIER 10 76259 ... These invoices do not\n0010A1ZA
+  AND SUPPLIER 9 AAAAA match in furtherance\nLIMITED of"): the row holds the first two words, the line of the GSTIN
+  remainder holds "AND WORD WORD" before the reason text, and the legal suffix "LIMITED" starts the line after that.
+  The continuation was split into two placeholders and one capital word survived. `findRowNames` now reads, after a
+  paired remainder at a line start, EVERY token up to the first lower-case word as the continuation (capital words,
+  connectors, 1 to 2 digit tokens and legal-form words; the four-token cap `ROW_CONTINUATION_MAX_WORDS` is gone; a
+  trailing form word such as "SUPPLIER" is still the reason text unless a legal-form word ends the run), and when the
+  line after that starts with legal-form / trade words or "INDIA" followed by lower-case text ("LIMITED of the refund
+  claim", "PRIVATE LIMITED of ...") those words are the end of the name too (`NAME_TAIL_WORDS`). The row name plus its
+  continuation is ONE party: the row piece "SUPPLIER n" (the row's number), the identifying words on the remainder
+  line "SUPPLIER n CONTD" (never crossing to the line after), only the legal suffix / trade word kept
+  ("SUPPLIER 2 AND 76259 ...\n003A1Z3 SUPPLIER 2 CONTD match ...\nLIMITED of"); the whole name is mapped under the
+  row's placeholder, so a prose "Marlin Quartz and Pebble Vantage Limited" becomes "Supplier 2 Limited". A row's name
+  is read by its position (between the GSTIN token and the first amount), so a form word inside it no longer unmakes
+  it (`readsAsRowName`: at least one identifying word of three or more letters, no placeholder, not a State / city;
+  "COBALT SUPPLY AND SERVICES" -> "SUPPLIER 4 SERVICES"). Proved by `aNameWrappedOverThreeCellLinesIsOneParty` (the
+  exact three-line shape with the connector on the row and with it after the remainder, a five-token continuation
+  with a digit inside and "PRIVATE" / "LIMITED" split over two lines, the form-word-inside row, the same vendor in a
+  second row, the prose spellings, no second placeholder, residual 0, `upperCaseBusinessPhrases` empty, exact round
+  trip, second pass unchanged). Before the fix the five-token continuation lost its digit, "PRIVATE" was taken into
+  the placeholder and the form-word row survived whole.
+- **Self-check false positives** (`residualRisks`): "caps-word-in-row" was reported for the tail kept after a
+  placeholder and "caps-phrase-2-words" for a wrapped continuation / "PRIVATE LIMITED" on a line of its own. Now (1) a
+  legal-form word, trade word, "INDIA", connector or "CONTD" that directly follows a "SUPPLIER n" / "NOTICEE COMPANY"
+  placeholder, or another such word, is never residual, in a table row (`PLACEHOLDER_TAIL_WORDS`, the row scan tracks
+  the placeholder's tail: "SUPPLIER 9 LTD", "SUPPLIER 9 INDIA LIMITED", "SUPPLIER 9 TRADERS AND CO", "NOTICEE COMPANY
+  INDIA PRIVATE LIMITED") and in prose (an upper-case run of nothing but such words right after a placeholder,
+  `isPlaceholderTail`); (2) an upper-case run of nothing but legal-form words and connectors is not a business phrase
+  (`readsAsBusinessPhrase`: "PRIVATE LIMITED" on the line after "M/s NOTICEE COMPANY"), which also stops the To-block
+  rule from taking such a line for a second taxpayer name; form phrases and designations ("SHOW CAUSE NOTICE", "DY.
+  COMMISSIONER OF STATE TAX", "STATE TAX OFFICER", "(PROPER OFFICER)") were never counted (stop words) and are now
+  asserted. A genuinely surviving capital word still counts, after a placeholder too ("SUPPLIER 1 ORBIT 12345",
+  "SUPPLIER 1 LTD ORBIT", "SUPPLIER 1 ORBIT LIMITED" in prose, a continuation that survived whole). Proved by
+  `residualRisksNeverCountFormWordsOrTheTailOfAPlaceholder`.
+- Known limit (unchanged from (b30)): a wrapped name without a trade word shares its bare placeholder between the row
+  piece and the whole name, so a model's lone "SUPPLIER 2" restores the row piece ("MARLIN QUARTZ"), and a prose
+  mention of the whole name in CAPITALS restores to the row piece as well (the title-case spelling restores exactly).
+- Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shapes
+  above; the anonymiser stays regex-based.
+
+## (b33) Anonymiser: a one-word trade name in a table row is the party (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b32): everything hidden except
+ONE vendor whose trade name is a single capital word in the row layout (masked: "9 99AAAAA99 AAAAAA 9999999 999999 9
+9 9 Aaaaa-9 aaaaaaaaa aa": row number, 9-character GSTIN lead, one capital word of six letters, the amounts). The
+self-check reported it correctly ("caps-word-in-row"), so strict mode refused the run. One commit, one test (synthetic
+rows, invented names, allow-listed GSTINs; no live call).
+
+- **Cause** (found with a throwaway probe on `439e6b6`, not the one first assumed): the row rule DID read the word as
+  the holder's name (`readsAsRowName` accepts one identifying word of three or more letters), but `replaceCore`
+  replaces a one-word core on its own only when it has five or more letters and is not in `COMMON_WORDS` ("UNITED",
+  "GOLDEN", "MODERN", "BHARAT", ...); otherwise only together with a legal-form suffix, and the row has none. So a
+  six-letter common word (or any word of three or four letters) survived in the row with "SUPPLIER n" mapped to
+  nothing. A second thing the probe showed: the same word written "M/s Word" in the prose near the header GSTIN was
+  classified as the TAXPAYER by the nearest-GSTIN guess of the "M/s" rule (rule 3), and `putIfAbsent` let that guess
+  win over the row's GSTIN, so the row read "NOTICEE COMPANY 2".
+- **Fix** (`findRowNames`, `replaceCore`): a SINGLE capital word between the row's GSTIN token and the first amount,
+  without a legal suffix on the row (`rowSingleWords`), is the holder's whole name: "SUPPLIER n" with no suffix, and
+  every whole-word occurrence of the word in the text is replaced, case-insensitively ("M/s Orbitex" -> "M/s Supplier
+  1", "Orbitex" -> "Supplier 1", "ORBITEX" -> "SUPPLIER 1"; "unitedly" is not "UNITED"), whatever its length or
+  commonness. A legal-form, connector, form or trade word alone is not a party as before (`readsAsRowName`: "LIMITED"
+  alone stays and gets no placeholder), and a tail word alone ("INDIA") is skipped (`NAME_TAIL_WORDS`), so "GOVERNMENT
+  OF INDIA" is never touched. A one-word name with its suffix on the row ("ORB LTD") keeps the existing rule (name
+  plus suffix: "SUPPLIER 3 LTD", the prose "M/s Orb Ltd" -> "M/s Supplier 3 Ltd"). The row's complete GSTIN (whole or
+  paired) now overrides an "M/s ..." guess from the prose for any row name (`guessedCores`: only rule 3's guesses,
+  never a name read next to the taxpayer's GSTIN, after a "Legal Name" label or in the To block), so the word is the
+  other holder's. `firstOccurrence` (placeholder numbering by first appearance) matches whole words now ("ORB" is not
+  found inside "Orbitex").
+- Proved by `aOneWordRowNameIsAParty` (a one-word name "ORBITEX", a common word "UNITED" and a three-letter word "ZUV"
+  each alone in a row; "M/s Orbitex" near the header GSTIN, "Orbitex" and "United" in title case and "ORBITEX" in
+  capitals in prose; "LIMITED" alone in a row left as it is with no placeholder; "ORB LTD" with the suffix; residual 0;
+  `upperCaseBusinessPhrases` empty; exact round trip; second pass unchanged; the un-anonymised rows report
+  "caps-word-in-row x2" and never the legal-form word; "INDIA" alone in a row leaves "GOVERNMENT OF INDIA" alone).
+  Before the fix the same input left "UNITED" and "ZUV" in their rows (residual 2) and wrote "NOTICEE COMPANY 2" for
+  "ORBITEX".
+- Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shape
+  above; the anonymiser stays regex-based.
+
+## (b34) Anonymiser: a row's name ends where the amount block starts, whatever the digit count (28-10-2026)
+
+`LocalOcrProvider` + `NoticeAnonymiser` were run again on the real RFD-08 notice after (b33): everything hidden except
+ONE vendor row whose amounts are tiny (masked: "9 99AAAAA9 AAAAAA 99 99 9 9 9 Aaaaa aaaaaaaa aa aaa": row number,
+8-character GSTIN lead, a one-word trade name of six letters, invoice value and IGST of two digits each, then "0 0 0",
+the reason text). The self-check reported it correctly ("caps-word-in-row" 1), so strict mode refused the run. One
+commit, one test (synthetic rows, invented names, allow-listed GSTINs; no live call).
+
+- **Cause**: the (b31) rule "a token of one or two digits between capital words is part of the name; an amount is
+  three or more digits" made the name run into "99 99 9 9 9" (every amount of the row is one or two digits), so no
+  amount followed the name, the row rule did not fire and the word survived. A side effect, as in (b33): the same word
+  written "M/s Word" near the header GSTIN was taken for a second taxpayer by the nearest-GSTIN guess, because the row
+  never overrode it.
+- **Fix** (`rowNameTokenCount`, shared by `findRowNames` and `residualRisks`): a row's name is the longest prefix of
+  the tokens after the GSTIN token that ends with a capital word (a legal-form word, a connector and "&" included). A
+  token of one or two digits is part of the name ONLY when the next token is a capital word ("VORTEX 3 LTD"); when
+  the next token is numeric (digits, with or without commas / a decimal point) or the line ends there, the amount
+  block has started, whatever the digit count ("QUILLON 68 10 0 0 0" -> the name is "QUILLON", the amounts stay;
+  "TALON 3 12 0 0 0" -> "TALON", "3" is the first amount). `ROW_AMOUNT` is now a numeric token of any length (the
+  "must be followed by an amount" check accepts "68"). Trailing connectors stay in the text as before; a trailing
+  digit can no longer enter the name. Every other (b31)–(b33) behaviour is unchanged: the digit inside "ORBIT 3 LTD",
+  the wrapped continuations, the one-word names, the placeholder tails in the self-check.
+- Proved by `aRowNameEndsWhereTheAmountBlockStartsWhateverTheDigitCount` (the exact row shape with the invented
+  one-word name "QUILLON" and amounts "68 10 0 0 0"; "VORTEX 3 LTD" before a seven-digit amount still keeps its
+  digit; the two-word name "KESTREL HOLLOW" before "45 8 0 0 0"; "TALON 3 12 0 0 0"; the prose spellings
+  "M/s Quillon", "Vortex 3 Ltd", "Kestrel Hollow" take the row's placeholders; residual 0; `upperCaseBusinessPhrases`
+  empty; exact round trip; second pass unchanged; the self-check reports the un-anonymised one-word and two-word
+  names before two-digit amounts and 0 for a placeholder, with or without its suffix, before them). Before the fix the
+  same input wrote "NOTICEE COMPANY 2" for "M/s Quillon" and left "TALON" in its row (checked by running the new test
+  against `733153f`).
+- Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shape
+  above; the anonymiser stays regex-based.
+
+## (b35) Client data and firm work product removed from the branch; the PR scan checks the net diff (29-10-2026)
+
+- **Removed from the branch** (none of it is on `main`): the run outputs, scratch folder and generated drafts, the
+  comparison / formatting folders and archive, the reply documents at the root, the firm's paired notice-reply corpus,
+  the test documents, the walkthrough report / RAG template / OCR specification, the two old env-gated batch runner
+  tests and the two one-off scripts that embedded identifiers. `.gitignore` now ignores those folders and a root
+  `*.zip`; `.githooks/allowed_binaries.txt` is empty (no binary document is tracked any more); the formatting script
+  names its local input folders neutrally. The two deleted runners were superseded by `V7LiveRig` /
+  `V7LivePipelineRunnerTest`; nothing else referenced them. The demo identifiers that exist unchanged on `main`
+  (dev seeds, SQL tests, the demo page) stay. History is not rewritten.
+- **CI** (`sensitive-data-check.yml`): a pull request is now scanned on its NET diff against the merge-base
+  (`check_sensitive_data.sh --range-diff <base>...<head>`, the files as they would land), so a PR whose history once
+  held data that a later commit removed is green, like a push scan of the same head; a push still scans each new
+  commit. Covered by the new `--range-diff` cases in `scripts/test_check_sensitive_data.sh`.
+
+## (c) Verification
+
+- Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 29-10-2026 after (b35), the Spring context test included (no Postgres in the
+  container). The two deleted batch runners contributed one test each; `GstCorpusMatcherServiceTest` and
+  `ScenariosTestingRunnerTest` now run on a synthetic corpus built in a temporary folder
+  (`SyntheticCorpusFixture`) instead of the deleted one.
+
+- Offline unit suite (`mvn test`): **618 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b33), the Spring context test included (no Postgres in the
+  container).
+- Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b32), the Spring context test included (no Postgres in the
+  container).
+
+- Offline unit suite (`mvn test`): **615 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b31), the Spring context test included (no Postgres in the
+  container).
+- Offline unit suite (`mvn test`): **613 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b30), the Spring context test included (no Postgres in the
+  container: its scheduler logs one "Failed to obtain JDBC Connection" line, the test passes). 612 after step 1.
+- Offline unit suite (`mvn test`): **611 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 28-10-2026 after (b29), the Spring context test included (local Postgres 16).
+  Per gap: 607 after gap 1, 608 after gap 2, 609 after gap 3, 611 after gap 4.
+- Offline unit suite (`mvn test`): **606 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 27-10-2026 after (b28), the Spring context test included (local Postgres 16).
+  Before the change the suite on `102c4c2` was 587 tests, 0 failures, 2 skipped (re-run the same day).
+- Offline unit suite (`mvn test`): **587 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 27-10-2026 after (b27), the Spring context test included (local Postgres 16).
+  Before the change the suite on `d87ddcc` was 570 tests, 0 failures, 2 skipped (re-run the same day).
+- Offline unit suite (`mvn -o test`): **570 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 26-10-2026 after (b26), the Spring context test included (local Postgres 16).
+  Before the change the suite on `a004bdf` was 555 tests, 0 failures, 2 skipped.
+- Offline unit suite (`mvn -o test`): **555 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 26-10-2026 after (b25), the Spring context test included (local Postgres 16);
+  V1 to V29 applied on Postgres 16.
+- Offline unit suite (`mvn -o test`): **534 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 25-10-2026 after (b24).
+- Offline unit suite (`mvn -o test`): **508 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 24-10-2026 after (b23).
+
+- Offline unit suite (`mvn -o test`): **500 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 20-10-2026 after (b22).
+- Offline unit suite (`mvn -o test`): **492 tests, 0 failures, 0 errors, 1 skipped** (the env-gated shortlist dry run)
+  on 20-10-2026 after (b21); 460 after (b20).
+- Offline unit suite (`mvn test`): **439 tests, 0 failures, 0 errors** on 17-10-2026 after (b19), `RealNoticesBatchRunnerTest`
+  included (it passed); 409 after (b18) the same day. Before that: 364 tests (`RealNoticesBatchRunnerTest` excluded)
+  on 16-10-2026 after (b17) (345 after (b16) the same day, 329 after prompt v3.4 on 15-10-2026, 323 after v3.3, 322 after v3.2 and 316 after v3.1 on 14-10-2026; no live API
+  calls; all models and IndianKanoon mocked or served from local fixtures). The 329 include the Spring context test
+  `NoticedeskApiApplicationTests`, which passed in that container (it retries the local Postgres connection for
+  about five minutes before the context comes up). A plain `mvn test` no longer modifies `output/`. V23 to V28
+  applied on Postgres 16.
+- Golden drafts compared on every run, built from the testbench notice JSON:
+  - `notice_07`: capital goods ITC, Gujarat, Rs 4,00,000, Section 73.
+  - `notice_10`: anti-profiteering, Delhi, Rs 15,00,000, Section 171.
+- Privacy hook tests: 32 passed, 0 failed (after (b28); 22 after (b25), 16 before).
+
+## (d) Open items
+
+1. **Next live run**: smoke run first (`LIVE_SMOKE=true`, `LIVE_EXPECTED_COMMIT` set), then Run 2
+   on notices 01, 04, 06, 11, 10 (`V7_LIVE_NOTICES`). Set `LLM_MODEL_MATCHING`,
+   `LLM_MODEL_PARTIAL_DRAFTING`, `LLM_MODEL_NEW_ISSUE`, `LLM_MODEL_HIGH_STAKES`, `INDIANKANOON_API_TOKEN`.
+   For a real PDF use the (b28) privacy path (`docs/PRODUCTION-CONFIG.md` 2b): after the first run read
+   `$PRIVATE_SEED_DIR/results/<id>_ocr_anon.txt` once to confirm nothing identifying survived the anonymiser (the
+   Privacy line's "residual: n" is the (b29) self-check: 0 expected; a residual stops the notice under
+   `NOTICE_ANONYMISE_STRICT` before any non-Anthropic call), and install `tesseract-ocr` before a scanned PDF.
+2. **CA-approved content**: real issue cards, reply templates and stage templates (prayer, filing
+   checklist). All current templates are marked "[DEV - not CA reviewed]". Approved content goes in
+   `$PRIVATE_SEED_DIR`, not the repo (see `docs/PRIVATE_DATA.md`).
+3. **Stage templates for other proceedings**: `asmt_10`, `scn_73`, and DRAFT `scn_74`, `scn_74a`,
+   `anti_profiteering`, `generic_scn` exist (dev text, partner to review). Other stages get a placeholder + block flag.
+4. **Re-run the Stage 1 matching benchmark** with the live model (now reports dummy and private sets
+   separately; now also issue-count match, to confirm the new splitting rules).
+5. **Partner review of the golden drafts**, including three legal points in `notice_10`: Section 171(3A)
+   effective date, transfer of anti-profiteering to CCI from 01-12-2022, and the Reckitt Benckiser
+   wording in para 6.2.
+6. **Possible real GSTINs already in the public repo** (in `ClaudeOpusBatchRunnerTest.java` and
+   `RealNoticesBatchRunnerTest.java`): both files removed from the branch in (b35); history not rewritten.
+7. **Enable the privacy hook in every clone**: `git config core.hooksPath .githooks`.
+8. **Merge to main and switch `DRAFTING_PIPELINE=v7`** once items 1 to 5 are done.
+9. **Shortlist size and recall** (measured on the private catalogue, 269 cards, and 308 test notices; v2 in b21):
+   "any label hit" kept most cards because common keywords are in nearly every notice (APL-01 on 46 cards, DRC-07
+   36, DRC-01 28, ASMT-10 25, Section 74 23, Section 73 18, GSTR-3B 17); NOT THIS IF siblings added 28 to 61 full
+   cards; letters with no form name passed all 269 through the stage filter; widening fell back to all 269 (INR 46)
+   and the per-notice cap refused it. Any label-only filter misses about 7% of the right cards (the notice cites the
+   allegation section, e.g. 73, the card is about the defence section, e.g. 77; procedural cards such as "vague SCN",
+   "no section cited", "no DIN" lack the keyword because the defect exists), hence the AI title pass. Next: run
+   `ShortlistDryRunTest` (labels, free), then with `SHORTLIST_DRY_RUN_AI=true` on a few notices, and tune
+   `relative-cutoff` / `min-cards` before the next live run.
+10. **Provisional templates**: review the first promoted templates (`reply_templates.status='provisional'`)
+   and either set them 'active' (with the card) or retire them; set `INDIANKANOON_COST_INR_PER_*` from
+   the IndianKanoon plan; re-run `CitationCheckRunnerTest` with the eleven real cases of the first run
+   (`CITATION_CHECK_LIST`) to confirm the (b27) matching live.
+11. **NDK-006 template wording** (private seed): replace "the supplier filed its GSTR-1 belatedly" by a conditional
+   sentence with a `[[CONFIRM: ...]]` marker, as the (b27) writer rule requires.
+
+---
+
+## Parked: RAG track
+
+Paused while v7 is completed. Last state (commit `ac8a489`): 160 candidate issue pairs generated in
+`NoticeDesk_RAG_Labelled_Set_Template.xlsx`, waiting for CA labelling; earlier details are in this
+file's git history.

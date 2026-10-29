@@ -1,0 +1,26 @@
+{
+  "id": "msg_fixture_match_002q",
+  "type": "message",
+  "role": "assistant",
+  "model": "fixture-matching-model",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "Synthetic fixture: reasoning summary withheld.",
+      "signature": "fixture-signature-not-real"
+    },
+    {
+      "type": "text",
+      "text": "Here is the matching result:\n{\"notice\": {\"notice_number\": \"SCN/DL/2021-22/740\", \"din\": null, \"issue_date\": \"20-11-2021\", \"reply_due_date\": \"30 days from service\", \"financial_year\": \"2020-21\", \"tax_period\": \"April 2020 to March 2021\", \"total_demand_amount\": 500000, \"authority\": \"Assistant Commissioner of State Tax, Ward-68, Delhi\"}, \"issues\": [{\"issue_no\": 1, \"status\": \"partial\", \"card_ids\": [\"CARD-002\"], \"why\": \"Notice alleges \"willful suppression\" of turnover under Section 74; card covers invocation without proof of intent, but the bank-statement finding needs a new argument.\", \"not_this_if_checked\": [], \"facts\": {\"period\": \"2020-21\", \"amount\": 500000, \"legal_section\": \"Section 74\"}, \"notice_paras\": [\"2\", \"3\", \"4\", \"5\"], \"flags\": []}], \"para_map\": {\"1\": [1], \"2\": [1], \"3\": [1], \"4\": [1], \"5\": [1]}, \"missing_or_doubtful\": [\"date_of_service\"]}"
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 4200,
+    "output_tokens": 1800,
+    "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 9000
+  },
+  "_fixture_note": "Synthetic: the model left double quotes unescaped inside the 'why' string value; prose before the JSON."
+}

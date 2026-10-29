@@ -10,6 +10,8 @@ import com.noticedesk.api.agent.DraftingAgent.DraftingInput;
 import com.noticedesk.api.agent.DraftingAgent.GeneratedDraft;
 import com.noticedesk.api.config.AppProperties;
 import com.noticedesk.api.service.AuditService;
+import com.noticedesk.api.service.GstCorpusMatcherService;
+import com.noticedesk.api.service.GstTemplateFillerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -25,6 +27,12 @@ import java.util.*;
  * persists the draft + citation rows, and emits the audit event — all in a
  * single database transaction.
  */
+import com.noticedesk.api.service.DraftingPipelineService;
+import com.noticedesk.api.service.V7DraftingPipelineService;
+import com.noticedesk.api.service.DraftingPipelineResult;
+import com.noticedesk.api.service.rag.RagStoreService;
+import jakarta.annotation.PostConstruct;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -36,6 +44,23 @@ public class DraftingWorkflow {
     private final AuditService                auditService;
     private final AppProperties               properties;
     private final ObjectMapper                objectMapper;
+    private final GstCorpusMatcherService     corpusMatcherService;
+    private final GstTemplateFillerService     templateFillerService;
+    private final RagStoreService             ragStoreService;
+    private final DraftingPipelineService     draftingPipelineService;
+    private final V7DraftingPipelineService   v7DraftingPipelineService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.noticedesk.api.service.matching.DraftCheckService draftCheckService;
+
+    @PostConstruct
+    public void validatePipelineConfig() {
+        String pipeline = (properties != null && properties.getDrafting() != null) ? properties.getDrafting().getPipeline() : "rag";
+        if (pipeline == null || (!"rag".equalsIgnoreCase(pipeline.trim()) && !"v7".equalsIgnoreCase(pipeline.trim()))) {
+            throw new IllegalStateException(
+                    "Invalid DRAFTING_PIPELINE value '" + pipeline + "'. Allowed values are 'rag' or 'v7'."
+            );
+        }
+    }
 
     // ---- Public data types -----------------------------------------------
 
@@ -74,16 +99,22 @@ public class DraftingWorkflow {
                 job.partnerInstructions(),
                 job.includeCrossRegistration());
 
-        // 3. Generate the draft
-        GeneratedDraft generated = draftingAgent.generateDraft(input);
+        // 3. Pipeline Switch Execution (rag | v7)
+        String pipeline = (properties != null && properties.getDrafting() != null) ? properties.getDrafting().getPipeline() : "rag";
+        DraftingPipelineResult pipelineResult;
+        if ("v7".equalsIgnoreCase(pipeline != null ? pipeline.trim() : "")) {
+            pipelineResult = v7DraftingPipelineService.runPipeline(input, job.tenantId(), job.noticeId());
+        } else if ("rag".equalsIgnoreCase(pipeline != null ? pipeline.trim() : "")) {
+            pipelineResult = draftingPipelineService.runPipeline(input);
+        } else {
+            throw new IllegalStateException(
+                    "Invalid DRAFTING_PIPELINE value '" + pipeline + "'. Allowed values are 'rag' or 'v7'."
+            );
+        }
 
-        // 4. Verify citations — concatenate all section body_html for extraction
-        String allHtml = generated.sections().stream()
-                .map(DraftSection::bodyHtml)
-                .reduce("", (a, b) -> a + "\n" + b);
-        String citationProvider = resolveCitationProvider();
-        CitationVerificationResult citationResult =
-                citationVerificationAgent.verify(allHtml, citationProvider);
+        GeneratedDraft generated = pipelineResult.draft();
+        List<VerifiedCitation> citations = pipelineResult.citations();
+        Map<String, Object> citationSummary = pipelineResult.citationSummary();
 
         // 5. Compute next draft version for this matter
         Integer nextVersion = jdbc.queryForObject(
@@ -102,15 +133,16 @@ public class DraftingWorkflow {
                 })
                 .toList();
 
-        // 7. Paragraph → source map (stub: empty for now)
-        List<Map<String, Object>> paragraphToSourceMap = List.of();
+        // 7. Paragraph → source map
+        Object paragraphToSourceMap = (pipelineResult.paragraphSourceMap() != null && !pipelineResult.paragraphSourceMap().isEmpty())
+                ? pipelineResult.paragraphSourceMap() : List.of();
 
         String sectionsJson;
         String citationSummaryJson;
         String pmapJson;
         try {
             sectionsJson       = objectMapper.writeValueAsString(sectionsData);
-            citationSummaryJson = objectMapper.writeValueAsString(citationResult.summary());
+            citationSummaryJson = objectMapper.writeValueAsString(citationSummary);
             pmapJson           = objectMapper.writeValueAsString(paragraphToSourceMap);
         } catch (Exception e) {
             throw new RuntimeException("Failed to serialise draft data: " + e.getMessage(), e);
@@ -141,8 +173,18 @@ public class DraftingWorkflow {
                 buildDraftParams(draftId, job, nextVersion, generated,
                         sectionsJson, citationSummaryJson, pmapJson));
 
+        // 8b. Rule 3: Insert draft_flags in the same transaction after draft row creation
+        if (pipelineResult.checkResults() != null && !pipelineResult.checkResults().isEmpty() && draftCheckService != null) {
+            draftCheckService.persistDraftFlags(job.tenantId(), job.noticeId(), draftId, pipelineResult.checkResults());
+        }
+
+        // 8c. v7 Stage 3: AI issue sections, saved after the draft row insert in the same transaction
+        if (pipelineResult.aiIssueSections() != null && !pipelineResult.aiIssueSections().isEmpty()) {
+            v7DraftingPipelineService.persistAiIssueSections(job.tenantId(), job.noticeId(), draftId, pipelineResult.aiIssueSections());
+        }
+
         // 9. INSERT one row per verified citation (including stripped)
-        for (VerifiedCitation vc : citationResult.citations()) {
+        for (VerifiedCitation vc : citations) {
             Map<String, Object> cp = new HashMap<>();
             cp.put("tid",    job.tenantId().toString());
             cp.put("did",    draftId.toString());
@@ -192,16 +234,16 @@ public class DraftingWorkflow {
                         "prompt_version",   generated.promptVersion(),
                         "tone",             job.tone(),
                         "sections",         sectionsData.size(),
-                        "citation_summary", citationResult.summary()),
+                        "citation_summary", citationSummary),
                 1);
 
         log.info("draft.complete draft_id={} version={} sections={} citations={}",
-                draftId, nextVersion, sectionsData.size(), citationResult.citations().size());
+                draftId, nextVersion, sectionsData.size(), citations.size());
 
         return new GenerateDraftResult(
                 draftId,
                 nextVersion,
-                citationResult.summary(),
+                citationSummary,
                 sectionsData.size());
     }
 

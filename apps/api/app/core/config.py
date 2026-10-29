@@ -119,6 +119,7 @@ class Settings(BaseSettings):
     llm_provider_secondary: str | None = None
 
     anthropic_api_key: str | None = None
+    anthropic_workspace_id: str | None = None
     anthropic_model: str = "claude-opus-4-7"
     # 15-section drafts of large notices commonly take 90-150s on Opus 4.7
     # because the model is generating ~6-8K output tokens. The OCR pipeline

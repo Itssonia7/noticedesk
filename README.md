@@ -2,13 +2,17 @@
 
 Litigation-first tax operating system for Indian CA firms. Sprint 1: foundation scaffold (PAN-centric data model, auth, API, frontend skeleton).
 
+> **Public repository: never commit real client data.** Real notices, GSTINs/PANs and the firm's
+> catalogue live outside the repo in `$PRIVATE_SEED_DIR`. After cloning, enable the privacy hook with
+> `git config core.hooksPath .githooks`. See [`docs/PRIVATE_DATA.md`](docs/PRIVATE_DATA.md).
+
 ## Repository layout
 
 ```
 /apps
   /web              Next.js 14 App Router frontend
-  /api              FastAPI backend (Python 3.11+) — primary backend
-/noticedesk-java     Spring Boot backend (Java 21) — parallel rewrite, same API contract
+  /api              FastAPI backend (Python 3.11+) — parallel rewrite, same API contract
+/noticedesk-java     Spring Boot backend (Java 21) — primary backend
 /packages
   /db               PostgreSQL migrations and seed data (used with apps/api)
   /shared           TypeScript types shared between web and api
@@ -25,7 +29,7 @@ There are **two backend implementations** with the same API contract — pick on
 | Status | Original, feature-complete | Rewrite in progress |
 | Migrations | `packages/db/migrations/*.sql` | `noticedesk-java/src/main/resources/db/migration/*.sql` (Flyway) |
 
-The frontend defaults to the Python backend. To point it at Java instead, see [Running the frontend](#3-frontend-nextjs).
+The frontend defaults to the Java backend. To point it at Python instead, see [Running the frontend](#3-frontend-nextjs).
 
 ## Identity model (non-negotiable)
 
@@ -94,6 +98,14 @@ Key `.env` defaults (already stub-mode, no API keys required to run):
 - `LLM_PROVIDER_PRIMARY=stub` — set to `anthropic` + `ANTHROPIC_API_KEY=sk-ant-...` for real draft generation
 - `OCR_PROVIDER_PRIMARY=stub` — set to `google_doc_ai` or `azure_doc_intel` for real OCR
 - `CITATION_PROVIDER=stub` — set to `indiankanoon` + `INDIANKANOON_API_TOKEN=...` for real citation verification
+- `INDIANKANOON_COST_INR_PER_SEARCH=0` / `INDIANKANOON_COST_INR_PER_FRAGMENT=0` — real INR price of one IndianKanoon
+  search / fragment call (set from your IndianKanoon plan); logged per call and counted against the per-notice cost cap
+- `CITATIONS_MAX_PER_ISSUE=3` — cases an AI writer may cite per issue; extra cases stay in the text but are
+  NOT_CHECKED (never sent to IndianKanoon) and listed in the partner note
+- `SHORTLIST_TITLE_MAX_CARDS=15` — cards kept from the AI shortlist title pass (ranked answer, first N kept at
+  temperature 0), so the matching prompt is the same size from run to run on the same notice
+- `CATALOGUE_INCLUDE_PROVISIONAL=true` — v7 matching also sees issue cards / reply templates promoted from an approved
+  AI issue section (`POST /api/v7/ai-sections/{id}/promote`); set `false` to match against CA-approved content only
 - `AUTH_PROVIDER=dev` — dev header bypass, only works when `ENVIRONMENT=development`
 
 Run tests:
@@ -115,6 +127,33 @@ Flyway applies all migrations automatically on startup. Health check: `GET http:
 
 Config is in `noticedesk-java/src/main/resources/application.yml` (same env var names as the Python `.env.example` above where applicable — `DATABASE_URL`, `ANTHROPIC_API_KEY`, etc.)
 
+v7 drafting (Java only):
+- `HIGH_STAKES_SECTION_74=false` / `HIGH_STAKES_APPEAL_STAGE=false` / `HIGH_STAKES_DEMAND_THRESHOLD=` — high-stakes
+  drafting mode is off by default; set to `true` / an amount to route Section 74/74A, appeal-stage or large-demand
+  notices to the high-stakes writer. Off, every notice uses the normal path (code template fill, partial writer,
+  new-issue writer).
+
+PDF runner privacy path (`V7PdfPipelineRunnerTest`; details in [`docs/PRIVATE_DATA.md`](docs/PRIVATE_DATA.md), the
+copy-paste laptop block in [`docs/PRODUCTION-CONFIG.md`](docs/PRODUCTION-CONFIG.md#2b-pdf-runner-on-a-laptop--local-text-anonymisation-restored-draft)):
+- `OCR_PROVIDER=local` (default) — the PDF text layer through PDFBox; a scanned PDF through the system `tesseract`
+  command (`apt install tesseract-ocr tesseract-ocr-eng`), refused with a clear message when it is not installed.
+  Nothing is sent to any model. `gemini` (the free-tier key) is refused unless `NOTICE_ANONYMISE=off`.
+- `NOTICE_ANONYMISE=on` (default) — GSTINs (also split over a line break), PANs, names (the taxpayer, vendors printed
+  in capitals, the signing officer), addresses, reference numbers and other ids become same-shape placeholders before
+  triage and the v7 pipeline; the outputs are restored before saving. `off` sends the real text (only with an explicit
+  decision to do so).
+- `NOTICE_ANONYMISE_STRICT=on` (default) — the anonymiser's self-check counts what still looks like a GSTIN, PAN,
+  e-mail, phone or an upper-case business name in the anonymised text (`residual: n` in the Privacy line, token shapes
+  only, never a value). A residual sets the warn flag `warn:anonymiser_residual` on the notice; with strict mode on the
+  notice is stopped before any non-Anthropic provider (gemini triage) sees the text. `off` accepts the residual
+  explicitly.
+- `PRIVATE_SEED_DIR` (required) — `pdf/` holds the notices (`V7_PDF_NOTICES=a.pdf,b.pdf`), `results/` receives
+  `<id>_ocr_anon.txt`, `<id>_anon_map.json`, `<id>_draft_anon.txt`, `<id>_draft.txt`, `<id>_draft.docx`, `<id>_summary.txt`.
+- `LLM_PROVIDER_TRIAGE=anthropic` (default) / `LLM_MODEL_TRIAGE=` (default `LLM_MODEL_PARSING`, else the
+  `model-parsing` default in `application.yml`, an Anthropic Haiku model id) — the document-type triage after the local
+  text. Triage does **not** run on gemini unless `LLM_PROVIDER_TRIAGE=gemini` is set; either way it sees only the
+  anonymised text. `OCR_PROVIDER_PRIMARY=local` also works for the app's upload path.
+
 ---
 
 ## 3. Frontend (Next.js)
@@ -130,9 +169,9 @@ npm run dev
 
 Open **http://localhost:3000**
 
-By default the frontend proxies to the **Python backend on port 8000** (`NEXT_PUBLIC_API_BASE_URL` in `.env.local`). To point it at the **Java backend** instead, edit `apps/web/.env.local`:
+By default the frontend proxies to the **Java backend on port 9090** (`NEXT_PUBLIC_API_BASE_URL` in `.env.local`). To point it at the **Python backend** instead, edit `apps/web/.env.local`:
 ```
-NEXT_PUBLIC_API_BASE_URL=http://localhost:9090
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
 ### Logging in (dev auth)
