@@ -194,7 +194,7 @@ def build_docx(blocks, output_path):
     has_verification = any(b['type'] == 'section_header' and 'VERIFICATION' in b['content'] for b in blocks)
     firm_name = ""
     for b in blocks:
-        if 'M/s' in b['content'] and ('Applicant' in b['content'] or 'Taxpayer' in b['content'] or 'Noticee' in b['content'] or 'Firm' in b['content'] or 'J R K' in b['content'] or 'PERFECT BUILDCON' in b['content']):
+        if 'M/s' in b['content'] and ('Applicant' in b['content'] or 'Taxpayer' in b['content'] or 'Noticee' in b['content'] or 'Firm' in b['content']):
             m = re.search(r'M/s\s+[A-Za-z0-9\s]+', b['content'])
             if m:
                 firm_name = m.group(0).strip()
@@ -489,13 +489,14 @@ def build_pdf(blocks, output_path):
 
 
 def process_all_files():
+    # Local, git-ignored folders (comparision/, formating/): name the client folders neutrally (client_a, client_b).
     input_files = [
-        ('comparision/j rk infrastructure/opus analysis.pdf', 'formating/j rk infrastructure/opus_analysis_formatted'),
-        ('comparision/j rk infrastructure/sonnet analysis.pdf', 'formating/j rk infrastructure/sonnet_analysis_formatted'),
-        ('comparision/j rk infrastructure/rag.docx', 'formating/j rk infrastructure/rag_formatted'),
-        ('comparision/perfect buildcon/opus.pdf', 'formating/perfect buildcon/opus_formatted'),
-        ('comparision/perfect buildcon/sonnet.pdf', 'formating/perfect buildcon/sonnet_formatted'),
-        ('comparision/perfect buildcon/rag.docx', 'formating/perfect buildcon/rag_formatted')
+        ('comparision/client_a/opus analysis.pdf', 'formating/client_a/opus_analysis_formatted'),
+        ('comparision/client_a/sonnet analysis.pdf', 'formating/client_a/sonnet_analysis_formatted'),
+        ('comparision/client_a/rag.docx', 'formating/client_a/rag_formatted'),
+        ('comparision/client_b/opus.pdf', 'formating/client_b/opus_formatted'),
+        ('comparision/client_b/sonnet.pdf', 'formating/client_b/sonnet_formatted'),
+        ('comparision/client_b/rag.docx', 'formating/client_b/rag_formatted')
     ]
 
     print("=== Processing & Formatting Legal Reply Drafts ===")

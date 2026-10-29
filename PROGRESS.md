@@ -1367,7 +1367,24 @@ commit, one test (synthetic rows, invented names, allow-listed GSTINs; no live c
 - Not done: the live run on the RFD-08 notice after this fix (no key here): residual 0 is expected from the shape
   above; the anonymiser stays regex-based.
 
+## (b35) Client data and firm work product removed from the branch; the PR scan checks the net diff (29-10-2026)
+
+- **Removed from the branch** (none of it is on `main`): the run outputs, scratch folder and generated drafts, the
+  comparison / formatting folders and archive, the reply documents at the root, the firm's paired notice-reply corpus,
+  the test documents, the walkthrough report / RAG template / OCR specification, the two old env-gated batch runner
+  tests and the two one-off scripts that embedded identifiers. `.gitignore` now ignores those folders and a root
+  `*.zip`; `.githooks/allowed_binaries.txt` is empty (no binary document is tracked any more); the formatting script
+  names its local input folders neutrally. The two deleted runners were superseded by `V7LiveRig` /
+  `V7LivePipelineRunnerTest`; nothing else referenced them. The demo identifiers that exist unchanged on `main`
+  (dev seeds, SQL tests, the demo page) stay. History is not rewritten.
+
 ## (c) Verification
+
+- Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 29-10-2026 after (b35), the Spring context test included (no Postgres in the
+  container). The two deleted batch runners contributed one test each; `GstCorpusMatcherServiceTest` and
+  `ScenariosTestingRunnerTest` now run on a synthetic corpus built in a temporary folder
+  (`SyntheticCorpusFixture`) instead of the deleted one.
 
 - Offline unit suite (`mvn test`): **618 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 28-10-2026 after (b33), the Spring context test included (no Postgres in the
@@ -1438,7 +1455,7 @@ commit, one test (synthetic rows, invented names, allow-listed GSTINs; no live c
    effective date, transfer of anti-profiteering to CCI from 01-12-2022, and the Reckitt Benckiser
    wording in para 6.2.
 6. **Possible real GSTINs already in the public repo** (in `ClaudeOpusBatchRunnerTest.java` and
-   `RealNoticesBatchRunnerTest.java`): decide whether to remove them and clean history.
+   `RealNoticesBatchRunnerTest.java`): both files removed from the branch in (b35); history not rewritten.
 7. **Enable the privacy hook in every clone**: `git config core.hooksPath .githooks`.
 8. **Merge to main and switch `DRAFTING_PIPELINE=v7`** once items 1 to 5 are done.
 9. **Shortlist size and recall** (measured on the private catalogue, 269 cards, and 308 test notices; v2 in b21):

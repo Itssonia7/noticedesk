@@ -2,21 +2,30 @@ package com.noticedesk.api.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.config.AppProperties;
+import com.noticedesk.api.testsupport.SyntheticCorpusFixture;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/** Runs against the synthetic corpus of {@link SyntheticCorpusFixture}; the real corpus is never in the repository. */
 class GstCorpusMatcherServiceTest {
+
+    @TempDir
+    Path corpusDir;
 
     private GstCorpusMatcherService corpusMatcherService;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
         AppProperties properties = new AppProperties();
+        properties.getDrafting().setGstCorpusDir(SyntheticCorpusFixture.create(corpusDir).toString());
         ObjectMapper objectMapper = new ObjectMapper();
         corpusMatcherService = new GstCorpusMatcherService(properties, objectMapper);
         corpusMatcherService.init();
