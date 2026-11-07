@@ -61,7 +61,7 @@ public class NoticeRoutingAgent {
         // ---- Step B: client lookup ----------------------------------------
         List<Map<String, Object>> clients = jdbc.queryForList(
                 "SELECT client_id, legal_name FROM clients " +
-                "WHERE tenant_id = :tid AND pan = :pan AND deleted_at IS NULL",
+                "WHERE tenant_id = CAST(:tid AS UUID) AND pan = :pan AND deleted_at IS NULL",
                 Map.of("tid", input.tenantId().toString(), "pan", canonicalPan));
 
         if (clients.isEmpty()) {
@@ -90,7 +90,7 @@ public class NoticeRoutingAgent {
         if ("IT".equals(law)) {
             List<Map<String, Object>> regs = jdbc.queryForList(
                     "SELECT registration_id FROM client_registrations " +
-                    "WHERE tenant_id = :tid AND client_id = :cid AND registration_type = 'IT' LIMIT 1",
+                    "WHERE tenant_id = CAST(:tid AS UUID) AND client_id = CAST(:cid AS UUID) AND registration_type = 'IT' LIMIT 1",
                     Map.of("tid", input.tenantId().toString(), "cid", clientId.toString()));
             if (regs.isEmpty()) {
                 String err = "client has no IT registration; expected exactly one";
@@ -107,7 +107,7 @@ public class NoticeRoutingAgent {
             }
             List<Map<String, Object>> regs = jdbc.queryForList(
                     "SELECT registration_id FROM client_registrations " +
-                    "WHERE tenant_id = :tid AND registration_type = 'GST' AND identifier_value = :iv LIMIT 1",
+                    "WHERE tenant_id = CAST(:tid AS UUID) AND registration_type = 'GST' AND identifier_value = :iv LIMIT 1",
                     Map.of("tid", input.tenantId().toString(), "iv", gstin));
             if (regs.isEmpty()) {
                 String err = "GSTIN not on file: " + gstin;
@@ -199,17 +199,23 @@ public class NoticeRoutingAgent {
             UUID tenantId, UUID clientId, UUID registrationId,
             String law, String financialYear, String assessmentYear) {
 
+        Map<String, Object> params = new HashMap<>();
+        params.put("tid", tenantId.toString());
+        params.put("cid", clientId.toString());
+        params.put("rid", registrationId.toString());
+        params.put("law", law);
+        params.put("fy", financialYear);
+        params.put("ay", assessmentYear);
+
         // IS NOT DISTINCT FROM handles NULL-equality for nullable FY/AY fields.
         List<Map<String, Object>> existing = jdbc.queryForList(
                 "SELECT matter_id FROM matters " +
-                "WHERE tenant_id = :tid AND client_id = :cid AND registration_id = :rid " +
+                "WHERE tenant_id = CAST(:tid AS UUID) AND client_id = CAST(:cid AS UUID) AND registration_id = CAST(:rid AS UUID) " +
                 "  AND law = :law " +
                 "  AND financial_year  IS NOT DISTINCT FROM :fy " +
                 "  AND assessment_year IS NOT DISTINCT FROM :ay " +
                 "LIMIT 1",
-                Map.of("tid", tenantId.toString(), "cid", clientId.toString(),
-                        "rid", registrationId.toString(), "law", law,
-                        "fy", financialYear, "ay", assessmentYear));
+                params);
 
         if (!existing.isEmpty()) {
             return (UUID) existing.get(0).get("matter_id");
@@ -217,10 +223,8 @@ public class NoticeRoutingAgent {
 
         UUID matterId = jdbc.queryForObject(
                 "INSERT INTO matters (tenant_id, client_id, registration_id, law, financial_year, assessment_year) " +
-                "VALUES (:tid, :cid, :rid, :law, :fy, :ay) RETURNING matter_id",
-                Map.of("tid", tenantId.toString(), "cid", clientId.toString(),
-                        "rid", registrationId.toString(), "law", law,
-                        "fy", financialYear, "ay", assessmentYear),
+                "VALUES (CAST(:tid AS UUID), CAST(:cid AS UUID), CAST(:rid AS UUID), :law, :fy, :ay) RETURNING matter_id",
+                params,
                 UUID.class);
 
         log.info("matter created matter_id={} law={} fy={}", matterId, law, financialYear);
@@ -250,6 +254,25 @@ public class NoticeRoutingAgent {
             rawJson    = "{}";
         }
 
+        // Sanitize ingest_channel to match DB constraint: web_upload, mobile_capture, email, gst_portal_gsp, it_portal_aa, whatsapp
+        String sanitizedChannel = "web_upload";
+        if (ingestChannel != null) {
+            String icLower = ingestChannel.toLowerCase().trim();
+            if (List.of("web_upload", "mobile_capture", "email", "gst_portal_gsp", "it_portal_aa", "whatsapp").contains(icLower)) {
+                sanitizedChannel = icLower;
+            }
+        }
+
+        // Sanitize date strings: empty string "" -> null
+        String issueDate = sanitizeDate(parsed.get("issue_date"));
+        String receiptDate = sanitizeDate(parsed.get("receipt_date"));
+        String dueDate = sanitizeDate(parsed.get("due_date"));
+        String hearingDate = sanitizeDate(parsed.get("hearing_date"));
+
+        // Sanitize demand_amount to Number/BigDecimal or null
+        Object rawDemand = parsed.get("demand_amount");
+        Number demandNum = parseDemandAmount(rawDemand);
+
         Map<String, Object> params = new HashMap<>();
         params.put("tid",          tenantId.toString());
         params.put("mid",          matterId.toString());
@@ -259,17 +282,17 @@ public class NoticeRoutingAgent {
         params.put("doc_type",     parsed.get("document_type"));
         params.put("notice_number", parsed.get("notice_number"));
         params.put("din",          parsed.get("din_or_rfn"));
-        params.put("issue_date",   parsed.get("issue_date"));
-        params.put("receipt_date", parsed.get("receipt_date"));
-        params.put("due_date",     parsed.get("due_date"));
+        params.put("issue_date",   issueDate);
+        params.put("receipt_date", receiptDate);
+        params.put("due_date",     dueDate);
         params.put("authority",    parsed.get("authority"));
         params.put("fy",           parsed.get("financial_year"));
         params.put("ay",           parsed.get("assessment_year"));
         params.put("issues",       issuesJson);
         params.put("docs",         docsJson);
-        params.put("hearing_date", parsed.get("hearing_date"));
-        params.put("demand_amount", parsed.get("demand_amount"));
-        params.put("ingest_channel", ingestChannel != null ? ingestChannel : "unknown");
+        params.put("hearing_date", hearingDate);
+        params.put("demand_amount", demandNum);
+        params.put("ingest_channel", sanitizedChannel);
         params.put("inbox_id",     inboxId.toString());
         params.put("confidence",   parsed.get("parse_confidence"));
         params.put("raw",          rawJson);
@@ -286,7 +309,7 @@ public class NoticeRoutingAgent {
                     parse_confidence, pan_gstin_reconciliation_status,
                     raw_extracted_json
                 ) VALUES (
-                    :tid, :mid, :cid, :rid, :law,
+                    CAST(:tid AS UUID), CAST(:mid AS UUID), CAST(:cid AS UUID), CAST(:rid AS UUID), :law,
                     :doc_type, :notice_number, :din,
                     CAST(:issue_date AS DATE), CAST(:receipt_date AS DATE),
                     CAST(:due_date AS DATE), :authority,
@@ -311,13 +334,13 @@ public class NoticeRoutingAgent {
         Map<String, Object> p = new HashMap<>();
         p.put("id",        inboxId.toString());
         p.put("status",    status);
-        p.put("error",     error);
+        p.put("error",     error != null ? "{\"error\":\"" + error + "\"}" : null);
         p.put("notice_id", noticeId != null ? noticeId.toString() : null);
 
         jdbc.update(
                 "UPDATE documents_inbox " +
-                "SET routing_status = :status, routing_error = :error, " +
-                "    routed_notice_id = COALESCE(CAST(:notice_id AS UUID), routed_notice_id) " +
+                "SET routing_status = :status, routing_anomaly_details = CAST(:error AS JSONB), " +
+                "    parsed_to_notice_id = COALESCE(CAST(:notice_id AS UUID), parsed_to_notice_id) " +
                 "WHERE inbox_id = CAST(:id AS UUID)",
                 p);
     }
@@ -339,5 +362,30 @@ public class NoticeRoutingAgent {
             }
         }
         return result;
+    }
+
+    private String sanitizeDate(Object rawDate) {
+        if (rawDate instanceof String s) {
+            String trimmed = s.trim();
+            if (!trimmed.isEmpty() && !trimmed.equalsIgnoreCase("null")) {
+                return trimmed;
+            }
+        }
+        return null;
+    }
+
+    private Number parseDemandAmount(Object rawDemand) {
+        if (rawDemand instanceof Number num) {
+            return num;
+        }
+        if (rawDemand instanceof String str) {
+            try {
+                String cleanStr = str.replaceAll("[^0-9.]", "");
+                if (!cleanStr.isEmpty()) {
+                    return Double.parseDouble(cleanStr);
+                }
+            } catch (Exception ignored) {}
+        }
+        return null;
     }
 }

@@ -1,0 +1,46 @@
+===================================================================================
+  NOTICEDESK EXHAUSTIVE LEGAL REPLY DRAFT (AFTER RAG PIPELINE INTEGRATION)
+  Title: Form GST ASMT-10 Excess ITC Rebuttal - Acme Manufacturing Pvt Ltd
+  Source PDF: acme_test_notice.pdf (Form GST ASMT-10 Notice)
+===================================================================================
+
+BEFORE THE ASSISTANT COMMISSIONER OF STATE TAX
+CGST MUMBAI SOUTH DIVISION, MAHARASHTRA
+
+IN THE MATTER OF:
+ACME MANUFACTURING PVT LTD
+GSTIN: 27ABCDE1234F1Z5 | PAN: ABCDE1234F
+Notice Ref: ZJ2703240012345 | Form GST ASMT-10 | Notice Date: 15/03/2024
+Tax Period: Financial Year 2022-23
+
+Subject: WRITTEN SUBMISSION IN RESPONSE TO NOTICE INTIMATING DISCREPANCIES AFTER SCRUTINY OF RETURNS IN FORM GST ASMT-10 UNDER SECTION 61 OF THE CGST ACT, 2017 READ WITH RULE 99 OF THE CGST RULES, 2017.
+
+MOST RESPECTFULLY SHOWETH:
+
+1. PRELIMINARY SUBMISSION
+1.1. The Taxpayer, Acme Manufacturing Pvt Ltd, submits its detailed written reply to the scrutiny notice in Form GST ASMT-10 dated 15/03/2024 proposing a differential tax liability of Rs. 4,50,000/- along with interest and penalty on account of alleged excess Input Tax Credit (ITC) claimed in Form GSTR-3B compared to Form GSTR-2B.
+
+-----------------------------------------------------------------------------------
+2. STATUTORY & FACTUAL REBUTTAL
+-----------------------------------------------------------------------------------
+2.1. Full Satisfaction of Section 16(2) Conditions:
+     All ITC claimed pertained to genuine purchases of raw materials from GST registered vendors. The Taxpayer holds original tax invoices, has physically received the goods, paid the invoice consideration through banking channels, and filed regular returns.
+
+2.2. Applicability of CBIC Circular No. 183/15/2022-GST:
+     The discrepancy between GSTR-3B and GSTR-2B arose due to vendor filing delays and clerical errors by suppliers in reporting GSTINs. Per CBIC Circular 183/15/2022-GST, such discrepancies cannot form the basis for automatic ITC denial when genuine supply and payment are demonstrated.
+
+2.3. Judicial Ruling - Calcutta High Court Suncraft Energy (2023):
+     The Hon'ble High Court held that tax authorities must initiate recovery proceedings against the supplier first before seeking ITC reversal from the recipient.
+
+-----------------------------------------------------------------------------------
+3. PRAYER
+-----------------------------------------------------------------------------------
+The Taxpayer respectfully prays that the proposed discrepancy demand of Rs. 4,50,000/- be dropped and proceedings under Form GST ASMT-10 be closed.
+
+Place: Mumbai, Maharashtra
+Date: 05th April, 2024
+
+                                           For ACME MANUFACTURING PVT LTD
+
+                                           ___________________________________
+                                           (Director / Authorized Signatory)

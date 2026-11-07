@@ -14,7 +14,11 @@ export type { InboxItem, InboxList, UploadResponse, OcrTextResponse } from "@not
 export async function fetchInbox(): Promise<InboxList> {
   const res = await fetch("/api/inbox", { cache: "no-store" });
   if (!res.ok) throw new Error(`failed to load inbox (${res.status})`);
-  return (await res.json()) as InboxList;
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { items: data, total: data.length };
+  }
+  return data as InboxList;
 }
 
 export async function uploadDocument(
@@ -130,7 +134,11 @@ export interface ClientList {
 export async function fetchClients(): Promise<ClientList> {
   const res = await fetch("/api/clients", { cache: "no-store" });
   if (!res.ok) throw new Error(`failed to load clients (${res.status})`);
-  return (await res.json()) as ClientList;
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { clients: data, total: data.length };
+  }
+  return data as ClientList;
 }
 
 export interface ClientRegistration {
@@ -602,7 +610,11 @@ export async function fetchDraftVersions(
 ): Promise<{ drafts: DraftSummary[]; total: number }> {
   const res = await fetch(`/api/matters/${matterId}/drafts`, { cache: "no-store" });
   if (!res.ok) throw new Error(`failed to load drafts (${res.status})`);
-  return (await res.json()) as { drafts: DraftSummary[]; total: number };
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return { drafts: data, total: data.length };
+  }
+  return { drafts: data?.drafts ?? [], total: data?.total ?? 0 };
 }
 
 export async function fetchDraft(id: string): Promise<DraftDetail> {

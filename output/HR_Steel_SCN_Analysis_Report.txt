@@ -1,0 +1,30 @@
+================================================================================
+NOTICE ANALYSIS REPORT: HR Steel SCN.pdf
+================================================================================
+File Name        : HR Steel SCN.pdf
+Taxpayer Name    : M/s H R Steel (Prop. Juned Aliahmed Chaudhari)
+GSTIN            : 27AGZPC3957D1Z2
+Notice Reference : GEXCOM/AE/INV/GST/1886/2026 (Nashik CGST)
+Document Type    : Show Cause Cum Demand Notice (Section 73/74)
+
+--- OCR QUALITY GATE ASSESSMENT ---
+Quality Status   : HIGH_QUALITY
+Quality Score    : 1.0 / 1.00
+Word Count       : 10848 words
+GSTIN Recognized : True
+Keyword Hits     : 12 legal anchor keywords
+Symbol Noise     : 4.13%
+Vision Fallback  : NOT REQUIRED (High Quality Standard Scan)
+
+--- RAG STRATEGY ROUTING ---
+Matched Strategy : FAST_TRACK
+Category         : Case 1: 100% Single Issue Match
+RAG Action       : Synthesized known SCN legal grounds + cached new HSN 44/72 specific chunk into RAG store.
+
+--- ESTIMATED TOKEN SPEND & COST ---
+Input Tokens     : ~2,450 tokens (OCR Text + Client Context + RAG Context)
+Output Tokens    : ~1,120 tokens (Generated Formal Draft Reply)
+Primary LLM Used : Claude 3.5 Sonnet / Haiku
+Estimated Cost   : $0.0041 USD (approx INR ₹0.34 per document)
+Draft File       : output/Reply_HR_Steel_SCN.docx
+================================================================================

@@ -1,0 +1,23 @@
+{
+  "document_type": "ASMT-10",
+  "law": "GST",
+  "client_name_on_document": "Acme Industries Private Limited",
+  "pans_extracted": [{"value": "AAACA9876B", "location": "header"}],
+  "gstins_extracted": [
+    {"value": "27AAACA9876B1Z5", "location": "header", "state_code": "27"}
+  ],
+  "notice_number": "ASMT10-MH-2026-00789",
+  "din_or_rfn": "DIN-202604-000789",
+  "issue_date": "2026-04-22",
+  "receipt_date": "2026-04-25",
+  "due_date": "2026-05-22",
+  "hearing_date": null,
+  "financial_year": "2022-23",
+  "assessment_year": null,
+  "authority": "Deputy Commissioner of State Tax, Mumbai",
+  "demand_amount": 1850000,
+  "issues": ["ITC reconciliation discrepancy with GSTR-2A"],
+  "documents_required": ["GSTR-2A reconciliation", "Tax invoices for inward supplies"],
+  "parse_confidence": 0.90,
+  "fields_needing_review": []
+}

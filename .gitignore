@@ -49,3 +49,13 @@ logs/
 *.sqlite
 *.db
 pgdata/
+.pgdata/
+test_venv/
+*.pdf
+
+# Test artifacts & cache
+.opus_cache.json
+output/*.docx
+output/*.txt
+scratch/generate_change_audit_pdf.py
+

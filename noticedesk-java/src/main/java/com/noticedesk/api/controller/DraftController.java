@@ -97,7 +97,7 @@ public class DraftController {
 
     @GetMapping("/matters/{id}/drafts")
     @Transactional
-    public List<Map<String, Object>> listDrafts(@PathVariable UUID id) {
+    public Map<String, Object> listDrafts(@PathVariable UUID id) {
         String tenantId = TenantContextHolder.getTenantId();
 
         jdbc.queryForObject("SELECT set_config('app.current_tenant', :tid, true)",
@@ -114,7 +114,7 @@ public class DraftController {
                 """,
                 Map.of("mid", id));
 
-        return drafts.stream().map(HashMap::new).map(m -> (Map<String, Object>) m).toList();
+        return Map.of("drafts", drafts, "total", drafts.size());
     }
 
     // ---- GET /v1/drafts/{id} ----
@@ -235,7 +235,7 @@ public class DraftController {
         UUID newDraftId = jdbc.queryForObject(
                 """
                 INSERT INTO drafts (matter_id, tenant_id, version, status, sections, edits_log, internal_note, generated_by)
-                VALUES (:mid, :tid, :version, :status, :sections::jsonb, :edits::jsonb, :note, :gen_by)
+                VALUES (:mid, :tid::uuid, :version, :status, :sections::jsonb, :edits::jsonb, :note, :gen_by::uuid)
                 RETURNING draft_id
                 """,
                 Map.of(

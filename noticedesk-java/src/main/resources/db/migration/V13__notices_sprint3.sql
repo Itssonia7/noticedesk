@@ -23,6 +23,7 @@ UPDATE notices SET ingest_channel = 'web_upload' WHERE ingest_channel IS NULL;
 ALTER TABLE notices
     ALTER COLUMN ingest_channel SET NOT NULL;
 
+ALTER TABLE notices DROP CONSTRAINT IF EXISTS notices_ingest_channel_check;
 ALTER TABLE notices
     ADD CONSTRAINT notices_ingest_channel_check CHECK (ingest_channel IN (
         'web_upload', 'mobile_capture', 'email',

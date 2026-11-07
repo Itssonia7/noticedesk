@@ -106,12 +106,12 @@ def patch_llm(monkeypatch):
         return stub_response_for(ocr)
 
     provider = StubLLMProvider(response_factory=factory_stub)
-    monkeypatch.setattr(factory, "get_primary_llm", lambda: provider)
-    monkeypatch.setattr(factory, "get_secondary_llm", lambda: None)
+    monkeypatch.setattr(factory, "get_llm_for_agent", lambda agent: provider)
+    monkeypatch.setattr(factory, "get_secondary_llm_for_agent", lambda agent: None)
     # The parsing agent imports these directly; patch both points.
     import app.agents.document_parsing as dp
-    monkeypatch.setattr(dp, "get_primary_llm", lambda: provider)
-    monkeypatch.setattr(dp, "get_secondary_llm", lambda: None)
+    monkeypatch.setattr(dp, "get_llm_for_agent", lambda agent: provider)
+    monkeypatch.setattr(dp, "get_secondary_llm_for_agent", lambda agent: None)
 
 
 async def _seed_tenant_and_client() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:

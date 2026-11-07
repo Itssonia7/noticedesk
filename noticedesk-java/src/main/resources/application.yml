@@ -2,6 +2,10 @@ server:
   port: ${SERVER_PORT:9090}
 
 spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 50MB
   application:
     name: noticedesk-api
   datasource:
@@ -22,8 +26,8 @@ spring:
     baseline-on-migrate: true
     repair-on-migrate: true
     url: ${FLYWAY_URL:${spring.datasource.url}}
-    user: ${FLYWAY_USER:noticedesk}
-    password: ${FLYWAY_PASSWORD:noticedesk}
+    user: ${FLYWAY_USER:${spring.datasource.username}}
+    password: ${FLYWAY_PASSWORD:${spring.datasource.password}}
     out-of-order: false
   mail:
     host: ${noticedesk.email.smtp.host:localhost}
@@ -73,12 +77,16 @@ noticedesk:
   llm:
     provider-primary: ${LLM_PROVIDER_PRIMARY:stub}
     provider-secondary: ${LLM_PROVIDER_SECONDARY:}
-    model-drafting: ${LLM_MODEL_DRAFTING:}
-    model-triage: ${LLM_MODEL_TRIAGE:claude-sonnet-4-6}
-    model-parsing: ${LLM_MODEL_PARSING:claude-sonnet-4-6}
-    stub-default-canned: ${STUB_DEFAULT_CANNED:}
+    model-extraction: ${LLM_MODEL_EXTRACTION:claude-haiku-4-5-20251001}
+    model-formatting: ${LLM_MODEL_FORMATTING:claude-haiku-4-5-20251001}
+    model-opus: ${LLM_MODEL_OPUS:claude-opus-4-7}
+    model-drafting: ${LLM_MODEL_DRAFTING:claude-haiku-4-5-20251001}
+    model-triage: ${LLM_MODEL_TRIAGE:claude-haiku-4-5-20251001}
+    model-parsing: ${LLM_MODEL_PARSING:claude-haiku-4-5-20251001}
+    stub-default-canned: ${STUB_DEFAULT_CANNED:acme_mh_asmt10}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:}
+      workspace-id: ${ANTHROPIC_WORKSPACE_ID:}
       model: ${ANTHROPIC_MODEL:claude-opus-4-7}
       timeout-seconds: ${ANTHROPIC_TIMEOUT_SECONDS:180.0}
     openai:
@@ -86,6 +94,10 @@ noticedesk:
       model: ${OPENAI_MODEL:gpt-4o}
       timeout-seconds: ${OPENAI_TIMEOUT_SECONDS:180.0}
       base-url: ${OPENAI_BASE_URL:}
+    gemini:
+      api-key: ${GEMINI_API_KEY:}
+      model: ${GEMINI_MODEL:gemini-3.6-flash}
+      timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:180.0}
   ocr:
     provider-primary: ${OCR_PROVIDER_PRIMARY:stub}
     provider-fallback: ${OCR_PROVIDER_FALLBACK:}
@@ -132,3 +144,11 @@ noticedesk:
     supporting-doc-excerpt-chars: ${DRAFTING_SUPPORTING_DOC_EXCERPT_CHARS:5000}
     supporting-evidence-max-chars: ${DRAFTING_SUPPORTING_EVIDENCE_MAX_CHARS:40000}
     demo-firm-name-override: ${DEMO_FIRM_NAME_OVERRIDE:}
+    gst-corpus-dir: ${GST_CORPUS_DIR:../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired}
+  embedding:
+    provider: ${EMBEDDING_PROVIDER:stub}
+    model: ${EMBEDDING_MODEL:gemini-embedding-001}
+    similarity-threshold: ${EMBEDDING_SIMILARITY_THRESHOLD:0.70}
+    output-dimensionality: ${EMBEDDING_OUTPUT_DIMENSIONALITY:1536}
+
+

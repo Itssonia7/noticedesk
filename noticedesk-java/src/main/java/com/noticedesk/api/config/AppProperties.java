@@ -20,6 +20,7 @@ public class AppProperties {
     private Workflow workflow = new Workflow();
     private DocumentParsing documentParsing = new DocumentParsing();
     private Drafting drafting = new Drafting();
+    private Embedding embedding = new Embedding();
     private String sentryDsn;
     private List<String> allowedOrigins = List.of("http://localhost:3000");
 
@@ -40,15 +41,20 @@ public class AppProperties {
         private String providerSecondary;
         private Anthropic anthropic = new Anthropic();
         private OpenAi openai = new OpenAi();
+        private Gemini gemini = new Gemini();
         // Per-agent model overrides
-        private String modelDrafting = "";
-        private String modelTriage = "claude-sonnet-4-6";
-        private String modelParsing = "claude-sonnet-4-6";
+        private String modelExtraction = "claude-haiku-4-5-20251001";
+        private String modelFormatting = "claude-haiku-4-5-20251001";
+        private String modelOpus = "claude-opus-4-7";
+        private String modelDrafting = "claude-haiku-4-5-20251001";
+        private String modelTriage = "claude-haiku-4-5-20251001";
+        private String modelParsing = "claude-haiku-4-5-20251001";
         private String stubDefaultCanned;
 
         @Data
         public static class Anthropic {
             private String apiKey;
+            private String workspaceId;
             private String model = "claude-opus-4-7";
             private double timeoutSeconds = 180.0;
         }
@@ -59,6 +65,13 @@ public class AppProperties {
             private String model = "gpt-4o";
             private double timeoutSeconds = 180.0;
             private String baseUrl = "";
+        }
+
+        @Data
+        public static class Gemini {
+            private String apiKey;
+            private String model = "gemini-3.6-flash";
+            private double timeoutSeconds = 180.0;
         }
     }
 
@@ -135,17 +148,35 @@ public class AppProperties {
         private int maxOutputTokens = 16000;
         private int supportingDocExcerptChars = 5000;
         private int supportingEvidenceMaxChars = 40000;
+        private double similarityThreshold = 0.70;
         private String demoFirmNameOverride;
+        private String gstCorpusDir = "../NoticeDesk_GST_Corpus_1300_Paired/NoticeDesk_GST_Corpus_1-300_Paired";
+        private boolean opusDiskCacheEnabled = false;
+    }
+
+    @Data
+    public static class Embedding {
+        private String provider = "stub";
+        private String model = "gemini-embedding-001";
+        private double similarityThreshold = 0.70;
+        private int outputDimensionality = 1536;
     }
 
     public String modelForAgent(String agent, String provider) {
-        if (!"anthropic".equals(provider)) {
-            return "openai".equals(provider) ? llm.openai.model : "";
+        if ("openai".equals(provider)) {
+            return llm.openai.model;
+        } else if ("gemini".equals(provider)) {
+            return llm.gemini.model;
+        } else if (!"anthropic".equals(provider)) {
+            return "";
         }
         String override = switch (agent) {
-            case "drafting" -> llm.modelDrafting;
-            case "triage"   -> llm.modelTriage;
-            case "parsing"  -> llm.modelParsing;
+            case "extraction" -> llm.modelExtraction;
+            case "formatting" -> llm.modelFormatting;
+            case "opus", "template_generation" -> llm.modelOpus;
+            case "drafting"   -> llm.modelDrafting;
+            case "triage"     -> llm.modelTriage;
+            case "parsing"    -> llm.modelParsing;
             default         -> "";
         };
         return (override != null && !override.isBlank()) ? override : llm.anthropic.model;

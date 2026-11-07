@@ -28,6 +28,7 @@ def _build_anthropic(model: str) -> LLMProvider:
     return AnthropicProvider(
         api_key=s.anthropic_api_key,
         model=model,
+        workspace_id=s.anthropic_workspace_id,
         timeout_seconds=s.anthropic_timeout_seconds,
     )
 

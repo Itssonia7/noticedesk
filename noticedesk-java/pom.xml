@@ -81,6 +81,13 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- ── Gemini SDK ───────────────────────────────────────────────── -->
+        <dependency>
+            <groupId>com.google.genai</groupId>
+            <artifactId>google-genai</artifactId>
+            <version>0.3.0</version>
+        </dependency>
+
         <!-- ── HTTP client (for LLM API calls) ──────────────────────────── -->
         <dependency>
             <groupId>org.apache.httpcomponents.client5</groupId>

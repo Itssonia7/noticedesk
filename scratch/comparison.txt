@@ -1,0 +1,155 @@
+COMPARATIVE ANALYSIS
+Two Draft Replies to SCN F.No. GEXCOM/AE/INV/GST/1886/2026 — M/s H R Steel
+Cross-checked against the original Show Cause cum Demand Notice (HR_Steel_SCN.pdf)
+1. Purpose and method
+This note compares the two draft replies — “HR_Steel_Reply_to_SCN_Sec74.docx” (Doc 1) and “Reply_HR_Steel_SCN.docx” (Doc 2) — against each other and, in this version, against the actual Show Cause cum Demand Notice (“the SCN”). Every factual claim below (dates, figures, paragraph references) is checked against the SCN text; where a draft's claim could not be verified against it, that is noted rather than assumed correct.
+2. SCN snapshot
+Parameter
+Position per the SCN
+SCN reference
+F.No. GEXCOM/AE/INV/GST/1886/2026; Centralized SCN Sr. No. 07/26-27; DIN GEXCOM/AE/INV/GST/1886/2026-AE-O/o COMMR-CGST-NASHIK
+Issuing / signing authority
+Ajit Dan, Additional Commissioner (Prev.), CGST & CX, Nashik Commissionerate
+Noticee
+M/s H R Steel, Prop. Juned Aliahmed Chaudhari, GSTIN 27AGZPC3957D1Z2, Chinchole, Ambad, Nashik
+Period
+January 2021 to March 2022 (FY 2020-21 and FY 2021-22)
+Amount proposed
+Rs. 11,36,93,005 (CGST Rs. 5,68,46,502.50 + SGST Rs. 5,68,46,502.50), interest under S.50(3), penalty equal to tax under S.74(1)
+Suppliers in question
+M/s Hira Steel (27BLBPC3510J1ZK) — proprietor arrested 04.05.2022; M/s Maharashtra Steel Traders (27AFRPC5362D1ZH) — proprietor arrested 08.06.2022
+Core allegation
+No actual movement of goods; ITC availed on 'paper entries' based on (i) supplier-proprietors' arrest statements, (ii) 23 sample transporter statements denying transport, (iii) E-Vahan/e-way-bill vehicle-type mismatches (Table A, Rs. 45,94,791) and triangulated routing via non-existent entities Gajanan/Gauri/Tej (Table B, Rs. 1,96,24,576)
+Pre-SCN intimation
+Form GST DRC-01A dated 26.05.2026 (Ref. ZD270526099085Y) issued; noticee replied 01.06.2026; Department rejected the reply as not tenable (para 10)
+Statutory basis invoked
+Sections 16(1), 16(2)(a), 16(2)(b), 41 and 74(1) of the CGST Act, 2017; Section 155 (burden of proof)
+3. Side-by-side comparison against the SCN
+Parameter
+Actual SCN
+Doc 1 — HR_Steel_Reply_to_SCN_Sec74
+Doc 2 — Reply_HR_Steel_SCN
+Forum / officer addressed
+Signed by Ajit Dan, Additional Commissioner (Prev.), CGST & CX, Nashik Commissionerate — a Centralized SCN.
+Addressed to the Additional Commissioner, CGST & CX, Nashik Commissionerate — matches the signatory.
+Addressed to the 'Assistant Commissioner / Proper Officer... Division-Satpur, Nashik' — does not match the signing authority on the SCN.
+Nature of business described
+Para 1 describes the noticee as a retailer of 'wood sawn or chipped...' (HSN 44), yet para 3.5 (noticee's own statement) and para 8 (violations) refer only to steel items under HSN 72. The HSN 44 reference is unexplained elsewhere in the notice.
+Describes the business only as steel/scrap trading (per the noticee's own recorded statement) and separately flags the SCN's wood/HSN 44 reference as an internal inconsistency at para 4.13(vi), used as a drafting-defect ground.
+Adopts the SCN's wood/timber wording as the noticee's own business ('timber products, sawn wood... HSN 44 and 72') — not supported by the noticee's own statements on record.
+Form GST DRC-01A
+Para 10: DRC-01A dated 26.05.2026 (Ref. ZD270526099085Y) issued; noticee replied 01.06.2026; reply rejected as untenable.
+Chronology at para 2.5(f) records DRC-01A as issued and replied to — consistent with the SCN.
+Section III, para 6 raises 'Failure to issue Form GST DRC-01A' as a preliminary objection — contradicted by the SCN's own record.
+Table (A) quantification (vehicle-type mismatches)
+33 e-way bills; tax value totals Rs. 45,94,791 across 'detail not found', two/three-wheeler, car, bus and goods-carrier categories.
+Independently recomputed by category in the counsel notes; figure of Rs. 45,94,791 matches the SCN exactly.
+Not engaged with — the recap table simply states 'As per SCN Annexure' without figures.
+Table (B) quantification (triangulated routing)
+Tax value totals Rs. 1,96,24,576 across e-way bills routed through Gajanan/Gauri/Tej before reaching the noticee.
+Figure confirmed as matching the SCN; also identifies 3 e-way bills (~Rs. 5,28,656) double-counted across Tables (A) and (B).
+Not engaged with.
+Supplier-wise arithmetic
+Para 3.3 narrative states Rs. 6,87,19,152 from Maharashtra Steel Traders, but the accompanying table's two MST rows total only Rs. 6,80,34,407 — a Rs. 6,84,745 shortfall (mirrored by an equal excess on the Hira Steel side).
+Independently identifies and quantifies this exact Rs. 6,84,745 inconsistency at para 4.13(i) — verified accurate against the SCN text.
+Not addressed.
+Defense on receipt of goods
+Relies on: supplier-proprietors' statements (RUD-1, RUD-2); 23 transporter statements taken 'on sample basis' (RUD-7); E-Vahan vehicle-type mismatches; and invokes S.16(2)(b) and S.155 burden of proof.
+Admits invoice/GSTR-2A/payment conditions are unchallenged; narrows the dispute to 'receipt of goods' only; shows the sample transporter statements don't cover the disputed e-way bills; and notes the suppliers' later statements (21.03.2023 / 05.06.2024) concede some supply was made — which the SCN itself (para 3.12) does not quantify.
+Argues Section 16(2) conditions are generally satisfied and invokes 'lex non cogit ad impossibilia'; does not engage the specific vehicle-mismatch or transporter-denial evidence the SCN actually relies on.
+Limitation / extended period
+Demand raised under Section 74(1) generally; no limitation computation in the notice; SCN itself is undated in the served copy.
+Runs a full S.74(2)/S.74(10) limitation table; argues the FY 2020-21 portion (Rs. 1,35,35,354) may be time-barred depending on the (currently undated) date of issue.
+No limitation argument raised.
+Cross-examination / natural justice
+Relies on statements of the two supplier-proprietors and 23 transporters without the noticee's participation in recording them.
+Demands cross-examination under Section 136 as a pre-condition to adjudication (Part 5), citing K.I. Pavunny and Vinod Solanki.
+Cites Brindavan Beverages for want of relied-upon documents, but does not separately demand cross-examination under Section 136.
+Drafting / filing status
+—
+Working draft: contains [INSERT]/[CONFIRM]/TO BE VERIFIED tags and an internal 'Note to Counsel' page with filing strategy — more accurate, but not yet filing-ready.
+Reads as a finished, filing-ready document — no placeholders — but contains at least two grounds (DRC-01A, forum) that conflict with the SCN's own record.
+4. Key factual flags
+DRC-01A contradiction: Doc 2's lead procedural objection — that the Department never issued Form GST DRC-01A — is directly contradicted by para 10 of the SCN, which records the DRC-01A dated 26.05.2026 and the noticee's own reply of 01.06.2026. Filing this ground as drafted risks the officer rejecting the entire reply's credibility on a checkable fact.
+Wrong forum/officer: Doc 2 is captioned for the “Assistant Commissioner / Proper Officer... Division-Satpur”, whereas the SCN was issued and signed by the Additional Commissioner (Prev.), CGST & CX, Nashik Commissionerate, as a Centralized SCN. Doc 1's caption matches the signatory.
+Business description: the SCN's own opening paragraph (an apparent drafting error, since it conflicts with the noticee's own statement at para 3.5 and the violation clauses at para 8) describes the noticee as a timber/wood retailer. Doc 1 treats this as an internal inconsistency to raise as a ground; Doc 2 instead adopts the wood/timber description as the noticee's actual business — which is not supported by the noticee's own statements on record.
+Doc 1's quantification is independently verifiable: the Rs. 45,94,791 (Table A) and Rs. 1,96,24,576 (Table B) figures, and the Rs. 6,84,745 supplier-wise arithmetic inconsistency, all reconcile exactly against the SCN's own tables and narrative.
+Doc 2 cites three cases (Bharti Airtel, Cosmic Radio v. CCE, Tamil Nadu Housing Board v. CCE) that do not appear in Doc 1's 19-entry, cross-checked authorities table. These should be independently verified against the reporter before filing.
+5. Case-law comparison
+Case
+Citation (as given)
+Doc 1
+Doc 2
+Note
+Suncraft Energy v. Asst. Commissioner
+Cal HC / SLP dismissed
+Yes
+Yes
+Common core authority on proceeding against the supplier before the buyer; Doc 1 flags the SLP dismissal recorded low tax effect and cites the HC judgment itself.
+D.Y. Beathel Enterprises v. State Tax Officer
+Mad HC
+Yes
+Yes
+Common core authority; used identically in both.
+CCE v. Brindavan Beverages (P) Ltd.
+(2007) 5 SCC 388 / 2007 E.L.T. 487 (S.C.)
+Yes
+Yes
+Both rely on it; Doc 1 for 'SCN is the foundation of the demand', Doc 2 for want of relied-upon documents.
+Union of India v. Bharti Airtel Ltd.
+(2021) 131 taxmann.com 319 (SC)
+No
+Yes
+Does not appear in Doc 1's 19-entry verified authorities table — recommend independently verifying this citation before filing.
+Cosmic Radio v. CCE
+(1995) 75 ELT 721
+No
+Yes
+Not found in Doc 1's authorities list; citation could not be cross-checked here — verify before filing.
+Tamil Nadu Housing Board v. CCE
+1994 Supp (2) SCC 489
+No
+Yes
+Same — verify before filing.
+Pradeep Goyal v. Union of India
+W.P.(C) No. 320/2022 (SC)
+Yes
+No
+Doc 1's DIN-defect ground; not used in Doc 2.
+Andaman Timber Industries v. CCE
+2015 (324) E.L.T. 641
+Yes
+No
+Doc 1's cross-examination ground.
+K.I. Pavunny / Vinod Solanki
+1997 E.L.T. 241 / (2008) 16 SCC 537
+Yes
+No
+Doc 1's retracted-statement / cross-examination line of authority.
+Uniworth Textiles, Pushpam Pharma, Anand Nishikawa, Continental Foundation
+Various SC
+Yes
+No
+Doc 1's suppression / extended-period line of authority; marked 'Verified' in its table.
+HCL Infotech Ltd. v. Commissioner, Commercial Tax
+Writ Tax No. 1396/2024 (All HC)
+Yes
+No
+Doc 1's jurisdictional ground on specificity of fraud/suppression allegation.
+State of Karnataka v. Ecom Gill Coffee Trading
+2023 SCC OnLine SC 248
+Yes
+No
+Adverse authority Doc 1 pre-empts and distinguishes; not addressed in Doc 2.
+G-Tech Industries; Jindal Drugs (S.136/9D procedure)
+P&H HC
+Yes
+No
+Doc 1's statutory-procedure ground for treating statements as relevant evidence.
+CCE v. Motabhai Iron & Steel; CCE v. Juhi Alloys; Arise India
+Guj HC / All HC / Del HC
+Yes
+No
+Doc 1's line on vehicle-record reliability and bona fide purchaser protection.
+6. Bottom line
+Doc 1 is the more heavily fact-checked draft: its chronology, forum, and figures all reconcile against the SCN, and it turns several of the SCN's own drafting defects (undated notice, mismatched tables, wood/timber slip) into affirmative grounds. It is, however, still a working draft with placeholders to fill. Doc 2 reads as finished, but at least two of its grounds (DRC-01A, forum) conflict with the SCN's own record, and its case citations and business description need independent verification. If a single reply is to be filed, Doc 1's factual and legal scaffolding is the safer base, with the gaps ([INSERT]/[CONFIRM] items) completed before filing.

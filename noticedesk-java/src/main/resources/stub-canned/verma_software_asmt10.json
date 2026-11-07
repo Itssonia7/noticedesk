@@ -1,0 +1,23 @@
+{
+  "document_type": "ASMT-10",
+  "law": "GST",
+  "client_name_on_document": "Verma Software Solutions LLP",
+  "pans_extracted": [{"value": "AADFV4321E", "location": "header"}],
+  "gstins_extracted": [
+    {"value": "29AADFV4321E1Z5", "location": "header", "state_code": "29"}
+  ],
+  "notice_number": "ASMT10-KA-2026-00318",
+  "din_or_rfn": "DIN20260215ASMT10008812",
+  "issue_date": "2026-02-15",
+  "receipt_date": "2026-02-18",
+  "due_date": "2026-05-23",
+  "hearing_date": null,
+  "financial_year": "2023-24",
+  "assessment_year": null,
+  "authority": "Assistant Commissioner of Commercial Taxes, Audit 3.1, Bengaluru",
+  "demand_amount": 680000,
+  "issues": ["Export refund & SEZ zero-rated supply reporting discrepancy"],
+  "documents_required": ["FIRC/BRC certificates", "LUT copy", "Shipping bills"],
+  "parse_confidence": 0.96,
+  "fields_needing_review": []
+}

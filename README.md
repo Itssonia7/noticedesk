@@ -7,8 +7,8 @@ Litigation-first tax operating system for Indian CA firms. Sprint 1: foundation 
 ```
 /apps
   /web              Next.js 14 App Router frontend
-  /api              FastAPI backend (Python 3.11+) — primary backend
-/noticedesk-java     Spring Boot backend (Java 21) — parallel rewrite, same API contract
+  /api              FastAPI backend (Python 3.11+) — parallel rewrite, same API contract
+/noticedesk-java     Spring Boot backend (Java 21) — primary backend
 /packages
   /db               PostgreSQL migrations and seed data (used with apps/api)
   /shared           TypeScript types shared between web and api
@@ -25,7 +25,7 @@ There are **two backend implementations** with the same API contract — pick on
 | Status | Original, feature-complete | Rewrite in progress |
 | Migrations | `packages/db/migrations/*.sql` | `noticedesk-java/src/main/resources/db/migration/*.sql` (Flyway) |
 
-The frontend defaults to the Python backend. To point it at Java instead, see [Running the frontend](#3-frontend-nextjs).
+The frontend defaults to the Java backend. To point it at Python instead, see [Running the frontend](#3-frontend-nextjs).
 
 ## Identity model (non-negotiable)
 
@@ -130,9 +130,9 @@ npm run dev
 
 Open **http://localhost:3000**
 
-By default the frontend proxies to the **Python backend on port 8000** (`NEXT_PUBLIC_API_BASE_URL` in `.env.local`). To point it at the **Java backend** instead, edit `apps/web/.env.local`:
+By default the frontend proxies to the **Java backend on port 9090** (`NEXT_PUBLIC_API_BASE_URL` in `.env.local`). To point it at the **Python backend** instead, edit `apps/web/.env.local`:
 ```
-NEXT_PUBLIC_API_BASE_URL=http://localhost:9090
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
 ### Logging in (dev auth)

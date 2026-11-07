@@ -45,7 +45,7 @@ public class TriageController {
         var noticeRows = jdbc.queryForList(
                 """
                 SELECT n.notice_id, n.law, n.document_type, n.din_or_rfn, n.raw_extracted_json,
-                       n.financial_year, n.assessment_year, n.issue,
+                       n.financial_year, n.assessment_year, COALESCE(n.issues, n.raw_extracted_json->>'issue') AS issue,
                        c.legal_name AS client_legal_name, c.pan AS client_pan,
                        r.identifier_value, r.registration_type
                 FROM notices n
