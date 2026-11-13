@@ -104,6 +104,9 @@ Key `.env` defaults (already stub-mode, no API keys required to run):
   NOT_CHECKED (never sent to IndianKanoon) and listed in the partner note
 - `SHORTLIST_TITLE_MAX_CARDS=15` — cards kept from the AI shortlist title pass (ranked answer, first N kept at
   temperature 0), so the matching prompt is the same size from run to run on the same notice
+- `SHORTLIST_AI_REQUIRED=true` — a shortlist title pass that fails or returns nothing usable STOPS the notice before the
+  paid matching call (`block:shortlist_ai_failed`; the run goes on to the next notice); set `off` to match by labels
+  only with `warn:shortlist_ai_skipped`
 - `CATALOGUE_INCLUDE_PROVISIONAL=true` — v7 matching also sees issue cards / reply templates promoted from an approved
   AI issue section (`POST /api/v7/ai-sections/{id}/promote`); set `false` to match against CA-approved content only
 - `AUTH_PROVIDER=dev` — dev header bypass, only works when `ENVIRONMENT=development`

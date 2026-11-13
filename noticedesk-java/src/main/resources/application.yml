@@ -158,8 +158,12 @@ noticedesk:
       relative-cutoff: ${MATCHING_SHORTLIST_RELATIVE_CUTOFF:0.35}
       # fewer kept than this: the top cards by label score up to this many
       min-cards: ${MATCHING_SHORTLIST_MIN_CARDS:15}
-      # AI title pass over the one-line card titles; a failed call degrades to labels only
+      # AI title pass over the one-line card titles
       ai-titles: ${MATCHING_SHORTLIST_AI:true}
+      # true (default): a title pass that fails or returns nothing usable STOPS the notice before the (paid) matching
+      # call, with block:shortlist_ai_failed; the run goes on to the next notice. off: labels only with
+      # warn:shortlist_ai_skipped (the behaviour before 13-11-2026)
+      ai-required: ${SHORTLIST_AI_REQUIRED:true}
       # stricter label cut-off when the AI title pass returned at least one card (the values above apply when the
       # pass is off, failed, or returned no card)
       relative-cutoff-with-ai: ${MATCHING_SHORTLIST_RELATIVE_CUTOFF_WITH_AI:0.5}

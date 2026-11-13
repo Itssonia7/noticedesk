@@ -236,6 +236,12 @@ public class AppProperties {
             private int minCards = 15;
             /** Run the AI title pass ({@code ShortlistTitleAgent}) and add its picks to the label picks. */
             private boolean aiTitles = true;
+            /**
+             * When the AI title pass is on but fails or returns nothing usable, stop the notice BEFORE the matching call
+             * (flag {@code block:shortlist_ai_failed}; env SHORTLIST_AI_REQUIRED). False: match by labels only with
+             * {@code warn:shortlist_ai_skipped}, as before.
+             */
+            private boolean aiRequired = true;
             /** Relative cut-off of the label scoring when the AI title pass returned at least one card. */
             private double relativeCutoffWithAi = 0.5;
             /** Min-cards top-up of the label scoring when the AI title pass returned at least one card. */

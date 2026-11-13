@@ -375,6 +375,15 @@ public class IssueMatchingAgent {
                 || properties.getMatching().getShortlist().isAiTitles();
     }
 
+    /**
+     * {@code matching.shortlist.ai-required} (env SHORTLIST_AI_REQUIRED, default true): a title pass that fails stops the
+     * notice before matching ({@link ShortlistAiFailedException}) instead of matching by labels only.
+     */
+    boolean shortlistAiRequired() {
+        return properties == null || properties.getMatching() == null || properties.getMatching().getShortlist() == null
+                || properties.getMatching().getShortlist().isAiRequired();
+    }
+
     /** {@code matching.shortlist.log-ids} (env MATCHING_SHORTLIST_LOG_IDS, default false): shortlisted card ids at INFO, else DEBUG. */
     boolean shortlistLogIds() {
         return properties != null && properties.getMatching() != null && properties.getMatching().getShortlist() != null
@@ -393,8 +402,10 @@ public class IssueMatchingAgent {
 
     /**
      * The shortlist for a first matching call: the AI title pass (when on and available; it goes through the same
-     * budget) and the label scoring, united by {@link CardShortlister#shortlist}. A failed or refused title pass
-     * leaves the labels alone (status {@link CardShortlister#AI_SKIPPED}); {@link LlmFatalException} is passed on.
+     * budget) and the label scoring, united by {@link CardShortlister#shortlist}. A failed or refused title pass stops
+     * the notice before the matching call when {@link #shortlistAiRequired()} ({@link ShortlistAiFailedException},
+     * flag {@code block:shortlist_ai_failed}); with the requirement off it leaves the labels alone (status
+     * {@link CardShortlister#AI_SKIPPED}, flag {@code warn:shortlist_ai_skipped}). {@link LlmFatalException} is passed on.
      */
     CardShortlister.Shortlist buildShortlist(List<IssueCard> cards, String noticeType, String text, UUID noticeId,
                                              NoticeCallBudget budget) {
@@ -402,11 +413,16 @@ public class IssueMatchingAgent {
         String aiStatus = CardShortlister.AI_OFF;
         boolean parseFallback = false;
         if (shortlistAiEnabled() && shortlistTitleAgent != null && shortlistTitleAgent.available()) {
-            ShortlistTitleAgent.Picks picks = shortlistTitleAgent.pickCards(cards, noticeType, text, noticeId, budget);
-            if (picks != null) {
-                aiPicks = picks.cardIds();
+            ShortlistTitleAgent.Outcome outcome = shortlistTitleAgent.pickCardsOutcome(cards, noticeType, text, noticeId, budget);
+            if (!outcome.failed()) {
+                aiPicks = outcome.picks().cardIds();
                 aiStatus = CardShortlister.AI_USED;
-                parseFallback = picks.parseFallback();
+                parseFallback = outcome.picks().parseFallback();
+            } else if (shortlistAiRequired()) {
+                // never fall through to a paid matching call on a labels-only shortlist by accident
+                ShortlistAiFailedException stop = new ShortlistAiFailedException(outcome.failureReason());
+                log.error("matching_stopped noticeId={} {} [{}]", noticeId, stop.consoleLine(), ShortlistAiFailedException.FLAG);
+                throw stop;
             } else {
                 aiStatus = CardShortlister.AI_SKIPPED;
             }

@@ -95,6 +95,16 @@ public class ShortlistTitleAgent {
         }
     }
 
+    /**
+     * The result of one title pass: the picks, or null with the reason the pass could not be used (one line, never
+     * content: the budget refusal, the exception, the stop reason, "no usable output after retry").
+     */
+    public record Outcome(Picks picks, String failureReason) {
+        public boolean failed() {
+            return picks == null;
+        }
+    }
+
     /** Parsed answer: the ids (model order, capped), whether the regex fallback found them, and how many came back. */
     record Parsed(Set<String> ids, boolean fallback, int returnedCount) {
         Parsed(Set<String> ids, boolean fallback) {
@@ -147,12 +157,22 @@ public class ShortlistTitleAgent {
      *         refused it
      */
     public Picks pickCards(List<IssueCard> cards, String noticeType, String noticeText, UUID noticeId, NoticeCallBudget budget) {
+        return pickCardsOutcome(cards, noticeType, noticeText, noticeId, budget).picks();
+    }
+
+    /**
+     * As {@link #pickCards}, with the reason when the pass could not be used (for the caller that must decide whether
+     * to stop the notice: {@code matching.shortlist.ai-required}). An empty catalogue or an unavailable agent is a
+     * failure with the reason "not available".
+     */
+    public Outcome pickCardsOutcome(List<IssueCard> cards, String noticeType, String noticeText, UUID noticeId, NoticeCallBudget budget) {
         Map<String, IssueCard> byId = CatalogueService.byId(cards);
-        if (byId.isEmpty() || !available()) return null;
+        if (byId.isEmpty() || !available()) return new Outcome(null, "not available");
         String model = model();
         String label = "ShortlistTitleAgent (" + byId.size() + " titles)";
         String systemPrompt = systemPrompt(cards);
         String userPrompt = userPrompt(noticeType, noticeText);
+        String[] failure = new String[1];
         try {
             LlmProvider llm = llmFactory.getLlmForAgent(AGENT_KEY);
             // the same notice must give the same shortlist: temperature 0 where the provider / model takes one
@@ -164,19 +184,21 @@ public class ShortlistTitleAgent {
                         Parsed parsed = cap(parseTolerant(response.content(), byId.keySet()));
                         return new Picks(parsed.ids(), response.model() != null ? response.model() : model, parsed.fallback(),
                                 parsed.returnedCount());
-                    }, true);
+                    }, true, reason -> failure[0] = reason);
             if (picks == null) {
-                log.warn("{} produced no usable output; shortlist by labels only", label);
-            } else {
-                log.info("{} named {} card(s), {} kept{}", label, picks.returnedCount(), picks.cardIds().size(),
-                        picks.parseFallback() ? " (ids taken from unparseable JSON)" : "");
+                String reason = failure[0] != null ? failure[0] : "no usable output";
+                log.warn("{} produced no usable output ({})", label, reason);
+                return new Outcome(null, reason);
             }
-            return picks;
+            log.info("{} named {} card(s), {} kept{}", label, picks.returnedCount(), picks.cardIds().size(),
+                    picks.parseFallback() ? " (ids taken from unparseable JSON)" : "");
+            return new Outcome(picks, null);
         } catch (LlmFatalException e) {
             throw e;   // billing / auth error or live run aborted: never a silent fallback
         } catch (Exception e) {
             log.error("{} execution failed: {}", label, e.getMessage());
-            return null;
+            return new Outcome(null, "execution failed: " + e.getClass().getSimpleName()
+                    + (e.getMessage() != null ? " " + e.getMessage() : ""));
         }
     }
 

@@ -424,11 +424,93 @@ class ShortlistTitleAgentTest {
     }
 
     @Test
-    void matcherMarksAFailedTitlePassAsSkippedAndKeepsTheLabels() {
+    void matcherMarksAFailedTitlePassAsSkippedAndKeepsTheLabels_whenTheAiIsNotRequired() {
+        props.getMatching().getShortlist().setAiRequired(false);
         answer("not json");
         MatchingResult r = matcher().matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null);
         assertTrue(r.shortlist().aiSkipped());
         assertEquals(CardShortlister.LEVEL_STAGE, r.shortlist().level(), "one label pick: the stage-pool floor");
+        // the matching call was made (labels only)
+        Mockito.verify(llm).generateWithEffort(Mockito.startsWith("# System Prompt"), Mockito.any(), Mockito.any(), Mockito.anyInt(),
+                Mockito.any(), Mockito.anyBoolean());
+    }
+
+    // ------------------------------------------------------------------ ai-required (default): stop before matching
+
+    @Test
+    void aiRequiredIsOnByDefault() {
+        assertTrue(new AppProperties().getMatching().getShortlist().isAiRequired());
+        assertTrue(matcher().shortlistAiRequired());
+        props.getMatching().getShortlist().setAiRequired(false);
+        assertFalse(matcher().shortlistAiRequired());
+    }
+
+    @Test
+    void garbageTwiceStopsTheNoticeBeforeTheMatchingCall() {
+        answer("not json");   // both attempts: no id in the text, JSON unreadable
+        IssueMatchingAgent m = matcher();
+
+        ShortlistAiFailedException e = assertThrows(ShortlistAiFailedException.class,
+                () -> m.matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null));
+
+        assertTrue(e.reason().startsWith("no usable output after retry"), e.reason());
+        assertEquals("STOPPED: shortlist title pass failed (" + e.reason() + "); set SHORTLIST_AI_REQUIRED=off to match by labels only",
+                e.consoleLine());
+        assertEquals(e.consoleLine(), e.getMessage());
+        assertFalse(e.costCap());
+        assertEquals("block:shortlist_ai_failed", ShortlistAiFailedException.FLAG);
+        // two title attempts, no matching call
+        Mockito.verify(llm, Mockito.times(2)).generateWithEffort(Mockito.startsWith(SYSTEM_START), Mockito.any(), Mockito.any(),
+                Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+        Mockito.verify(llm, Mockito.never()).generateWithEffort(Mockito.startsWith("# System Prompt"), Mockito.any(), Mockito.any(),
+                Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+    }
+
+    @Test
+    void aCallErrorStopsTheNoticeBeforeTheMatchingCall_namingTheError() {
+        Mockito.when(llm.generateWithEffort(Mockito.startsWith(SYSTEM_START), Mockito.any(), Mockito.any(), Mockito.anyInt(),
+                Mockito.any(), Mockito.anyBoolean())).thenThrow(new com.noticedesk.api.service.llm.LlmException(
+                "anthropic error: HTTP 400 - temperature is deprecated for this model"));
+        IssueMatchingAgent m = matcher();
+
+        ShortlistAiFailedException e = assertThrows(ShortlistAiFailedException.class,
+                () -> m.matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null));
+
+        assertTrue(e.reason().contains("LlmException") && e.reason().contains("HTTP 400"), e.reason());
+        Mockito.verify(llm, Mockito.never()).generateWithEffort(Mockito.startsWith("# System Prompt"), Mockito.any(), Mockito.any(),
+                Mockito.anyInt(), Mockito.any(), Mockito.anyBoolean());
+    }
+
+    @Test
+    void aRefusalAndABudgetRefusalAlsoStop_butAnAbsentAgentDoesNot() {
+        Mockito.when(llm.generateWithEffort(Mockito.startsWith(SYSTEM_START), Mockito.any(), Mockito.any(), Mockito.anyInt(),
+                Mockito.any(), Mockito.anyBoolean())).thenReturn(new LlmResponse("", MODEL, "anthropic", 10, 0, "refusal"));
+        ShortlistAiFailedException refused = assertThrows(ShortlistAiFailedException.class,
+                () -> matcher().matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null));
+        assertTrue(refused.reason().contains("refused by the model"), refused.reason());
+
+        NoticeCallBudget tiny = new NoticeCallBudget(Integer.MAX_VALUE, new BigDecimal("0.0001"), new ApiUsageLogService(null, props));
+        ShortlistTitleAgent.Outcome o = agent().pickCardsOutcome(CARDS, "scn_73", NOTICE, null, tiny);
+        assertTrue(o.failed());
+        assertTrue(o.failureReason().startsWith("call refused by the budget: "), o.failureReason());
+
+        // the title pass switched off, or no title agent wired: labels only as before, no stop
+        props.getMatching().getShortlist().setAiTitles(false);
+        Mockito.when(llm.generateWithEffort(Mockito.startsWith("# System Prompt"), Mockito.any(), Mockito.any(), Mockito.anyInt(),
+                Mockito.any(), Mockito.anyBoolean())).thenReturn(new LlmResponse(MATCHING_JSON, MODEL, "anthropic", 100, 100));
+        assertEquals(CardShortlister.AI_OFF, matcher().matchNoticeWithOcrText(NOTICE, "scn_73", UUID.randomUUID(), UUID.randomUUID(), null)
+                .shortlist().aiStatus());
+    }
+
+    @Test
+    void aGoodAnswerIsAnOutcomeWithoutAReason() {
+        answer("{\"card_ids\": [\"NDK-001\", \"NDK-003\"]}");
+        ShortlistTitleAgent.Outcome o = agent().pickCardsOutcome(CARDS, "scn_73", NOTICE, null, null);
+        assertFalse(o.failed());
+        assertNull(o.failureReason());
+        assertEquals(Set.of("NDK-001", "NDK-003"), o.picks().cardIds());
+        assertEquals("not available", new ShortlistTitleAgent(props, om, usage, null).pickCardsOutcome(CARDS, "scn_73", NOTICE, null, null)
+                .failureReason());
     }
 
     @Test

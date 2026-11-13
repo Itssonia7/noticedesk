@@ -19,6 +19,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 @Slf4j
 public class AnthropicLlmProvider implements LlmProvider {
@@ -28,6 +30,17 @@ public class AnthropicLlmProvider implements LlmProvider {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     /** Cap used before max_tokens became configurable; kept for the legacy constructors. */
     private static final int LEGACY_MAX_TOKENS_CEILING = 16000;
+    /**
+     * Model name patterns known to reject the {@code temperature} field (HTTP 400 "temperature is deprecated for this
+     * model"): the 4.x families, every 5-5 model (haiku / sonnet / opus and any other {@code -5-5} suffix).
+     */
+    private static final Pattern KNOWN_NO_TEMPERATURE_MODELS = Pattern.compile(
+            "opus-4|sonnet-4|haiku-4|claude-haiku-5-5|claude-sonnet-5-5|claude-opus-5-5|-5-5(?![0-9])");
+    /**
+     * Models that rejected {@code temperature} at run time (HTTP 400 naming the field as deprecated / not supported),
+     * remembered for the life of the process so no later call of any instance sends it to them again.
+     */
+    private static final Set<String> LEARNED_NO_TEMPERATURE_MODELS = ConcurrentHashMap.newKeySet();
 
     private final String model;
     private final RestClient restClient;
@@ -163,11 +176,48 @@ public class AnthropicLlmProvider implements LlmProvider {
 
     private LlmResponse call(String systemPrompt, String cachedUserPrefix, String userPrompt, String targetModel,
                              int maxOutputTokens, double temperature, String effort, boolean cacheSystemPrompt) {
+        String activeModel = (targetModel != null && !targetModel.isBlank()) ? targetModel.trim() : this.model;
+        ObjectNode body = buildRequestBody(systemPrompt, cachedUserPrefix, userPrompt, activeModel, maxOutputTokens,
+                temperature, effort, cacheSystemPrompt);
         try {
-            String activeModel = (targetModel != null && !targetModel.isBlank()) ? targetModel.trim() : this.model;
-            ObjectNode body = buildRequestBody(systemPrompt, cachedUserPrefix, userPrompt, activeModel, maxOutputTokens,
-                    temperature, effort, cacheSystemPrompt);
+            return post(body, activeModel);
+        } catch (LlmException e) {
+            // a model that rejects the temperature field: retry the same request once without it, and never send it
+            // to that model again in this process (the known list cannot name every future model)
+            if (body.has("temperature") && isTemperatureRejection(e)) {
+                LEARNED_NO_TEMPERATURE_MODELS.add(activeModel.toLowerCase(Locale.ROOT));
+                log.warn("anthropic_temperature_rejected model={}: retrying once without the temperature field; "
+                        + "no later call sends it to this model", activeModel);
+                body.remove("temperature");
+                return post(body, activeModel);
+            }
+            throw e;
+        }
+    }
 
+    /**
+     * True for an HTTP 400 whose error message names the temperature field as deprecated / not supported for the
+     * model (transient and fatal errors are never read this way).
+     */
+    static boolean isTemperatureRejection(LlmException e) {
+        if (e instanceof LlmTransientException || e instanceof LlmFatalException || e.getMessage() == null) return false;
+        String m = e.getMessage().toLowerCase(Locale.ROOT);
+        return m.contains("http 400") && m.contains("temperature") && (m.contains("deprecated") || m.contains("not supported"));
+    }
+
+    /** Models learnt to reject temperature in this process (lower case); for tests and diagnostics. */
+    static Set<String> learnedNoTemperatureModels() {
+        return Set.copyOf(LEARNED_NO_TEMPERATURE_MODELS);
+    }
+
+    /** Forgets the models learnt to reject temperature (tests). */
+    static void forgetLearnedNoTemperatureModels() {
+        LEARNED_NO_TEMPERATURE_MODELS.clear();
+    }
+
+    /** One POST of {@code body}; every failure is an {@link LlmException} (transient / fatal / plain). */
+    private LlmResponse post(ObjectNode body, String activeModel) {
+        try {
             String responseBody = restClient.post()
                     .uri("")
                     .body(MAPPER.writeValueAsString(body))
@@ -198,7 +248,9 @@ public class AnthropicLlmProvider implements LlmProvider {
     /**
      * Builds the Messages API request body. Models in {@code effortModels} always think: they get
      * {@code output_config.effort} (when configured) and never thinking/temperature/top_p/top_k, which
-     * those models reject. Other models keep the legacy shape (temperature when > 0 and accepted).
+     * those models reject. Other models keep the legacy shape (temperature when > 0 and accepted); a model that
+     * {@link #modelDeprecatesTemperature rejects the field} (known family, or learnt from an HTTP 400 in this process)
+     * never gets one.
      */
     ObjectNode buildRequestBody(String systemPrompt, String userPrompt, String activeModel, int maxOutputTokens,
                                 double temperature, String effort, boolean cacheSystemPrompt) {
@@ -321,8 +373,13 @@ public class AnthropicLlmProvider implements LlmProvider {
         return Set.copyOf(out);
     }
 
-    private boolean modelDeprecatesTemperature(String modelName) {
-        String lower = modelName.toLowerCase();
-        return lower.contains("opus-4") || lower.contains("sonnet-4") || lower.contains("haiku-4");
+    /**
+     * True when {@code temperature} must not be sent to the model: a known family ({@link #KNOWN_NO_TEMPERATURE_MODELS})
+     * or a model that rejected the field earlier in this process.
+     */
+    static boolean modelDeprecatesTemperature(String modelName) {
+        if (modelName == null) return false;
+        String lower = modelName.trim().toLowerCase(Locale.ROOT);
+        return KNOWN_NO_TEMPERATURE_MODELS.matcher(lower).find() || LEARNED_NO_TEMPERATURE_MODELS.contains(lower);
     }
 }

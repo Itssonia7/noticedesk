@@ -1382,6 +1382,43 @@ commit, one test (synthetic rows, invented names, allow-listed GSTINs; no live c
   held data that a later commit removed is green, like a push scan of the same head; a push still scans each new
   commit. Covered by the new `--range-diff` cases in `scripts/test_check_sensitive_data.sh`.
 
+## (b36) Hotfixes from the live PDF run of 13-11-2026 on `2879f38` (13-11-2026)
+
+Three defects seen in one live run (PDF runner, a real DRC-01 after a Section 65 audit). Each fix is one commit on
+`feature/v7-hotfix`, proved offline (stubbed HTTP server, mocked providers, recorded titles; no model call).
+
+- **Fix 1: the shortlist title pass crashed and the run silently paid for the rest.** Log:
+  `ShortlistTitleAgent (269 titles) ... anthropic error: HTTP 400 - "temperature is deprecated for this model"` (the
+  cheap title model, not in `anthropic.effort-models`, got the `temperature: 0` of (b27)), then
+  `produced no usable output; shortlist by labels only`, the matcher saw 17 cards and answered none on 8 of 9 grounds,
+  and the writers spent INR 83 on a notice that should have stopped.
+  - (a) `AnthropicLlmProvider`: the temperature field is never sent to a model known to reject it, and the rule is no
+    longer a hard-coded 4.x list: `KNOWN_NO_TEMPERATURE_MODELS` covers the 4.x families, the three 5-5 models and any
+    `-5-5` suffix; on top of that an HTTP 400 whose message names `temperature` as `deprecated` / `not supported`
+    (`isTemperatureRejection`: never a transient or fatal error) makes the provider retry the SAME request once without
+    the field and remember the model in-process (`LEARNED_NO_TEMPERATURE_MODELS`, static, shared by every instance), so
+    no later call sends it. Any other 400 is thrown as before, unretried.
+  - (b) **`matching.shortlist.ai-required`** (env **`SHORTLIST_AI_REQUIRED`**, default true). When the title pass is on
+    and available but fails or returns nothing usable, `IssueMatchingAgent.buildShortlist` throws
+    `ShortlistAiFailedException` (a `MatchingFailedException`, so every existing runner catch still works) BEFORE the
+    matching call; the live rig prints `STOPPED: shortlist title pass failed (<reason>); set SHORTLIST_AI_REQUIRED=off
+    to match by labels only`, then `Flags: [block:shortlist_ai_failed]`, records the notice as
+    `STOPPED (block:shortlist_ai_failed: <reason>)` and goes on to the next notice (no run stop, no abort). The reason
+    comes from `WriterCall` through a new optional `onFailure` consumer (budget refusal, exception class and message,
+    model refusal, "no usable output after retry (<validation error>)"); `ShortlistTitleAgent.pickCardsOutcome` returns
+    `Outcome(picks, failureReason)`, `pickCards` is unchanged for its other callers (dry run). With `ai-required=off`
+    the (b21) behaviour stays: labels only, `warn:shortlist_ai_skipped`. A title pass switched off
+    (`MATCHING_SHORTLIST_AI=false`), in stub mode or not wired is not a failure. An empty `card_ids` list is still a
+    valid answer.
+  - Tests: `AnthropicLlmProviderTest` (5-5 names and any `-5-5` suffix never get temperature, fixed or legacy; a 400
+    "temperature is deprecated" against a stubbed HTTP server -> one retry without the field, same max_tokens and
+    messages, model remembered, a later instance makes one request without it; "not supported" read the same way; an
+    unrelated 400 not retried and not remembered), `ShortlistTitleAgentTest` (default on; garbage twice -> stop with
+    the console line, two title attempts and no matching call; a call error -> stop naming the exception; a model
+    refusal and a budget refusal -> stop / failure reason; switch off -> labels only and the matching call made;
+    `Outcome` for a good answer and for an absent agent), `V7ShortlistInPipelineTest` (the exception passes through
+    the pipeline with no writer call; it is a `MatchingFailedException`; the runner's status line).
+
 ## (c) Verification
 
 - Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run

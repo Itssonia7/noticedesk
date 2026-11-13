@@ -9,6 +9,7 @@ import com.noticedesk.api.agent.IndianKanoonClient;
 import com.noticedesk.api.agent.IssueMatchingAgent;
 import com.noticedesk.api.agent.NewIssueDraftingAgent;
 import com.noticedesk.api.agent.PartialDraftingAgent;
+import com.noticedesk.api.agent.ShortlistAiFailedException;
 import com.noticedesk.api.agent.ShortlistTitleAgent;
 import com.noticedesk.api.agent.TemplateVariableAgent;
 import com.noticedesk.api.config.AppProperties;
@@ -351,6 +352,12 @@ final class V7LiveRig {
         DraftingPipelineResult result;
         try {
             result = pipelineService.runPipeline(input, TENANT, noticeUuid);
+        } catch (ShortlistAiFailedException e) {
+            // the required title pass failed: stopped BEFORE the matching call; the run goes on to the next notice
+            BigDecimal spent = ledger.totalInrSince(callCheckpoint).add(pre);
+            System.out.printf("Notice %s: %s | cost %.4f INR%n", noticeId, e.consoleLine(), spent.doubleValue());
+            System.out.println("Flags: [" + ShortlistAiFailedException.FLAG + "]");
+            return new NoticeOutcome(stoppedStatus(e), spent, false, null, null, null);
         } catch (MatchingFailedException e) {
             // no scaffold draft: the notice is marked failed and the run moves on
             BigDecimal spent = ledger.totalInrSince(callCheckpoint).add(pre);
@@ -444,6 +451,11 @@ final class V7LiveRig {
         }
         return new NoticeOutcome("DRAFTED (" + blocking + " blocking checks failed)", BigDecimal.valueOf(noticeTotalInr),
                 false, null, result, draftFile);
+    }
+
+    /** Summary status of a notice stopped before matching by the required title pass. */
+    static String stoppedStatus(ShortlistAiFailedException e) {
+        return "STOPPED (" + ShortlistAiFailedException.FLAG + ": " + e.reason() + ")";
     }
 
     static UUID noticeUuid(String noticeId) {

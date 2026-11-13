@@ -28,7 +28,28 @@ class AnthropicLlmProviderTest {
     @AfterEach
     void stop() {
         if (server != null) server.stop(0);
+        AnthropicLlmProvider.forgetLearnedNoTemperatureModels();
     }
+
+    /** A local server answering every request from {@code handler}; returns the messages URL. */
+    private String serve(java.util.function.Function<String, String[]> handler) throws Exception {
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            String[] statusAndBody = handler.apply(request);
+            byte[] bytes = statusAndBody[1].getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(Integer.parseInt(statusAndBody[0]), bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+        server.start();
+        return "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/messages";
+    }
+
+    private static final String TEMPERATURE_400 = "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\","
+            + "\"message\":\"temperature is deprecated for this model\"}}";
 
     private static String fixture(String name) throws Exception {
         try (InputStream is = new ClassPathResource("anthropic/" + name).getInputStream()) {
@@ -181,6 +202,82 @@ class AnthropicLlmProviderTest {
         // models that deprecate temperature never get one either
         assertFalse(((AnthropicLlmProvider) providerFor("claude-sonnet-4-20250514").withTemperature(0.0))
                 .buildRequestBody("s", "u", "claude-sonnet-4-20250514", 4000, 0.0, null, true).has("temperature"));
+    }
+
+    @Test
+    void fiveFiveModels_neverGetTemperature_evenWhenFixed() {
+        // sampling path (none of these is in the test's effort list): the known rule must still drop the field
+        for (String model : List.of("claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5-20261001",
+                "claude-future-5-5", "claude-sonnet-4-20250514")) {
+            AnthropicLlmProvider p = new AnthropicLlmProvider("k", model, 10.0, null, List.of(), 32000);
+            assertTrue(AnthropicLlmProvider.modelDeprecatesTemperature(model), model);
+            ObjectNode fixed = ((AnthropicLlmProvider) p.withTemperature(0.0)).buildRequestBody("s", "u", model, 4000, 0.0, "low", true);
+            assertFalse(fixed.has("temperature"), "withTemperature must not send temperature to " + model);
+            assertFalse(p.buildRequestBody("s", "u", model, 4000, 0.2, null, true).has("temperature"), "legacy path " + model);
+        }
+        // a model that takes one still gets it (the rule is not "every 5.x model")
+        assertFalse(AnthropicLlmProvider.modelDeprecatesTemperature("claude-3-5-haiku-20241022"));
+        assertFalse(AnthropicLlmProvider.modelDeprecatesTemperature("claude-test-sampler-1"));
+    }
+
+    @Test
+    void temperatureRejectedByA400_isRetriedOnceWithoutIt_andTheModelIsRemembered() throws Exception {
+        List<JsonNode> requests = new java.util.concurrent.CopyOnWriteArrayList<>();
+        String ok = fixture("multi_text.json");
+        String url = serve(request -> {
+            JsonNode sent;
+            try {
+                sent = MAPPER.readTree(request);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            requests.add(sent);
+            return sent.has("temperature") ? new String[]{"400", TEMPERATURE_400} : new String[]{"200", ok};
+        });
+        String model = "claude-test-sampler-1";   // not in any known list: the rule has to be learnt from the 400
+        assertFalse(AnthropicLlmProvider.modelDeprecatesTemperature(model));
+        LlmProvider fixed = new AnthropicLlmProvider("test-key-not-real", model, 10.0, null, EFFORT_MODELS, 32000, url)
+                .withTemperature(0.0);
+
+        LlmResponse r = fixed.generateWithEffort("system prompt", "user prompt", model, 4000, "low", true);
+
+        assertFalse(r.failed(), "the retry without temperature is the call's result");
+        assertEquals(2, requests.size(), "one 400, one retry");
+        assertTrue(requests.get(0).has("temperature"), "the first attempt sent temperature 0");
+        assertFalse(requests.get(1).has("temperature"), "the retry is the same request without the field");
+        assertEquals(requests.get(0).path("max_tokens"), requests.get(1).path("max_tokens"));
+        assertEquals(requests.get(0).path("messages"), requests.get(1).path("messages"));
+        assertTrue(AnthropicLlmProvider.modelDeprecatesTemperature(model), "remembered in-process");
+        assertTrue(AnthropicLlmProvider.learnedNoTemperatureModels().contains(model));
+
+        // a later call (another instance of the same model) sends no temperature and makes one request
+        LlmProvider again = new AnthropicLlmProvider("test-key-not-real", model, 10.0, null, EFFORT_MODELS, 32000, url)
+                .withTemperature(0.0);
+        assertFalse(again.generateWithEffort("system prompt", "user prompt", model, 4000, "low", true).failed());
+        assertEquals(3, requests.size());
+        assertFalse(requests.get(2).has("temperature"));
+    }
+
+    @Test
+    void temperatureRejection_isAlsoReadFromNotSupported_butOther400sAreNotRetried() throws Exception {
+        assertTrue(AnthropicLlmProvider.isTemperatureRejection(new LlmException(
+                "anthropic error: HTTP 400 - {\"error\":{\"message\":\"`temperature` is not supported for this model\"}}")));
+        assertFalse(AnthropicLlmProvider.isTemperatureRejection(new LlmException("anthropic error: HTTP 400 - max_tokens too large")));
+        assertFalse(AnthropicLlmProvider.isTemperatureRejection(new LlmTransientException("HTTP 529 temperature deprecated")));
+        assertFalse(AnthropicLlmProvider.isTemperatureRejection(new LlmFatalException("HTTP 400 temperature deprecated billing")));
+
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        String url = serve(request -> {
+            calls.incrementAndGet();
+            return new String[]{"400", "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"max_tokens: too large\"}}"};
+        });
+        LlmProvider p = new AnthropicLlmProvider("test-key-not-real", "claude-test-sampler-2", 10.0, null, EFFORT_MODELS, 32000, url)
+                .withTemperature(0.0);
+        LlmException e = assertThrows(LlmException.class,
+                () -> p.generateWithEffort("system prompt", "user prompt", "claude-test-sampler-2", 4000, "low", true));
+        assertTrue(e.getMessage().contains("HTTP 400"), e.getMessage());
+        assertEquals(1, calls.get(), "an unrelated 400 is not retried");
+        assertFalse(AnthropicLlmProvider.modelDeprecatesTemperature("claude-test-sampler-2"));
     }
 
     @Test

@@ -154,6 +154,23 @@ class V7ShortlistInPipelineTest {
     }
 
     @Test
+    void aRequiredTitlePassThatFailedStopsTheNoticeBeforeAnyWriterCall() {
+        IssueMatchingAgent matcher = mock(IssueMatchingAgent.class);
+        when(matcher.matchNoticeWithOcrText(anyString(), anyString(), any(), any(), any()))
+                .thenThrow(new com.noticedesk.api.agent.ShortlistAiFailedException("call failed (attempt 1): LlmException HTTP 400"));
+        NewIssueDraftingAgent newIssue = mock(NewIssueDraftingAgent.class);
+
+        com.noticedesk.api.agent.ShortlistAiFailedException e = assertThrows(com.noticedesk.api.agent.ShortlistAiFailedException.class,
+                () -> pipeline(matcher, newIssue).runPipeline(input()));
+
+        assertTrue(e instanceof MatchingFailedException, "the live rigs' MatchingFailedException path still catches it");
+        assertEquals("STOPPED: shortlist title pass failed (call failed (attempt 1): LlmException HTTP 400); "
+                + "set SHORTLIST_AI_REQUIRED=off to match by labels only", e.consoleLine());
+        assertEquals("STOPPED (block:shortlist_ai_failed: call failed (attempt 1): LlmException HTTP 400)", V7LiveRig.stoppedStatus(e));
+        verifyNoInteractions(newIssue);
+    }
+
+    @Test
     void runnerMatchedIssuesLine() {
         assertEquals("none", V7LivePipelineRunnerTest.matchedIssuesLine(List.of()));
         assertEquals("#1 full [CARD-A, CARD-B]; #2 none []", V7LivePipelineRunnerTest.matchedIssuesLine(List.of(
