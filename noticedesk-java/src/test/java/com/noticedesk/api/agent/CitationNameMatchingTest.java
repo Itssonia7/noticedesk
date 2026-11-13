@@ -13,6 +13,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -145,8 +147,119 @@ class CitationNameMatchingTest {
 
         when(ik.search(anyString(), eq("Zorblax Fictional Industries v. Commissioner of Imaginary Taxes"))).thenReturn(List.of(
                 new IkDoc("4", "Commissioner Of Income Tax vs Zorbax Industries on 1 January, 2003", "Supreme Court of India", "2003-01-01")));
+        when(ik.search(anyString(), eq("zorblax fictional commissioner imaginary"))).thenReturn(List.of());
         var z = agent.verifyAiCitations(List.of(new RawAiCitation("Zorblax Fictional Industries v. Commissioner of Imaginary Taxes", "Supreme Court", 2003, null, "x")),
                 UUID.randomUUID()).citations().get(0);
         assertEquals("NOT_FOUND", z.status());
+        assertEquals("No judgment with this case name among the 1 hit(s) for \"Zorblax Fictional Industries v. Commissioner of Imaginary Taxes\""
+                + " and the 0 hit(s) for \"zorblax fictional commissioner imaginary\"", z.details());
+    }
+
+    // ------------------------------------------------------------------ fix 3 (13-11-2026): top hits, second shorter query
+
+    @Test
+    void shortQueryIsTheTwoPartiesKeyWords_forLongNamesOnly() {
+        assertEquals("bharti airtel union india", CitationVerificationAgent.shortQuery("Bharti Airtel Ltd v. Union of India"));
+        assertEquals("bharti airtel union india", CitationVerificationAgent.shortQuery("Bharti Airtel Ltd v. Union of India (2021) 10 SCC 1"));
+        assertEquals("hindustan steel state orissa", CitationVerificationAgent.shortQuery("Hindustan Steel Ltd v. State of Orissa"));
+        assertEquals("suncraft energy assistant commissioner",
+                CitationVerificationAgent.shortQuery("Suncraft Energy Pvt Ltd v. Assistant Commissioner, State Tax"));
+        assertEquals("commissioner central brindavan beverages",
+                CitationVerificationAgent.shortQuery("Commissioner of Central Excise v. Brindavan Beverages Pvt Ltd"));
+        assertEquals("mangalore chemicals deputy commissioner",
+                CitationVerificationAgent.shortQuery("Mangalore Chemicals and Fertilizers Ltd v. Deputy Commissioner of Commercial Taxes"));
+        // short names (fewer than 7 tokens as searched): no second query
+        assertNull(CitationVerificationAgent.shortQuery("Diya Agencies v. State Tax Officer"));
+        assertNull(CitationVerificationAgent.shortQuery("Case Four v. State Tax Officer"));
+        assertNull(CitationVerificationAgent.shortQuery("Nobody v. Nothing"));
+        assertNull(CitationVerificationAgent.shortQuery(null));
+        // one party only
+        assertNull(CitationVerificationAgent.shortQuery("In re Safari Retreats Private Limited and another application"));
+        assertEquals(7, CitationVerificationAgent.LONG_NAME_TOKENS);
+    }
+
+    private static List<IkDoc> fiveOtherHits() {
+        return List.of(
+                new IkDoc("201", "Vodafone Idea Ltd vs Union Of India on 1 March, 2022", "Bombay High Court", "2022-03-01"),
+                new IkDoc("202", "Bharti Hexacom Ltd vs Commissioner Of Income Tax on 2 April, 2019", "Delhi High Court", "2019-04-02"),
+                new IkDoc("203", "Union Of India vs Reliance Jio Infocomm Ltd on 3 May, 2020", "Supreme Court of India", "2020-05-03"),
+                new IkDoc("204", "Bharti Airtel Ltd vs State Of Karnataka on 4 June, 2018", "Karnataka High Court", "2018-06-04"),
+                new IkDoc("205", "Tata Teleservices Ltd vs Union Of India on 5 July, 2017", "Delhi High Court", "2017-07-05"));
+    }
+
+    private static CitationVerificationAgent agent(IndianKanoonClient ik) {
+        AppProperties props = new AppProperties();
+        props.getCitation().setIndiankanoonApiToken("tok");
+        return new CitationVerificationAgent(new ObjectMapper(), props, null, null, ik);
+    }
+
+    @Test
+    void theMatchingTitleIsTakenFromAnyOfTheTopHits_notOnlyTheFirst() throws Exception {
+        IndianKanoonClient ik = mock(IndianKanoonClient.class);
+        List<IkDoc> hits = new java.util.ArrayList<>(fiveOtherHits());
+        hits.add(new IkDoc("206", "Union Of India vs Bharti Airtel Ltd. & Ors on 28 October, 2021", "Supreme Court of India", "2021-10-28"));
+        when(ik.search(anyString(), eq("Bharti Airtel Ltd v. Union of India"))).thenReturn(hits);
+
+        var result = agent(ik).verifyAiCitations(List.of(new RawAiCitation("Bharti Airtel Ltd v. Union of India", "Supreme Court", 2021, null, "x")),
+                UUID.randomUUID());
+        var r = result.citations().get(0);
+
+        assertEquals("VERIFIED", r.status(), r.details());
+        assertEquals("https://indiankanoon.org/doc/206/", r.sourceUrl());
+        assertEquals(6, CitationVerificationAgent.firstMatchingHit("Bharti Airtel Ltd v. Union of India", hits).position());
+        assertEquals(1, result.summary().get("ik_calls"), "the first search matched: no second query");
+        verify(ik, times(1)).search(anyString(), anyString());
+    }
+
+    @Test
+    void aLongNameWithNoMatchingTitleGetsOneShorterSecondSearch_countedAsASecondCall() throws Exception {
+        IndianKanoonClient ik = mock(IndianKanoonClient.class);
+        when(ik.search(anyString(), eq("Bharti Airtel Ltd v. Union of India"))).thenReturn(fiveOtherHits());
+        when(ik.search(anyString(), eq("bharti airtel union india"))).thenReturn(List.of(
+                new IkDoc("301", "Airtel Payments Bank vs Union Of India on 9 September, 2023", "Delhi High Court", "2023-09-09"),
+                new IkDoc("302", "Union Of India vs Bharti Airtel Ltd. & Ors on 28 October, 2021", "Supreme Court of India", "2021-10-28")));
+
+        var result = agent(ik).verifyAiCitations(List.of(new RawAiCitation("Bharti Airtel Ltd v. Union of India", "Supreme Court", 2021, null, "x")),
+                UUID.randomUUID());
+
+        assertEquals("VERIFIED", result.citations().get(0).status(), result.citations().get(0).details());
+        assertEquals("https://indiankanoon.org/doc/302/", result.citations().get(0).sourceUrl());
+        assertEquals(2, result.summary().get("ik_calls"), "the second search is a second priced call");
+        verify(ik).search(anyString(), eq("Bharti Airtel Ltd v. Union of India"));
+        verify(ik).search(anyString(), eq("bharti airtel union india"));
+        verify(ik, times(2)).search(anyString(), anyString());
+    }
+
+    @Test
+    void noSecondSearchForAShortName_orWhenTheCallCapIsReached() throws Exception {
+        IndianKanoonClient ik = mock(IndianKanoonClient.class);
+        when(ik.search(anyString(), anyString())).thenReturn(fiveOtherHits());
+
+        // short name: one search, NOT_FOUND names the hit count and the query
+        var shortName = agent(ik).verifyAiCitations(List.of(new RawAiCitation("Diya Agencies v. State Tax Officer", "Kerala High Court", 2023, null, "x")),
+                UUID.randomUUID());
+        assertEquals("NOT_FOUND", shortName.citations().get(0).status());
+        assertEquals("No judgment with this case name among the 5 hit(s) for \"Diya Agencies v. State Tax Officer\"", shortName.citations().get(0).details());
+        assertEquals(1, shortName.summary().get("ik_calls"));
+        verify(ik, times(1)).search(anyString(), anyString());
+
+        // long name, both searches miss: NOT_FOUND names both queries, two calls
+        var both = agent(ik).verifyAiCitations(List.of(new RawAiCitation("Hindustan Steel Ltd v. State of Orissa", "Supreme Court", 1969, null, "x")),
+                UUID.randomUUID());
+        assertEquals("NOT_FOUND", both.citations().get(0).status());
+        assertEquals("No judgment with this case name among the 5 hit(s) for \"Hindustan Steel Ltd v. State of Orissa\""
+                + " and the 5 hit(s) for \"hindustan steel state orissa\"", both.citations().get(0).details());
+        assertEquals(2, both.summary().get("ik_calls"));
+
+        // call cap of 1: the second search is not made and the reason is named
+        AppProperties props = new AppProperties();
+        props.getCitation().setIndiankanoonApiToken("tok");
+        props.getCitation().setMaxCallsPerDraft(1);
+        CitationVerificationAgent capped = new CitationVerificationAgent(new ObjectMapper(), props, null, null, ik);
+        var cappedResult = capped.verifyAiCitations(List.of(new RawAiCitation("Hindustan Steel Ltd v. State of Orissa", "Supreme Court", 1969, null, "x")),
+                UUID.randomUUID());
+        assertEquals("NOT_FOUND", cappedResult.citations().get(0).status());
+        assertTrue(cappedResult.citations().get(0).details().endsWith("; no second search (IK call cap reached)"), cappedResult.citations().get(0).details());
+        assertEquals(1, cappedResult.summary().get("ik_calls"));
     }
 }

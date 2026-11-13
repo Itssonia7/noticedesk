@@ -242,6 +242,8 @@ final class V7LiveRig {
         TemplateVariableAgent variableAgent = new TemplateVariableAgent(props, om, usageLogService, llmFactory, catalogueService);
 
         IndianKanoonClient ikClient = new IndianKanoonClient(om);
+        // the live report shows every IndianKanoon search (formInput, status, hit count, first five titles) and comparison
+        ikClient.setSearchLogSink(line -> System.out.println("  " + line));
         CitationVerificationAgent citationAgent = new CitationVerificationAgent(om, props, usageLogService, jdbc, ikClient);
 
         TemplateFillService fillService = new TemplateFillService(jdbc.getJdbcTemplate(), props, om);

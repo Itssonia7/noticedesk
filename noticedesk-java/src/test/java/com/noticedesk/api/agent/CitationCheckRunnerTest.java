@@ -59,14 +59,18 @@ class CitationCheckRunnerTest {
 
         ApiUsageLogService usage = new ApiUsageLogService(null, props);   // no database: prints only
         RunCostLedger ledger = RunCostLedger.attach(usage, System.out);
-        CitationVerificationAgent agent = new CitationVerificationAgent(new ObjectMapper(), props, usage, null,
-                new IndianKanoonClient(new ObjectMapper()));
+        IndianKanoonClient ik = new IndianKanoonClient(new ObjectMapper());
+        // every search and comparison on the console: the exact formInput, HTTP status, hit count, the first five
+        // titles with docsource and publishdate, and which hit (if any) matched the cited name
+        ik.setSearchLogSink(line -> System.out.println("  " + line));
+        CitationVerificationAgent agent = new CitationVerificationAgent(new ObjectMapper(), props, usage, null, ik);
         NoticeCallBudget budget = NoticeCallBudget.fromProperties(props, usage);
 
         System.out.printf(Locale.ROOT, "=== Citation check only: %d citation(s), IK call cap %d, price per search INR %s, per fragment INR %s%n",
                 citations.size(), props.getCitation().getMaxCallsPerDraft(),
                 usage.indianKanoonCostInr(ApiUsageLogService.IK_SEARCH).toPlainString(),
                 usage.indianKanoonCostInr(ApiUsageLogService.IK_FRAGMENT).toPlainString());
+        System.out.println("--- searches (first query as cited; a long name with no matching title gets one shorter second query)");
 
         CitationVerificationResult result;
         try {
@@ -76,7 +80,7 @@ class CitationCheckRunnerTest {
             return;
         }
 
-        System.out.println("--- results");
+        System.out.println("--- results (the per-search lines above show what IndianKanoon returned for each query)");
         for (VerifiedCitation vc : result.citations()) {
             System.out.printf(Locale.ROOT, "  %-16s %s (%s, %s)%s%n", vc.status(), vc.caseName(),
                     vc.court() != null ? vc.court() : "court not given", vc.year() != null ? vc.year() : "year not given",

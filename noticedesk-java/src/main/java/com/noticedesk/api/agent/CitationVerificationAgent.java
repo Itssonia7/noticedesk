@@ -275,7 +275,15 @@ public class CitationVerificationAgent {
                 return new VerifiedCitation(raw.caseName(), raw.caseName(), raw.caseName(), "NOT_FOUND", null, null, 0.0, "stripped", "No matching cases found on IndianKanoon", raw.court(), raw.year(), raw.quotedText());
             }
 
+            // the first of the top hits whose title names the case; the first hit when none does (legacy behaviour)
             Map<String, Object> doc = docs.get(0);
+            for (int i = 0; i < docs.size() && i < IndianKanoonClient.LOGGED_TOP_HITS; i++) {
+                Object t = docs.get(i).get("title");
+                if (t != null && namesMatch(raw.caseName(), t.toString())) {
+                    doc = docs.get(i);
+                    break;
+                }
+            }
             String docId = doc.get("tid") != null ? doc.get("tid").toString() : null;
             String title = doc.get("title") != null ? doc.get("title").toString() : "";
             String docUrl = docId != null ? "https://indiankanoon.org/doc/" + docId + "/" : null;
@@ -455,17 +463,34 @@ public class CitationVerificationAgent {
         try {
             callsMade[0]++;
             recordIkCall(ApiUsageLogService.IK_SEARCH, noticeId, budget);
-            List<IndianKanoonClient.IkDoc> docs = ikClient.search(token, searchQuery(r.caseName()));
-            IndianKanoonClient.IkDoc match = null;
-            for (IndianKanoonClient.IkDoc d : docs) {
-                if (namesMatch(r.caseName(), d.title())) {
-                    match = d;
-                    break;
+            String query = searchQuery(r.caseName());
+            List<IndianKanoonClient.IkDoc> docs = ikClient.search(token, query);
+            Hit hit = firstMatchingHit(r.caseName(), docs);
+            noteComparison(r.caseName(), query, docs, hit);
+            String notFoundDetails = "No judgment with this case name among the " + docs.size() + " hit(s) for \"" + query + "\"";
+
+            if (hit == null) {
+                // a long cited name: one more, shorter search of the two parties' key words (a second priced call)
+                String shortQuery = shortQuery(r.caseName());
+                if (shortQuery != null) {
+                    if (callsMade[0] >= maxCalls) {
+                        notFoundDetails += "; no second search (IK call cap reached)";
+                    } else if (costCapRefusal(budget, ApiUsageLogService.IK_SEARCH) != null) {
+                        notFoundDetails += "; no second search (per-notice cost cap)";
+                    } else {
+                        callsMade[0]++;
+                        recordIkCall(ApiUsageLogService.IK_SEARCH, noticeId, budget);
+                        List<IndianKanoonClient.IkDoc> second = ikClient.search(token, shortQuery);
+                        hit = firstMatchingHit(r.caseName(), second);
+                        noteComparison(r.caseName(), shortQuery, second, hit);
+                        notFoundDetails += " and the " + second.size() + " hit(s) for \"" + shortQuery + "\"";
+                    }
                 }
             }
-            if (match == null) {
-                return v7Result(r, NOT_FOUND, null, "stripped", "No judgment with this case name found on IndianKanoon");
+            if (hit == null) {
+                return v7Result(r, NOT_FOUND, null, "stripped", notFoundDetails);
             }
+            IndianKanoonClient.IkDoc match = hit.doc();
             String url = match.docId() != null ? "https://indiankanoon.org/doc/" + match.docId() + "/" : null;
 
             List<String> mismatches = new ArrayList<>();
@@ -502,6 +527,30 @@ public class CitationVerificationAgent {
             log.warn("IndianKanoon check failed for one citation: {}", e.getClass().getSimpleName());
             return v7Result(r, NOT_CHECKED, null, "flagged", "IndianKanoon API error");
         }
+    }
+
+    /** A search hit whose title names the cited case: its 1-based position in the answer and the document. */
+    record Hit(int position, IndianKanoonClient.IkDoc doc) {}
+
+    /**
+     * The first hit whose title names the cited case ({@link #namesMatch}), over EVERY hit of the answer (the API
+     * returns a page of 10, so at least the top {@value IndianKanoonClient#LOGGED_TOP_HITS}), or null.
+     */
+    static Hit firstMatchingHit(String citedName, List<IndianKanoonClient.IkDoc> docs) {
+        if (docs == null) return null;
+        for (int i = 0; i < docs.size(); i++) {
+            IndianKanoonClient.IkDoc d = docs.get(i);
+            if (d != null && namesMatch(citedName, d.title())) return new Hit(i + 1, d);
+        }
+        return null;
+    }
+
+    /** One INFO line per search comparison (case names and judgment titles only, never notice text). */
+    private void noteComparison(String citedName, String query, List<IndianKanoonClient.IkDoc> docs, Hit hit) {
+        String line = "ik_compare case=\"" + citedName + "\" query=\"" + query + "\" hits=" + (docs != null ? docs.size() : 0)
+                + " matched=" + (hit != null ? "#" + hit.position() + " \"" + hit.doc().title() + "\"" : "none");
+        if (ikClient != null) ikClient.note(line);
+        else log.info(line);
     }
 
     /** The configured INR price of one IndianKanoon call of {@code kind} (0 when none is configured). */
@@ -667,6 +716,33 @@ public class CitationVerificationAgent {
         s = stripReporterAfterRespondent(s);
         s = s.replaceAll("\\s+", " ").trim();
         return s.isEmpty() ? citedName.trim() : s;
+    }
+
+    /** A cited name with at least this many whitespace-separated tokens (as searched) is "long": a second, shorter search may follow. */
+    static final int LONG_NAME_TOKENS = 7;
+    /** Words of each party kept in the shorter search. */
+    static final int KEY_WORDS_PER_PARTY = 2;
+
+    /**
+     * The second, shorter search for a long cited name whose first search found no matching title: the first
+     * {@value #KEY_WORDS_PER_PARTY} significant words of each party ({@link #partyWords}: suffixes, "M/s", "and others",
+     * brackets and the reporter dropped, abbreviations expanded), e.g. "bharti airtel union india" for
+     * "Bharti Airtel Ltd v. Union of India". Null when the name is short (fewer than {@value #LONG_NAME_TOKENS} tokens),
+     * has one party only, or the shorter query would be the first one again: then no second call is made.
+     */
+    static String shortQuery(String citedName) {
+        String first = searchQuery(citedName);
+        if (first.isBlank() || first.split("\\s+").length < LONG_NAME_TOKENS) return null;
+        List<List<String>> parties = partyWords(first);
+        if (parties.size() < 2) return null;
+        List<String> words = new ArrayList<>();
+        for (int p = 0; p < 2; p++) {
+            List<String> side = parties.get(p);
+            words.addAll(side.subList(0, Math.min(KEY_WORDS_PER_PARTY, side.size())));
+        }
+        String shorter = String.join(" ", words).trim();
+        if (shorter.isEmpty() || shorter.equalsIgnoreCase(first.replaceAll("\\s+", " ").trim())) return null;
+        return shorter;
     }
 
     /** Removes a reporter citation after the respondent only, so a petitioner named "Air India" is never cut at "AIR". */

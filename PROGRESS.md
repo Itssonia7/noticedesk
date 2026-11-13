@@ -1463,8 +1463,64 @@ Three defects seen in one live run (PDF runner, a real DRC-01 after a Section 65
     scn_73 template, `CHECK_PROCEEDING_CONSISTENT` passes; `DRC-01` + Section 74 with no scn_74 template -> the generic
     skeleton and `FLAG_STAGE_TEMPLATE_FALLBACK` warn; the existing "missing stage template is blocked" test unchanged).
 
+- **Fix 3: IndianKanoon live results unexplained.** Live statuses: Bharti Airtel, Suncraft Energy, Diya Agencies,
+  Hindustan Steel v State of Orissa and Brindavan Beverages NOT_FOUND; Safari Retreats and Mohit Minerals VERIFIED;
+  Mangalore Chemicals VERIFIED_PARTIAL. The offline matcher of (b27) accepts the real titles of every NOT_FOUND case, so
+  the first page of hits must not have carried them, and the log said nothing about what came back.
+  - (a) **Per-search log line** (`IndianKanoonClient.search`, INFO and an optional console sink that both live runners
+    set): `ik_search formInput="<exact query>" status=<HTTP> docs=<n> top5=[1. <title> | <docsource> | <publishdate>; ...]`;
+    on a non-200 status the line is written before the error is thrown. The agent adds one line per comparison:
+    `ik_compare case="<cited>" query="<query>" hits=<n> matched=#<position> "<title>"` or `matched=none`. Judgment
+    titles and cited names only; notice text never reaches either line.
+  - (b) **The call as documented**: `POST https://api.indiankanoon.org/search/?formInput=<query>&pagenum=0`, header
+    `Authorization: Token <token>`, no body; `IndianKanoonClient.searchUrl` encodes the query exactly once with
+    `URLEncoder` ("v." and "vs" pass unchanged, "&" -> `%26`, a space -> `+`; decoding once gives the query back, no
+    `%25`); `parseDocs` reads `docs[].tid / title / docsource / publishdate` (a missing `tid` -> null, missing text ->
+    empty). Verified offline against a stub HTTP server with an answer in the live shape (extra fields such as
+    `headline` / `numcites` ignored). Nothing was wrong in the request form itself.
+  - (c) **Every hit is compared** (`firstMatchingHit`): the whole first page (10 hits, so at least the top 5) in order,
+    the first title that names the case wins and its position is logged; the legacy v6 path (`searchIndianKanoon`) now
+    takes the first of the top 5 whose title matches instead of blindly the first hit (the first hit when none does, as
+    before).
+  - (d) **Second, shorter search for a long name** (`shortQuery`): when the first search finds no matching title and the
+    cited name has at least `LONG_NAME_TOKENS` (7) tokens as searched, one more search is made with the first two
+    significant words of each party (`partyWords`: suffixes, "M/s", "and others", brackets and the reporter dropped,
+    abbreviations expanded), e.g. `bharti airtel union india` for "Bharti Airtel Ltd v. Union of India",
+    `hindustan steel state orissa`, `suncraft energy assistant commissioner`. It is a second priced call (`ik_calls`,
+    the usage row, the notice budget) made only then, subject to the call cap and the cost cap (the NOT_FOUND details
+    then say "no second search (IK call cap reached / per-notice cost cap)"); a short name ("Diya Agencies v. State Tax
+    Officer", 6 tokens) gets no second search. NOT_FOUND details now name the hit counts and the queries: "No judgment
+    with this case name among the 10 hit(s) for "..." and the 10 hit(s) for "..."".
+  - (e) `CitationCheckRunnerTest` (live, `ENABLE_E2E_TESTS=true` + `INDIANKANOON_API_TOKEN`) prints the per-search and
+    per-comparison lines before the results, so a rerun of the eight live cases shows exactly what IndianKanoon returned
+    for each query; `V7LiveRig` prints the same lines in the PDF / notice runs.
+  - Working hypothesis for the live rerun to confirm or refute: the first page of a free-text search for a much-cited
+    case is dominated by later judgments that QUOTE it (full-text relevance), so its own title is not among the ten;
+    the logged titles will show it. If so, the next step is a title-restricted query form, tried live before it is
+    trusted (see the lesson below), not another offline change.
+  - Tests: `IndianKanoonClientTest` (new: URL form and single encoding; a stubbed server records the POST, path, query
+    and token header; the seven docs of a live-shaped answer are read, missing fields included; the log line lists the
+    first five titles only; HTTP 500 logged then thrown, 401 fatal; `parseDocs` / `describeTop` / `note`),
+    `CitationNameMatchingTest` (`shortQuery` for the live names and null for short / one-party names; the matching
+    title at position 6 of the hits is taken and no second search is made; a long name whose first page has five other
+    Bharti / Airtel / Union cases gets the shorter second search, matched at its position 2, `ik_calls` 2; no second
+    search for a short name; both searches missing -> NOT_FOUND naming both queries; call cap 1 -> no second search,
+    reason named). The existing call-count assertions (`times(5)` / `times(6)` in the citation-limit tests, the
+    cost-cap and auth tests) pass unchanged because their names are short.
+
+- **Lesson (live-run rule)**: **any change to a live call needs one live smoke run before it is trusted.** All three
+  defects were in code paths that every offline test passed: the temperature field was right for the models the tests
+  named and wrong for the one the run used; the stage key was right for every triage label the tests used and wrong
+  for the one triage actually produced; the citation matcher was right on recorded titles and blind to what the API
+  actually returned. Before the next full run: `LIVE_SMOKE=true` on one notice with the cheap models, then
+  `CitationCheckRunnerTest` on the eight live cases (`CITATION_CHECK_LIST`), and read the new `ik_search` /
+  `ik_compare` lines and the `Stage template:` line of the summary before trusting a status.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **677 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
+  and the env-gated PDF runner) on 13-11-2026 after (b36), the Spring context test included (no Postgres in the
+  container). Per fix: 626 after fix 1, 669 after fix 2, 677 after fix 3; 617 on `2879f38` before.
 - Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 29-10-2026 after (b35), the Spring context test included (no Postgres in the
   container). The two deleted batch runners contributed one test each; `GstCorpusMatcherServiceTest` and

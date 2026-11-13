@@ -211,6 +211,9 @@ export LLM_MODEL_NEW_ISSUE=claude-sonnet-5-5
 export LLM_MODEL_HIGH_STAKES=claude-sonnet-5-5        # off by default (HIGH_STAKES_*), still must be set and priced
 export LLM_PROVIDER_TRIAGE=anthropic                  # default; "gemini" (free tier) sees the anonymised text only
 export LLM_MODEL_TRIAGE=claude-haiku-4-5-20251001
+export LLM_MODEL_SHORTLIST=claude-haiku-5-5           # the shortlist title pass (blank: the matching model); priced
+export SHORTLIST_AI_REQUIRED=true                     # default: a failed title pass STOPS the notice before matching
+                                                      # (block:shortlist_ai_failed); "off" matches by labels only
 export INDIANKANOON_API_TOKEN=...                     # optional; without it every citation stays NOT_CHECKED (block)
 
 export LIVE_MAX_RUN_COST_INR=150          # hard cap for the whole run
