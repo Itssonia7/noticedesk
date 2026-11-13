@@ -148,8 +148,32 @@ public class ReplyAssemblyService {
         MatchedNoticeInfo noticeInfo = matchingResult != null ? matchingResult.notice() : null;
         List<MatchedIssue> matchedIssues = matchingResult != null && matchingResult.issues() != null ? matchingResult.issues() : List.of();
 
-        String normalizedStage = stageName != null && !stageName.isBlank() ? stageName.toLowerCase().trim() : StageDetector.UNKNOWN;
+        String detectedStage = stageName != null && !stageName.isBlank() ? stageName.toLowerCase().trim() : StageDetector.UNKNOWN;
+        // the matcher's provision before the notice record's; an order / letter / intimation is never called an SCN
+        String noticeSec = noticeSection(matchingResult, input);
+        // the detector key (DRC-01, audit, scn_73 ...) -> the template stage; a missing SCN-family template falls back
+        // to the neutral generic_scn skeleton with a warn flag, any other stage keeps the placeholder + block
+        StageTemplateAliases.Resolution stageRes = StageTemplateAliases.resolve(detectedStage,
+                noticeSec.startsWith("[[MISSING") ? null : noticeSec);
+        String normalizedStage = stageRes.templateStage();
+        String stageTemplateLabel = stageRes.describe();
         StageTemplate stageTpl = loadStageTemplate(normalizedStage);
+        if (stageTpl == null && stageRes.fallbackStage() != null) {
+            StageTemplate fallback = loadStageTemplate(stageRes.fallbackStage());
+            if (fallback != null) {
+                stageTpl = fallback;
+                stageTemplateLabel = stageRes.fallbackStage() + " (fallback: no " + normalizedStage + " template"
+                        + (stageRes.aliased() ? ", detected " + stageRes.detectorKey() : "") + ")";
+                addOnce(assemblyFlags, StageTemplateAliases.FLAG_FALLBACK);
+                notes.add("Stage template: no '" + normalizedStage + "' template exists; the generic show cause reply skeleton ('"
+                        + stageRes.fallbackStage() + "') was used for the prayer, the filing checklist and the cross-examination"
+                        + " request. Review Sections 08, 12 and 15 for the proceeding's own wording.");
+                log.warn("stage_template_fallback detected={} template_stage={} used={}", stageRes.detectorKey(), normalizedStage,
+                        stageRes.fallbackStage());
+            }
+        } else if (stageRes.aliased()) {
+            log.info("stage_template_alias detected={} template_stage={}", stageRes.detectorKey(), normalizedStage);
+        }
 
         Map<Integer, FilledTemplateResult> templateMap = new HashMap<>();
         if (filledTemplates != null) {
@@ -159,8 +183,6 @@ public class ReplyAssemblyService {
             }
         }
 
-        // the matcher's provision before the notice record's; an order / letter / intimation is never called an SCN
-        String noticeSec = noticeSection(matchingResult, input);
         StageResolver.DocumentKind docKind = documentKind(input);
         String docLabel = isNonScn(docKind) ? docKind.label() : "Notice";
         if (noticeSec.startsWith("[[MISSING")) {
@@ -411,7 +433,7 @@ public class ReplyAssemblyService {
         StringBuilder sec13 = new StringBuilder();
         sec13.append("<h3>Internal Partner Review Note</h3>");
         sec13.append("<p><strong>Notice:</strong> ").append(noticeInfo != null && noticeInfo.noticeNumber() != null ? noticeInfo.noticeNumber() : "N/A")
-             .append(" | Stage template: ").append(normalizedStage).append(" | Section: ").append(noticeSec).append("</p>");
+             .append(" | Stage template: ").append(stageTemplateLabel).append(" | Section: ").append(noticeSec).append("</p>");
         sec13.append("<p><strong>Matched Issues & Templates:</strong></p><ul>");
         for (MatchedIssue issue : matchedIssues) {
             FilledTemplateResult ft = templateMap.get(issue.issueNo());

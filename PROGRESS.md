@@ -1419,6 +1419,50 @@ Three defects seen in one live run (PDF runner, a real DRC-01 after a Section 65
     `Outcome` for a good answer and for an absent agent), `V7ShortlistInPipelineTest` (the exception passes through
     the pipeline with no writer call; it is a `MatchingFailedException`; the runner's status line).
 
+- **Fix 2: stage template missing for an ordinary DRC-01.** The draft carried `FLAG_STAGE_TEMPLATE_MISSING: block`,
+  `[[MISSING: stage template for drc-01]]` and `Stage template: drc-01 | Section: Section 73`. Cause: the stage templates
+  are keyed by the PROCEEDING (`scn_73`, `scn_74`, `scn_74a`, `generic_scn`, `asmt_10`, `anti_profiteering`, `refund` ...;
+  the dev set in `seeds/dev/seed_reply_and_stage_templates_dev.sql`, the private 19 in `$PRIVATE_SEED_DIR/stage_templates`
+  under the same `stage` column), while triage labels the FORM: `StageDetector.detect(section, "DRC-01")` read the
+  provision only for an `scn*` / blank label and returned the label itself, so `ReplyAssemblyService` looked up
+  `drc-01`. The refund notice of (b24) worked because its label `refund` is a proceeding key.
+  - `StageDetector`: a label naming the SCN form or its origin (`DRC-01` / `drc_01` / `drc01`, `audit`, `ADT-01`; not
+    `DRC-01A`) is read like an SCN label: Section 74A / 74 / 73 -> `scn_74a` / `scn_74` / `scn_73`. Without such a
+    provision the label is kept (a real ADT-01 under Section 65 stays `audit`; a DRC-01 with no provision stays
+    `drc-01`), so the shortlist keys and the stage correction see nothing new in those cases.
+  - **`StageTemplateAliases`** (new, matching package, pure), applied in `ReplyAssemblyService.assembleReply` between
+    the detected stage and the template lookup, with the provision the draft names (`noticeSection`). Alias table
+    (keys matched lower case, `-` / space as `_`, leading zero of a form number dropped; a key that is not an alias is
+    looked up under its own spelling):
+
+    | detector / triage key | template stage |
+    |---|---|
+    | `scn_73` | `scn_73` |
+    | `scn_74` | `scn_74` |
+    | `scn_74a` | `scn_74a` |
+    | `scn`, `generic_scn` | `generic_scn` |
+    | `drc_01` (`drc-01`, `drc01`, `DRC 01`) | by the provision: 74A -> `scn_74a`, 74 -> `scn_74`, 73 -> `scn_73`; none / other -> `generic_scn` |
+    | `audit`, `adt_01` (SCN issued after a Section 65 audit) | by the provision as for `drc_01`; none / other -> `audit` (an ADT-01 is not an SCN) |
+    | anything else (`asmt_10`, `rfd_08`, `refund`, `drc_01a`, `anti_profiteering`, `appeal`, `unknown` ...) | itself |
+
+    **Fallback**: for the SCN family (`scn_73`, `scn_74`, `scn_74a`, `generic_scn`, `drc_01`, `audit`, `adt_01`) whose
+    exact template does not exist, the neutral `generic_scn` skeleton (no Section 73 / 74 wording) is used for Sections
+    08 / 12 / 15 with the new flag **`warn:stage_template_fallback`** (check `FLAG_STAGE_TEMPLATE_FALLBACK`, warn), a
+    Section 13 note and the line `Stage template: generic_scn (fallback: no scn_74a template[, detected drc-01])`. The
+    procedural options still follow the resolved stage (a DRC-01 under Section 73 offers the Section 73(10) limitation
+    check). Every other stage keeps the (b18) rule: placeholder + `block:stage_template_missing` (an appeal, a refund
+    rejection or a Section 171 notice must never get the SCN prayer); so does the SCN family when not even a
+    `generic_scn` template exists. An alias without a fallback shows as `Stage template: scn_73 (alias of drc-01)`.
+  - Tests: `StageAndParagraphHelpersTest` (DRC-01 / drc_01 / drc01 / audit / ADT-01 with Sections 73 / 74 / 74A; label
+    kept for Section 65, no provision, and DRC-01A), `StageTemplateAliasesTest` (the table as a parameterised test;
+    `describe` / `normalise`; assembly with the DEV stage templates read from the seed SQL: DRC-01 + Section 73 ->
+    the scn_73 prayer, checklist and 73(10) option, no flag; audit + Section 74 -> scn_74; scn keys unchanged; scn_74a
+    missing -> generic_scn with the warn flag and the note, never the block; DRC-01 without a provision -> generic_scn
+    as an alias; appeal / rfd_08 / anti_profiteering / asmt_10 / unknown still block; the SCN family without a
+    generic_scn template still blocks), `V7Stage3PipelineTest` (triage `DRC-01` + Section 73 through the pipeline:
+    scn_73 template, `CHECK_PROCEEDING_CONSISTENT` passes; `DRC-01` + Section 74 with no scn_74 template -> the generic
+    skeleton and `FLAG_STAGE_TEMPLATE_FALLBACK` warn; the existing "missing stage template is blocked" test unchanged).
+
 ## (c) Verification
 
 - Offline unit suite (`mvn test`): **617 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run

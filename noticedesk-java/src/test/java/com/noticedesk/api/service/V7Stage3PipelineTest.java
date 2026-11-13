@@ -595,6 +595,42 @@ class V7Stage3PipelineTest {
         assertEquals("block", check(r, "FLAG_STAGE_TEMPLATE_MISSING").severity());
     }
 
+    @Test
+    void drc01TriageUnderSection73TakesTheScn73StageTemplate() {
+        // live run 13-11-2026: triage document_type DRC-01 (an SCN after a Section 65 audit) was looked up as "drc-01"
+        DraftingInput in = new DraftingInput(UUID.randomUUID(), "formal", null, "Test Client Pvt Ltd", null, null, null,
+                "TESTGSTIN", "Test State", "CGST Act", "2022-23", null,
+                Map.of("document_type", "DRC-01", "section", "Section 73"), Map.of(), "notice text", List.of(), List.of(),
+                List.of(), List.of(), List.of(), List.of(), null, null);
+
+        DraftingPipelineResult r = pipeline.runPipeline(in);
+
+        assertFalse(section(r, 12).contains("[[MISSING: stage template"), section(r, 12));
+        assertTrue(section(r, 12).contains("Prayer: drop the proceedings under Section 73."), section(r, 12));
+        assertTrue(section(r, 13).contains("Stage template: scn_73 | Section: Section 73"), section(r, 13));
+        assertTrue(r.checkResults().stream().noneMatch(c -> c.checkName().equals("FLAG_STAGE_TEMPLATE_MISSING")));
+        assertTrue(r.checkResults().stream().noneMatch(c -> c.checkName().equals("FLAG_STAGE_TEMPLATE_FALLBACK")));
+        assertTrue(check(r, "CHECK_PROCEEDING_CONSISTENT").passed(), String.valueOf(check(r, "CHECK_PROCEEDING_CONSISTENT").details()));
+    }
+
+    @Test
+    void drc01WithoutAnScn74TemplateFallsBackToTheGenericSkeletonWithAWarn() {
+        assembly.registerInMemoryStageTemplate(new StageTemplate("generic_scn", 1, null, null, "draft",
+                Map.of("12", "<p>Generic prayer: drop the proceedings under {{notice.section}}.</p>", "15", "<p>Generic checklist.</p>"),
+                null, null, null));
+        DraftingInput in = new DraftingInput(UUID.randomUUID(), "formal", null, "Test Client Pvt Ltd", null, null, null,
+                "TESTGSTIN", "Test State", "CGST Act", "2022-23", null,
+                Map.of("document_type", "DRC-01", "section", "Section 74"), Map.of(), "notice text", List.of(), List.of(),
+                List.of(), List.of(), List.of(), List.of(), null, null);
+
+        DraftingPipelineResult r = pipeline.runPipeline(in);
+
+        assertTrue(section(r, 12).contains("Generic prayer: drop the proceedings under Section 74."), section(r, 12));
+        assertEquals("warn", check(r, "FLAG_STAGE_TEMPLATE_FALLBACK").severity());
+        assertTrue(r.checkResults().stream().noneMatch(c -> c.checkName().equals("FLAG_STAGE_TEMPLATE_MISSING")));
+        assertTrue(section(r, 13).contains("Stage template: generic_scn (fallback: no scn_74 template) |"), section(r, 13));
+    }
+
     // ------------------------------------------------------------------ Stage 1b: template variables
 
     private static final String TPL_C_HTML = "<p>The order dated {{issue.order_date}} was answered by a return filed on {{issue.return_filing_date}}"

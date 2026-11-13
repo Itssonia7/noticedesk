@@ -30,6 +30,19 @@ class StageAndParagraphHelpersTest {
             "Section 122       | scn_74  | generic_scn",
             "NULL              | scn_73  | scn_73",
             "Section 63        | asmt_10 | asmt_10",
+            // the SCN form (DRC-01) and its audit origin: the provision decides, as for an scn label (live run 13-11-2026)
+            "Section 73        | DRC-01  | scn_73",
+            "Section 73        | drc_01  | scn_73",
+            "Section 74        | drc01   | scn_74",
+            "Section 74A       | DRC-01  | scn_74a",
+            "Section 73        | audit   | scn_73",
+            "Section 74        | ADT-01  | scn_74",
+            // no 73/74/74A provision: the label is kept (a real ADT-01, a DRC-01 whose provision is unknown)
+            "Section 65        | audit   | audit",
+            "NULL              | DRC-01  | drc-01",
+            "NULL              | audit   | audit",
+            // DRC-01A is an intimation, not the SCN form
+            "Section 73        | drc_01a | drc_01a",
     })
     void detectsStage(String section, String triage, String expected) {
         assertEquals(expected, StageDetector.detect(section, triage));
