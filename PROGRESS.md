@@ -1516,6 +1516,11 @@ Three defects seen in one live run (PDF runner, a real DRC-01 after a Section 65
   `CitationCheckRunnerTest` on the eight live cases (`CITATION_CHECK_LIST`), and read the new `ik_search` /
   `ik_compare` lines and the `Stage template:` line of the summary before trusting a status.
 
+## (b37) Shortlist title pass asks for at most N ranked cards (15-11-2026)
+
+Prompt `shortlist_titles_v1` v1.3: "Name AT MOST {{max_names}} cards", N = `title-max-cards` + 5 (20 by default, 40 when
+the cap is 0), substituted in the cached system prompt; the live run of 15-11 named 24-48 ids and once hit max_tokens.
+
 ## (c) Verification
 
 - Offline unit suite (`mvn test`): **677 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run

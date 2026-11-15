@@ -35,7 +35,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ShortlistTitleAgentTest {
 
     private static final String MODEL = "test-matching-model";
-    private static final String SYSTEM_START = "# Shortlist title pass (v1.2)";
+    private static final String SYSTEM_START = "# Shortlist title pass (v1.3)";
 
     private final ObjectMapper om = new ObjectMapper();
     private AppProperties props;
@@ -91,7 +91,10 @@ class ShortlistTitleAgentTest {
         assertTrue(system.startsWith(SYSTEM_START + "\n\nYou are given a GST department document and a numbered list of issue cards"
                 + " (id and one-line title)."), system);
         assertTrue(system.contains("Be generous: include a card when in doubt; the full cards will be read later."));
-        assertTrue(system.contains("never leave one out to keep the list short"));
+        assertTrue(system.contains("Name AT MOST 20 cards (most likely first): within that limit include a card when in doubt"), system);
+        assertTrue(system.toLowerCase(java.util.Locale.ROOT).contains("at most 20"), "default limit: title-max-cards 15 + 5");
+        assertFalse(system.contains("never leave one out to keep the list short"), "v1.3: the list has a limit");
+        assertFalse(system.contains("{{"), "no placeholder left in the prompt");
         assertTrue(system.contains("RANKED from the most likely to apply to the least"));
         assertTrue(system.contains("only the first cards of the list may be used"));
         assertTrue(system.contains("Your answer must be ONLY this JSON object: {\"card_ids\": [\"NDK-001\", \"NDK-002\"]}"));
@@ -105,6 +108,21 @@ class ShortlistTitleAgentTest {
                 + "NDK-005 | Appeal against a DRC-07 order\n"), system);
         assertEquals(system, agent().systemPrompt(new ArrayList<>(CARDS).reversed()), "same prefix whatever the load order (cacheable)");
         assertFalse(system.contains("NOTICE"), "no notice text in the cached prefix");
+    }
+
+    @Test
+    void theNameLimitFollowsTheCapAndNoPlaceholderIsLeft() {
+        assertEquals(20, agent().maxNames(), "default: title-max-cards 15 + 5");
+        props.getMatching().getShortlist().setTitleMaxCards(8);
+        assertEquals(13, agent().maxNames());
+        String eight = agent().systemPrompt(CARDS);
+        assertTrue(eight.contains("Name AT MOST 13 cards"), eight);
+        assertFalse(eight.contains(ShortlistTitleAgent.MAX_NAMES_PLACEHOLDER));
+        props.getMatching().getShortlist().setTitleMaxCards(0);
+        assertEquals(ShortlistTitleAgent.MAX_NAMES_WHEN_UNCAPPED, agent().maxNames(), "cap off: a large limit");
+        String all = agent().systemPrompt(CARDS);
+        assertTrue(all.contains("Name AT MOST 40 cards"), all);
+        assertFalse(all.contains("{{"), "no placeholder left in the prompt");
     }
 
     @Test

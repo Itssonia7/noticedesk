@@ -48,10 +48,15 @@ import java.util.regex.Pattern;
 @Slf4j
 public class ShortlistTitleAgent {
 
-    /** File {@code prompts/shortlist_titles_v1.md}; its header carries the revision (v1.1: ids-only answer; v1.2: ranked). */
+    /** File {@code prompts/shortlist_titles_v1.md}; its header carries the revision (v1.1: ids-only answer; v1.2: ranked; v1.3: at most
+     * {@link #maxNames()} names). */
     public static final String PROMPT_VERSION = "shortlist_titles_v1";
     /** Card ids looked for in an answer whose JSON cannot be read. */
     static final Pattern CARD_ID = Pattern.compile("\\bNDK-(?:AI-)?\\d{3}\\b");
+    /** Placeholder in the prompt file for the most card ids the model may name ({@link #maxNames()}). */
+    static final String MAX_NAMES_PLACEHOLDER = "{{max_names}}";
+    /** Names asked for when {@code title-max-cards} is 0 (keep every id). */
+    static final int MAX_NAMES_WHEN_UNCAPPED = 40;
     /** Agent key for effort / max_tokens / budget lines ({@code step=shortlist} in the call log). */
     public static final String AGENT_KEY = AppProperties.Llm.SHORTLIST;
 
@@ -118,6 +123,15 @@ public class ShortlistTitleAgent {
             return AppProperties.Matching.Shortlist.DEFAULT_TITLE_MAX_CARDS;
         }
         return Math.max(0, properties.getMatching().getShortlist().getTitleMaxCards());
+    }
+
+    /**
+     * The most card ids the prompt lets the model name: {@link #maxCards()} + 5 (a margin above the cap for ids not in
+     * the catalogue), or {@link #MAX_NAMES_WHEN_UNCAPPED} when the cap is off.
+     */
+    int maxNames() {
+        int max = maxCards();
+        return max <= 0 ? MAX_NAMES_WHEN_UNCAPPED : max + 5;
     }
 
     /** The first {@link #maxCards()} ids of a ranked answer, in the answer's order. */
@@ -206,7 +220,9 @@ public class ShortlistTitleAgent {
     String systemPrompt(List<IssueCard> cards) {
         List<IssueCard> sorted = new ArrayList<>(CatalogueService.byId(cards).values());
         sorted.sort(Comparator.comparing(IssueCard::cardId));
-        StringBuilder sb = new StringBuilder(loadPrompt().stripTrailing()).append('\n');
+        // the limit depends only on the settings, the same for every notice in a run: the cached prefix stays stable
+        String instructions = loadPrompt().replace(MAX_NAMES_PLACEHOLDER, Integer.toString(maxNames()));
+        StringBuilder sb = new StringBuilder(instructions.stripTrailing()).append('\n');
         for (IssueCard c : sorted) {
             sb.append(c.cardId()).append(" | ").append(oneLine(c.title())).append('\n');
         }
