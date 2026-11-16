@@ -608,7 +608,26 @@ public class ReplyAssemblyService {
         String period = fy != null ? fyPhrase : taxPeriod;
         return new LayoutMeta(docLabel, formatFullNoticeType(noticeSec, docKind), noticeRef, noticeDate, noticeSec, lawName(input),
                 period, head.officer(), head.officeLines(), clientName, head.clientAddress(), gstin,
-                totalDemand != null && !totalDemand.startsWith("[[") ? totalDemand : null, issues, paraMetas);
+                totalDemand != null && !totalDemand.startsWith("[[") ? totalDemand : null, issues, paraMetas, demandRows(ocr));
+    }
+
+    /**
+     * The late fee, interest (when quantified) and penalty figures of the notice's demand clauses as summary-table rows:
+     * "Late fee under Section 47" / "Interest under Section 50" / "Penalty proposed under Section 73(9)", in that order.
+     */
+    static List<LayoutMeta.DemandRow> demandRows(String noticeText) {
+        List<LayoutMeta.DemandRow> out = new ArrayList<>();
+        List<DemandTotals.StatedFigure> figures = DemandTotals.nonTaxDemandClauses(noticeText);
+        for (DemandTotals.AmountKind k : List.of(DemandTotals.AmountKind.LATE_FEE, DemandTotals.AmountKind.INTEREST,
+                DemandTotals.AmountKind.PENALTY)) {
+            for (DemandTotals.StatedFigure f : figures) {
+                if (f.kind() != k) continue;
+                String label = (k == DemandTotals.AmountKind.PENALTY ? "Penalty proposed" : k.label())
+                        + (f.section() != null ? " under " + f.section() : "");
+                out.add(new LayoutMeta.DemandRow(label, TemplateFillService.formatIndianCurrency(f.amount())));
+            }
+        }
+        return out;
     }
 
     private static String issueAmount(MatchedIssue i) {

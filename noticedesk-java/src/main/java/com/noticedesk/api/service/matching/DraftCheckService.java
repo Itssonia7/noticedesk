@@ -176,7 +176,8 @@ public class DraftCheckService {
         }
         // the stated total demand (notice block and every "Total Demand Amount" in the reply) against the sum of the
         // issue amounts and the notice's demand clauses: more than 1% apart fails
-        java.math.BigDecimal issueSum = DemandTotals.sumOfIssueAmounts(issues);
+        // tax / ITC issue amounts only: a late fee, interest or penalty issue is compared with its own clause below
+        java.math.BigDecimal issueSum = DemandTotals.sumOfIssueAmounts(issues, noticeText);
         java.math.BigDecimal clauseTotal = DemandTotals.fromDemandClauses(noticeText);
         Set<java.math.BigDecimal> statedTotals = new LinkedHashSet<>();
         if (matchingResult.notice() != null && matchingResult.notice().totalDemandAmount() != null) {
@@ -199,6 +200,12 @@ public class DraftCheckService {
                 figureMismatches.add("Total demand " + shown + " differs from the notice's demand clauses "
                         + TemplateFillService.formatIndianCurrency(clauseTotal));
             }
+        }
+        // late fee / interest / penalty stated in the notice's demand clauses against the same kind in the issue amounts
+        List<String> nonTax = DemandTotals.nonTaxMismatches(issues, noticeText);
+        if (!nonTax.isEmpty()) {
+            figuresConsistent = false;
+            figureMismatches.addAll(nonTax);
         }
         Map<String, Object> figureDetails = new LinkedHashMap<>();
         figureDetails.put("mismatches", figureMismatches);

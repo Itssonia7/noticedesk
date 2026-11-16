@@ -1,0 +1,43 @@
+OFFICE OF THE ASSISTANT COMMISSIONER, CGST DIVISION - OKHLA
+CGST DELHI SOUTH COMMISSIONERATE
+DIN: 20241105AB0000K7D3F1
+F. No. GEXCOM/ADJN/GST/2024-25/2267
+Date: 05-11-2024
+
+SHOW CAUSE NOTICE UNDER SECTION 73(1) OF THE CGST ACT, 2017
+[Summary issued in Form GST DRC-01 under Rule 142(1)(a)]
+
+To,
+M/s Yamuna Textile Mills Private Limited
+B-41, Okhla Industrial Area Phase II, New Delhi 110020
+GSTIN: 07BBBCC5678B1Z2
+Period: FY 2021-22
+
+1. The records of M/s Yamuna Textile Mills Private Limited ("the noticee") for FY 2021-22 were audited under Section 65 of the CGST Act, 2017. The final audit report in Form GST ADT-02 was issued on 09-09-2024 raising seven objections. The noticee's reply dated 30-09-2024 did not satisfactorily explain the objections, which are accordingly proposed for adjudication.
+
+2. Objection 1: Excess ITC in GSTR-3B over GSTR-2B. ITC availed in GSTR-3B for FY 2021-22 is Rs. 88,40,120/- against Rs. 83,95,600/- reflected in GSTR-2B, an excess of Rs. 4,44,520/- (CGST Rs. 2,22,260/- + SGST Rs. 2,22,260/-) availed in contravention of Section 16(2)(aa) read with Rule 36(4).
+
+3. Objection 2: ITC on goods not covered by the registration certificate. The noticee's registration certificate in Form GST REG-06 lists HSN 5208, 5209 and 5407 (woven fabrics). ITC of Rs. 1,86,300/- (IGST) has been availed on inward supplies of packaging machinery (HSN 8422) and dyeing chemicals (HSN 3204), which do not figure in the registration certificate. The said ITC is held inadmissible.
+
+4. Objection 3: Non-payment of tax under reverse charge on freight. The noticee paid freight of Rs. 38,60,000/- during FY 2021-22 to individual truck owners for transport of yarn and fabric, as evidenced by the freight ledger. No tax was paid under reverse charge under Notification No. 13/2017-Central Tax (Rate), Sl. No. 1. GST at 5% amounting to Rs. 1,93,000/- (CGST Rs. 96,500/- + SGST Rs. 96,500/-) is payable under Section 9(3).
+
+5. Objection 4: Under-valuation of outward supplies. The noticee has allowed post-sale discounts of Rs. 22,10,000/- through credit notes and has recovered freight and insurance of Rs. 9,45,000/- from customers through separate debit notes without charging GST. Under Section 15(1) and 15(2)(c) of the Act the transaction value includes incidental expenses, and discounts not established under an agreement entered into before supply are not deductible under Section 15(3)(b). Differential tax at 5% on Rs. 31,55,000/- works out to Rs. 1,57,750/- (CGST Rs. 78,875/- + SGST Rs. 78,875/-).
+
+6. Objection 5: Late filing of returns. The returns in Form GSTR-3B for the months of June 2021, July 2021 and November 2021 were filed with delays of 18, 11 and 26 days respectively, and Form GSTR-1 for the quarter ending June 2021 was filed 34 days late. Late fee under Section 47 of Rs. 17,800/- and interest under Section 50(1) of Rs. 41,260/- on the tax paid late are recoverable. Penalty under Section 125 is also proposed for the said contraventions.
+
+7. Objection 6: Short payment of tax owing to GSTR-3B of September 2021. The GSTR-3B for September 2021 shows output tax of Rs. 6,12,000/- against Rs. 7,40,000/- reported in GSTR-1 for the same month, a shortfall of Rs. 1,28,000/- (CGST Rs. 64,000/- + SGST Rs. 64,000/-). The noticee's contention that the return could not be amended because of a portal error (ticket no. 202110-TKT-448127 dated 21-10-2021) and that the differential was paid through DRC-03 dated 03-11-2021 is noted; however the amount is proposed for confirmation under Section 73 with interest.
+
+8. Objection 7: Quantum of penalty. For the demands at Objections 1 to 6, penalty under Section 73(9) at 10% of the tax, and additionally general penalty of Rs. 25,000/- under Section 125 for each contravention, is proposed.
+
+9. NOW THEREFORE the noticee is called upon to show cause within thirty days as to why:
+(a) tax / ineligible ITC totalling Rs. 11,09,570/- as detailed at Objections 1 to 4 and 6 should not be demanded and recovered under Section 73(1) of the CGST / DGST Act, 2017 read with Section 20 of the IGST Act;
+(b) interest should not be recovered under Section 50;
+(c) late fee of Rs. 17,800/- should not be recovered under Section 47;
+(d) penalty of Rs. 1,10,957/- under Section 73(9) and Rs. 1,50,000/- under Section 125 should not be imposed.
+
+10. The noticee may file its reply in Form GST DRC-06 within thirty days of receipt of this notice and may appear for personal hearing on 11-12-2024 at 03:00 p.m. before the undersigned. Failure to reply or appear will result in ex parte adjudication.
+
+(Digitally signed)
+(Vikram Sethi)
+Assistant Commissioner
+CGST Division - Okhla

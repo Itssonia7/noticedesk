@@ -1678,8 +1678,32 @@ model (checks, storage, golden drafts unchanged); a new layout layer (`service/l
   replaced by the From block of the reply letter (the approved layout has no PAN cover sheet); the restored GSTIN and
   no-anonymised-PAN assertions are unchanged, and a no-raw-marker assertion is added.
 
+## (b46) Figure check: late fee, interest and penalty kept apart from the tax demand (16-11-2026)
+
+- **Live finding** (v7 at `c82df8b`, synthetic Section 73 audit notice, now `src/test/resources/synthetic/notice_s73_yamuna.txt`):
+  CHECK_FIGURE_CONSISTENCY failed (block) with "Total demand Rs 11,09,570 differs from the sum of the issue amounts Rs
+  11,68,630". Clause (a) demands tax / ITC of Rs 11,09,570 for Objections 1-4 and 6; the matcher's Objection 5 issue
+  carried Rs 59,060 = late fee Rs 17,800 (Section 47) + interest Rs 41,260 (Section 50), and the issue sum added it.
+- **Fix** (`DemandTotals`): each issue amount is classified (`components`) as tax / ITC, late fee, interest or penalty:
+  first from the issue's notice paragraph (an amount equal to a figure the paragraph labels "late fee" / "interest" /
+  "penalty", or to their sum, is split into them), else from the legal section (47 late fee, 50 interest, 122 / 123 /
+  125 / 127 and 73(9) / 74(9) penalty; several non-tax sections = an unsplit mix), else tax. The tax total compared with
+  the demand clauses is the tax part only (`sumOfIssueAmounts(issues, noticeText)`; a non-tax issue without an amount no
+  longer makes the sum incomplete). The late fee / interest / penalty figures of the demand clauses
+  (`nonTaxDemandClauses`, each with the section after it) are compared with the same kind in the issue amounts
+  (`nonTaxMismatches`, same check, block, 1%); not compared when a kind is not stated or an issue is an unsplit mix.
+  The 1% tolerance and block severity for a tax mismatch are unchanged (the (b39) 10x test still passes).
+- **Summary table**: the total row reads "Total tax demand"; below it, one row per stated late fee, quantified interest
+  and penalty ("Late fee under Section 47 Rs 17,800", "Penalty proposed under Section 73(9) Rs 1,10,957", "Penalty
+  proposed under Section 125 Rs 1,50,000"), from `LayoutMeta.demandRows` (new field; a stored draft without it shows
+  none).
+- Tests: `NonTaxDemandFigureTest` (5: the live split, with and without a legal section, a tax issue whose paragraph
+  mentions interest stays tax; demand-clause figures and sections; the live case passes; a 10x tax amount still blocks
+  and a wrong late fee is caught on its own; the summary-table rows). Test fixture `SyntheticS73Notice`.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **717 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b46).
 - Offline unit suite (`mvn test`): **712 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b45).
 - Offline unit suite (`mvn test`): **709 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b44).
 - Offline unit suite (`mvn test`): **702 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b43).

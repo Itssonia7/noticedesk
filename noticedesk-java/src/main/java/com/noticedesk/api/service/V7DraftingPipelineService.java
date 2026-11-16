@@ -930,7 +930,7 @@ public class V7DraftingPipelineService {
     static Double verifyTotalDemand(Double stated, List<MatchedIssue> issues, String text, UUID noticeId, List<String> notes,
                                     Set<String> flags, Map<String, Map<String, Object>> flagDetails) {
         java.math.BigDecimal clauses = DemandTotals.fromDemandClauses(text);
-        java.math.BigDecimal issueSum = DemandTotals.sumOfIssueAmounts(issues);
+        java.math.BigDecimal issueSum = DemandTotals.sumOfIssueAmounts(issues, text);
         java.math.BigDecimal chosen = clauses != null ? clauses : stated != null ? DemandTotals.of(stated) : issueSum;
         if (chosen == null) return stated;
         String source = clauses != null ? "the notice's demand clauses" : stated != null ? "the matcher" : "the sum of the issue amounts";

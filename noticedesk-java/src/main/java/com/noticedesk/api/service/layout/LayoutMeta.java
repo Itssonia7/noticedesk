@@ -29,9 +29,11 @@ public record LayoutMeta(
         String gstin,
         String totalDemand,
         List<IssueMeta> issues,
-        List<ParaMeta> paras
+        List<ParaMeta> paras,
+        List<DemandRow> demandRows
 ) {
     public LayoutMeta {
+        demandRows = demandRows != null ? demandRows : List.of();
         officeLines = officeLines != null ? officeLines : List.of();
         clientAddress = clientAddress != null ? clientAddress : List.of();
         issues = issues != null ? issues : List.of();
@@ -49,6 +51,13 @@ public record LayoutMeta(
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record IssueMeta(int no, String title, String amount, String kind, Integer parentNo, String writerNote, String position) {}
+
+    /**
+     * A late fee, interest or penalty the notice's demand clauses state, shown on its own row of the summary table
+     * under the total tax demand ("Late fee under Section 47", "Rs 17,800").
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record DemandRow(String label, String amount) {}
 
     /** Stances of {@link ParaMeta#stance}. */
     public static final String DENIED = "denied";

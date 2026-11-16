@@ -86,8 +86,10 @@ public final class ReplyLayoutBuilder {
                     summaryPosition(position, i)));
         }
         if (meta.totalDemand() != null && !meta.totalDemand().isBlank()) {
-            rows.add(List.of("", "Total demand proposed in the notice", humanise(meta.totalDemand()), ""));
+            rows.add(List.of("", "Total tax demand", humanise(meta.totalDemand()), ""));
         }
+        // late fee / interest / penalty the notice states, each on its own row (never added to the tax total)
+        for (LayoutMeta.DemandRow d : meta.demandRows()) rows.add(List.of("", humanise(d.label()), humanise(d.amount()), ""));
         reply.add(new Table(List.of("No.", "Ground", "Amount", "Company's position"), rows, Set.of(2)));
 
         // Part: issue-wise reply
@@ -666,7 +668,7 @@ public final class ReplyLayoutBuilder {
             while (im.find()) refs.add(Integer.parseInt(im.group(1)));
             paras.add(new ParaMeta(Integer.parseInt(m.group(1)), stance, refs));
         }
-        return new LayoutMeta(null, null, null, null, null, null, null, null, List.of(), null, List.of(), null, null, issues, paras);
+        return new LayoutMeta(null, null, null, null, null, null, null, null, List.of(), null, List.of(), null, null, issues, paras, List.of());
     }
 
     private static <T> List<T> concat(List<T> a, List<T> b) {
