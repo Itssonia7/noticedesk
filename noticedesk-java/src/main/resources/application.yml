@@ -111,14 +111,16 @@ noticedesk:
     effort-shortlist: ${LLM_EFFORT_SHORTLIST:low}
     # max_tokens per agent. Thinking tokens count against it, so it must leave room for thinking + JSON.
     # A max_tokens stop is treated as a failure and retried once with the *-retry cap.
+    # Writers (partial / new issue / high stakes): a real per-issue draft is about 1,500-3,000 output tokens, so
+    # 6000 / 10000 keeps the hard cost cap's worst-case reservation realistic (16000 refused affordable calls).
     max-tokens-matching: ${LLM_MAX_TOKENS_MATCHING:12000}
     max-tokens-matching-retry: ${LLM_MAX_TOKENS_MATCHING_RETRY:20000}
-    max-tokens-partial-drafting: ${LLM_MAX_TOKENS_PARTIAL_DRAFTING:16000}
-    max-tokens-partial-drafting-retry: ${LLM_MAX_TOKENS_PARTIAL_DRAFTING_RETRY:24000}
-    max-tokens-new-issue: ${LLM_MAX_TOKENS_NEW_ISSUE:16000}
-    max-tokens-new-issue-retry: ${LLM_MAX_TOKENS_NEW_ISSUE_RETRY:24000}
-    max-tokens-high-stakes: ${LLM_MAX_TOKENS_HIGH_STAKES:16000}
-    max-tokens-high-stakes-retry: ${LLM_MAX_TOKENS_HIGH_STAKES_RETRY:24000}
+    max-tokens-partial-drafting: ${LLM_MAX_TOKENS_PARTIAL_DRAFTING:6000}
+    max-tokens-partial-drafting-retry: ${LLM_MAX_TOKENS_PARTIAL_DRAFTING_RETRY:10000}
+    max-tokens-new-issue: ${LLM_MAX_TOKENS_NEW_ISSUE:6000}
+    max-tokens-new-issue-retry: ${LLM_MAX_TOKENS_NEW_ISSUE_RETRY:10000}
+    max-tokens-high-stakes: ${LLM_MAX_TOKENS_HIGH_STAKES:6000}
+    max-tokens-high-stakes-retry: ${LLM_MAX_TOKENS_HIGH_STAKES_RETRY:10000}
     max-tokens-template-variables: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES:2000}
     max-tokens-template-variables-retry: ${LLM_MAX_TOKENS_TEMPLATE_VARIABLES_RETRY:4000}
     # (the shortlist title pass: matching.shortlist.title-max-tokens / title-retry-max-tokens)

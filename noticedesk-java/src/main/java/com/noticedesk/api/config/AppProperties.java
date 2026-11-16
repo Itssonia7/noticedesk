@@ -88,12 +88,12 @@ public class AppProperties {
         // Integer so an empty env var binds to null and falls back to the default below.
         private Integer maxTokensMatching = 12000;
         private Integer maxTokensMatchingRetry = 20000;
-        private Integer maxTokensPartialDrafting = 16000;
-        private Integer maxTokensPartialDraftingRetry = 24000;
-        private Integer maxTokensNewIssue = 16000;
-        private Integer maxTokensNewIssueRetry = 24000;
-        private Integer maxTokensHighStakes = 16000;
-        private Integer maxTokensHighStakesRetry = 24000;
+        private Integer maxTokensPartialDrafting = 6000;
+        private Integer maxTokensPartialDraftingRetry = 10000;
+        private Integer maxTokensNewIssue = 6000;
+        private Integer maxTokensNewIssueRetry = 10000;
+        private Integer maxTokensHighStakes = 6000;
+        private Integer maxTokensHighStakesRetry = 10000;
         /** The variable step returns a short JSON object (a few values per issue). */
         private Integer maxTokensTemplateVariables = 2000;
         private Integer maxTokensTemplateVariablesRetry = 4000;
@@ -149,9 +149,9 @@ public class AppProperties {
         public int maxTokensForAgent(String agent, boolean retry) {
             return switch (agent) {
                 case "matching" -> orDefault(retry ? maxTokensMatchingRetry : maxTokensMatching, retry ? 20000 : 12000);
-                case "partial_drafting" -> orDefault(retry ? maxTokensPartialDraftingRetry : maxTokensPartialDrafting, retry ? 24000 : 16000);
-                case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 24000 : 16000);
-                case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 24000 : 16000);
+                case "partial_drafting" -> orDefault(retry ? maxTokensPartialDraftingRetry : maxTokensPartialDrafting, retry ? 10000 : 6000);
+                case "new_issue" -> orDefault(retry ? maxTokensNewIssueRetry : maxTokensNewIssue, retry ? 10000 : 6000);
+                case "high_stakes" -> orDefault(retry ? maxTokensHighStakesRetry : maxTokensHighStakes, retry ? 10000 : 6000);
                 case TEMPLATE_VARIABLES -> orDefault(retry ? maxTokensTemplateVariablesRetry : maxTokensTemplateVariables, retry ? 4000 : 2000);
                 default -> retry ? 16000 : 8000;
             };

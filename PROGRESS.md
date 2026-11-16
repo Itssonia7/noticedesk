@@ -1521,8 +1521,27 @@ Three defects seen in one live run (PDF runner, a real DRC-01 after a Section 65
 Prompt `shortlist_titles_v1` v1.3: "Name AT MOST {{max_names}} cards", N = `title-max-cards` + 5 (20 by default, 40 when
 the cap is 0), substituted in the cached system prompt; the live run of 15-11 named 24-48 ids and once hit max_tokens.
 
+## (b38) Writer max_tokens 6000 / 10000 so the cost cap reserves a realistic worst case (16-11-2026)
+
+- **Live finding** (synthetic Section 74 notice): `[call-refused] step=partial_drafting max_tokens=16000 output_INR=14.08
+  worst_case_INR=15.10 spent_INR=11.93 cap_INR=24.8552`. Two partial-drafting calls that would have cost about INR 2
+  each were refused and their issues left blank, because the hard cap reserved 16,000 output tokens per writer call.
+- **Defaults** `max-tokens-partial-drafting`, `-new-issue`, `-high-stakes`: 16000 -> **6000**, retries 24000 ->
+  **10000** (application.yml and the `AppProperties` fallbacks; the `LLM_MAX_TOKENS_*` env overrides unchanged). A
+  per-issue writer draft is about 1,500 to 3,000 output tokens; no recorded per-issue writer output above 6,000 was
+  found in the history (the 6-12K figure in `2492e61` was the retired single-call 15-section drafter). The cap is
+  still a hard cap; a max_tokens stop is still retried once at the retry cap.
+- The pipeline note for a refused writer call already names the reason ("AI writer call not made (per-notice cost
+  cap: worst case of this call INR x + spent INR y exceeds the cap of INR z); left to the partner"); kept and tested.
+- Tests: `WriterMaxTokensDefaultsTest` (yml and Java defaults; the live-run case refused at 16000 and allowed at the
+  new default; cap still refuses, plain-words reason). Existing tests that encoded the old defaults:
+  `WriterStopReasonTest` expects 6000 / 10000; `HardCostCapTest` default assertion 16000 -> 6000 (still refused),
+  its retry test and `CacheAwareCostEstimateTest.writerPrefix_*` pin 16000 / 24000 explicitly (their cap arithmetic
+  is about the retry / cache, not the default).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **681 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b38); 678 on `050a36f` before.
 - Offline unit suite (`mvn test`): **677 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 13-11-2026 after (b36), the Spring context test included (no Postgres in the
   container). Per fix: 626 after fix 1, 669 after fix 2, 677 after fix 3; 617 on `2879f38` before.

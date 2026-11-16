@@ -78,8 +78,8 @@ class WriterStopReasonTest {
 
         assertNotNull(r);
         Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.contains("NOTICE CONTEXT"), Mockito.contains("ISSUE TO ANSWER"),
-                Mockito.eq(MODEL), Mockito.eq(16000), Mockito.eq("medium"), Mockito.eq(true));
-        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(24000), Mockito.eq("medium"), Mockito.eq(true));
+                Mockito.eq(MODEL), Mockito.eq(6000), Mockito.eq("medium"), Mockito.eq(true));
+        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(10000), Mockito.eq("medium"), Mockito.eq(true));
         Mockito.verify(usage, Mockito.times(2)).logCall(Mockito.any(), Mockito.any(), Mockito.eq("new_issue"), Mockito.anyInt(), Mockito.any(), Mockito.any());
     }
 
@@ -103,7 +103,7 @@ class WriterStopReasonTest {
         assertNotNull(r);
         assertEquals(1, r.sections().size());
         Mockito.verify(llm, Mockito.times(2)).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq("claude-sonnet-5-5"),
-                Mockito.eq(16000), Mockito.eq("medium"), Mockito.eq(true));
+                Mockito.eq(6000), Mockito.eq("medium"), Mockito.eq(true));
     }
 
     @Test
@@ -156,8 +156,8 @@ class WriterStopReasonTest {
         HighStakesDraftingAgent agent = new HighStakesDraftingAgent(props, om, usage, factory);
 
         assertNull(agent.generateHighStakesDraft(null, null, "scn", UUID.randomUUID()));
-        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(16000), Mockito.any(), Mockito.eq(true));
-        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(24000), Mockito.any(), Mockito.eq(true));
+        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(6000), Mockito.any(), Mockito.eq(true));
+        Mockito.verify(llm).generateWithEffort(Mockito.any(), Mockito.any(), Mockito.eq(MODEL), Mockito.eq(10000), Mockito.any(), Mockito.eq(true));
         Mockito.verify(usage, Mockito.times(2)).logCall(Mockito.any(), Mockito.any(), Mockito.eq("high_stakes"), Mockito.anyInt(), Mockito.any(), Mockito.any());
     }
 }

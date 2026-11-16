@@ -180,6 +180,8 @@ class CacheAwareCostEstimateTest {
     /** Writers: the first issue of a notice writes the notice prefix; the next issues read it (same behaviour, cheaper estimate). */
     @Test
     void writerPrefix_isCacheReadForTheNextIssueOfTheSameNotice() {
+        // pinned at 16000 (the pre-b38 default): the cap arithmetic below is built on that worst case
+        props.getLlm().setMaxTokensNewIssue(16000);
         MatchedIssue issue = new MatchedIssue(1, "none", List.of(), "why", List.of(), Map.of(), List.of(), List.of());
         MatchedNoticeInfo notice = new MatchedNoticeInfo("N-1", null, null, null, null, null, null, null);
         String ocr = "o".repeat(40_000);   // notice prefix ~20,000 tokens by the character estimate

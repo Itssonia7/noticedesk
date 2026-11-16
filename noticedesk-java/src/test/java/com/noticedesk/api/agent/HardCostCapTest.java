@@ -96,7 +96,7 @@ class HardCostCapTest {
     /** (a) The smoke-run case: matching spent INR 2.61 of a INR 5 cap; an Opus new_issue call must not be made. */
     @Test
     void opusNewIssueCall_afterMatchingSpend_isRefusedBeforeTheCall() {
-        assertEquals(16000, props.getLlm().maxTokensForAgent("new_issue", false));
+        assertEquals(6000, props.getLlm().maxTokensForAgent("new_issue", false));   // (b38) default; worst case ~INR 10.6 > 2.39 left
         NoticeCallBudget budget = budget("5", "2.61");
         NewIssueDraftingAgent agent = new NewIssueDraftingAgent(props, om, null, factory);
 
@@ -149,6 +149,9 @@ class HardCostCapTest {
     void writerRetry_withRaisedCap_isCheckedAndRefused() {
         // first attempt: worst case ~INR 28.2 fits a INR 35 cap; it hits max_tokens and costs ~INR 28.5;
         // the retry at 24000 max_tokens (worst case ~INR 42) does not fit and is not made
+        // (caps pinned at the pre-b38 16000 / 24000: this test is about the retry being checked, not the defaults)
+        props.getLlm().setMaxTokensNewIssue(16000);
+        props.getLlm().setMaxTokensNewIssueRetry(24000);
         stubWriter(new LlmResponse("", OPUS, "anthropic", 1000, 16000, "max_tokens", 0, 0, LlmResponse.FAILURE_MAX_TOKENS),
                 new LlmResponse(NEW_ISSUE_JSON, OPUS, "anthropic", 1000, 4000, "end_turn", 0, 0));
         NoticeCallBudget budget = budget("35", "0");
