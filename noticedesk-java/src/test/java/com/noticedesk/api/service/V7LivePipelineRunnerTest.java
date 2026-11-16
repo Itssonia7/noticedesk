@@ -147,6 +147,18 @@ public class V7LivePipelineRunnerTest {
         return ReplyLayoutText.render(layout(result));
     }
 
+    /**
+     * Run-summary lines for the developer notes the review sheet leaves out (catalogue shortlist, all-ok code defect
+     * checks, template variables read / not stated / rejected): "Developer note: ..." each.
+     */
+    static List<String> developerNoteLines(DraftingPipelineResult result) {
+        List<ReplyLayoutBuilder.Section> sections = new ArrayList<>();
+        for (DraftingAgent.DraftSection sec : result.draft().sections()) {
+            sections.add(new ReplyLayoutBuilder.Section(sec.num(), sec.title(), sec.bodyHtml()));
+        }
+        return ReplyLayoutBuilder.developerNotes(sections).stream().map(n -> "Developer note: " + n).toList();
+    }
+
     /** The filing layout of a pipeline result's 15 sections. */
     static ReplyLayout layout(DraftingPipelineResult result) {
         List<ReplyLayoutBuilder.Section> sections = new ArrayList<>();

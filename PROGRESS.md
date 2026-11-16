@@ -1741,8 +1741,35 @@ model (checks, storage, golden drafts unchanged); a new layout layer (`service/l
   "Objection"; abbreviations, sub-sections and the 90-character cap; narrative intro rejected; card title / legal
   section fallbacks; numbered duplicates).
 
+## (b49) Internal review sheet: VERIFY items located, CONFIRM facts once, developer lines in the run summary (16-11-2026)
+
+- **Live finding** (same run, internal review sheet only): "Citations marked VERIFY" printed a bare "[VERIFY]"; "Facts to
+  confirm with the client" repeated the same CONFIRM facts up to three times (the items list, the partner points via the
+  "Issue #n fact to confirm with the client" note lines, and the client-facts list); the "Catalogue shortlist: ..."
+  line, "Code defect checks: ... =ok ..." with every check ok, "Template variables the document does not state ..." and
+  per-issue "template variables read from the document: ..." lines were partner points.
+- **Fix** (`ReplyLayoutBuilder.review`; the reply part is unchanged):
+  - **Citations marked VERIFY**: one item per marker, "Issue N, para x.y: <the cited authority>" (a case name "A v. B
+    (year)", else a circular / notification number, else the marker's own text when specific, else the sentence),
+    trimmed to about 150 characters (`verifyItems`). Citation-status notes stay in the list.
+  - **Facts to confirm with the client**: each fact once (normalised), grouped by issue ("Issue 2: ..."), merged from the
+    reply's [CONFIRM: ...] (by the issue heading it sits under), the writers' assumed-fact note lines, the internal
+    note's marker list (its "(severity: warn)" suffix removed) and the card's client-confirmation list of each matched
+    issue. The "fact to confirm" note lines are no longer repeated among the partner points; the [CONFIRM] rows of "A.
+    Items to fill before filing" are unchanged.
+  - **Developer lines** (`isDeveloperLine` / `developerNotes`) leave the review sheet and go to the run summary file only
+    (`V7LiveRig`: "Developer note: ..." lines after the check table): the catalogue shortlist line, a code defect check
+    line whose checks are all ok (a line with a defect keeps only the defect checks, same wording), the template
+    variables not stated / read / rejected lines. The cost-cap writer point is reworded: "Issue N was not drafted because
+    the per-notice cost limit was reached; partner to draft." (call-count refusals: "... the per-notice limit on AI calls
+    was reached ..."); the technical line goes to the run summary.
+- Tests: `ReviewSheetCleanupTest` (4: VERIFY items with issue, para and authority, no bare marker; CONFIRM fact once,
+  grouped, merged with the card list, still in A; developer lines only in the run summary and the reworded cost-cap
+  point; a defect code-check line keeps only the defect). `ReplyLayoutTest` unchanged and passing.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **729 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b49).
 - Offline unit suite (`mvn test`): **725 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b48).
 - Offline unit suite (`mvn test`): **721 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b47).
 - Offline unit suite (`mvn test`): **717 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b46).

@@ -422,6 +422,7 @@ final class V7LiveRig {
         report.add(String.format("Flags: %s", allFlags));
         report.addAll(learnedLines(result));
         report.addAll(V7LivePipelineRunnerTest.checkTableLines(result.checkResults()));
+        report.addAll(V7LivePipelineRunnerTest.developerNoteLines(result));
 
         File draftFile;
         if (restorer == null) {

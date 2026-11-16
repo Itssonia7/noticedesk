@@ -532,25 +532,25 @@ public final class ReplyLayoutBuilder {
         if (rows.isEmpty()) rows.add(List.of("None", "-"));
         out.add(new Table(List.of("Item", "Where needed"), rows, Set.of()));
 
-        // B. points for the partner, read from the internal note (Section 13) and the client summary (Section 14)
+        // B. points for the partner, read from the internal note (Section 13) and the client summary (Section 14);
+        //    developer lines (shortlist, all-ok code checks, template variable read-outs) go to the run summary only
         out.add(Para.of(Style.PART, "B. POINTS FOR THE PARTNER"));
         Map<String, List<String>> note = noteLists(html.get(13));
-        List<String> notes = note.getOrDefault("stage 3 notes", List.of());
-        List<String> codeChecks = notes.stream().filter(n -> n.matches("(?is).*(code check|code defect|disput|matcher).*")).toList();
-        List<String> otherNotes = notes.stream().filter(n -> !codeChecks.contains(n)).toList();
-        List<String> verify = new ArrayList<>();
-        for (Block b : reply) {
-            String t = b instanceof Para p ? p.text() : null;
-            if (t != null) {
-                Matcher m = Pattern.compile("\\[VERIFY[^\\]]*\\]").matcher(ReplyLayout.plain(t));
-                while (m.find()) if (!verify.contains(m.group())) verify.add(m.group());
-            }
+        List<String> notes = new ArrayList<>();
+        for (String n : note.getOrDefault("stage 3 notes", List.of())) {
+            String kept = partnerVersion(n);
+            if (kept != null && !notes.contains(kept)) notes.add(kept);
         }
-        notes.stream().filter(n -> n.matches("(?is).*\\b(citation|NOT_FOUND|unverified)\\b.*")).forEach(n -> { if (!verify.contains(n)) verify.add(n); });
+        notes.removeIf(n -> CONFIRM_NOTE.matcher(n).find());   // listed once, under "Facts to confirm with the client"
+        List<String> codeChecks = notes.stream().filter(n -> n.matches("(?is).*(code check|code defect|disput|matcher).*")).toList();
+        List<String> verify = verifyItems(reply);
+        List<String> citationNotes = notes.stream().filter(n -> n.matches("(?is).*\\b(citation|NOT_FOUND|unverified)\\b.*")).toList();
+        for (String n : citationNotes) if (!verify.contains(n)) verify.add(n);
+        List<String> otherNotes = notes.stream().filter(n -> !codeChecks.contains(n) && !citationNotes.contains(n)).toList();
         reviewList(out, "Notes on the templates and the drafting", otherNotes);
         reviewList(out, "Code checks that disagree with the matcher or need a decision", codeChecks);
         reviewList(out, "Citations marked VERIFY", verify);
-        reviewList(out, "Facts to confirm with the client", clientFacts(html.get(13), note));
+        reviewList(out, "Facts to confirm with the client", clientFacts(note, reply));
         reviewList(out, "Procedural objections the partner may add", note.getOrDefault("procedural objection options (partner to select)", List.of()));
         reviewList(out, "Documents to collect from the client", documentsFromClient(html.get(14)));
 
@@ -611,17 +611,170 @@ public final class ReplyLayoutBuilder {
         return out;
     }
 
-    private static List<String> clientFacts(String html, Map<String, List<String>> note) {
-        List<String> out = new ArrayList<>(note.getOrDefault("facts to confirm with the client", List.of()));
-        // per issue, from the matched-issues list: "Issue #n: ... Confirm with client: a; b"
-        for (String li : note.getOrDefault("matched issues & templates", List.of())) {
-            Matcher m = Pattern.compile("(?is)^Issue\\s*#\\s*(\\d+).*?Confirm with client:\\s*(.+)$").matcher(li);
-            if (m.find()) {
-                String s = "Issue " + m.group(1) + ": " + m.group(2).trim();
-                if (!out.contains(s)) out.add(s);
+    // ------------------------------------------------------------------ review sheet: partner points vs developer lines
+
+    private static final Pattern CONFIRM_NOTE = Pattern.compile("(?i)^Issue\\s*#?\\s*(\\d+)\\s+fact to confirm with the client:\\s*(.+?)(?:\\s+\\(supports:.*\\))?\\s*$");
+    private static final Pattern CODE_CHECK_PART = Pattern.compile("([a-z0-9_]+)=([a-z ]+?)\\s*\\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\)");
+    private static final Pattern WRITER_CAP = Pattern.compile(
+            "(?i)^Issue\\s*#?\\s*(\\d+):\\s*(?:AI writer call not made|not sent to the AI writer)\\s*\\((.*)\\);\\s*left to the partner\\.?$");
+
+    /**
+     * The developer lines of the internal note that belong in the run summary, not the review sheet: the catalogue
+     * shortlist line, a code defect check line whose checks are all ok, the template-variable read-outs and the
+     * rejected-variable lines (and, for a defect line with some ok checks, those ok checks).
+     */
+    public static List<String> developerNotes(List<Section> sections) {
+        Map<Integer, String> html = new HashMap<>();
+        for (Section s : sections != null ? sections : List.<Section>of()) html.put(s.num(), s.html() != null ? s.html() : "");
+        List<String> out = new ArrayList<>();
+        for (String n : noteLists(html.get(13)).getOrDefault("stage 3 notes", List.of())) {
+            String kept = partnerVersion(n);
+            if (kept == null || !kept.equals(n)) out.add(n);
+        }
+        return out;
+    }
+
+    /** True for a line that is for the developer only. */
+    static boolean isDeveloperLine(String n) {
+        String t = n.trim();
+        return t.startsWith("Catalogue shortlist:")
+                || t.startsWith("Template variables the document does not state")
+                || t.matches("(?is)^Issue\\s*#?\\s*\\d+:\\s*template variables read from the document:.*")
+                || t.matches("(?is).*\\bvariable rejected:.*");
+    }
+
+    /**
+     * The review-sheet version of a note line, or null when it is for the run summary only: a code-check line keeps only
+     * the checks that found a defect (none -> null); an "AI writer call not made" cost-cap line is reworded in plain words.
+     */
+    static String partnerVersion(String n) {
+        if (n == null || n.isBlank() || isDeveloperLine(n)) return null;
+        String t = n.trim();
+        if (t.startsWith("Code defect checks:")) {
+            List<String> defects = new ArrayList<>();
+            Matcher m = CODE_CHECK_PART.matcher(t);
+            while (m.find()) if (m.group(2).trim().equals("defect")) defects.add(m.group(1) + "=defect (" + m.group(3).trim() + ")");
+            return defects.isEmpty() ? null : "Code defect checks: " + String.join("; ", defects) + ".";
+        }
+        Matcher w = WRITER_CAP.matcher(t);
+        if (w.matches()) {
+            String why = w.group(2).toLowerCase(Locale.ROOT);
+            String limit = why.contains("cost cap") ? "the per-notice cost limit was reached"
+                    : why.contains("call cap") || why.contains("calls") ? "the per-notice limit on AI calls was reached"
+                    : "the AI writer could not be called (" + w.group(2).trim() + ")";
+            return "Issue " + w.group(1) + " was not drafted because " + limit + "; partner to draft.";
+        }
+        return t;
+    }
+
+    /** "Issue N, para x.y: <cited authority or the sentence, about 150 characters>" for every VERIFY marker of the reply. */
+    static List<String> verifyItems(List<Block> reply) {
+        List<String> out = new ArrayList<>();
+        String where = null;
+        for (Block b : reply) {
+            if (!(b instanceof Para p) || p.text() == null) continue;
+            if (p.style() == Style.PART) where = partLabel(p.text());
+            else if (p.style() == Style.HEADING) where = ReplyLayout.plain(p.text()).replaceFirst(":.*$", "");
+            String plain = ReplyLayout.plain(p.text());
+            Matcher m = VERIFY_MARK.matcher(plain);
+            while (m.find()) {
+                String loc = (where != null ? where : "Reply") + (p.number() != null && p.style() == Style.BODY ? ", para " + p.number() : "");
+                String item = loc + ": " + citedAuthority(plain, m.start(), m.group(1));
+                if (!out.contains(item)) out.add(item);
             }
         }
         return out;
+    }
+
+    private static final Pattern VERIFY_MARK = Pattern.compile("\\[VERIFY(?::\\s*([^\\]]*))?\\]");
+    /** "Suncraft Energy Pvt Ltd v. Assistant Commissioner, State Tax (2023)": the parties up to the end of the clause. */
+    private static final Pattern CASE_NAME = Pattern.compile(
+            "((?:M/s\\.?\\s+)?[A-Z][\\w.&'-]*(?:\\s+(?:[A-Z][\\w.&'()-]*|of|and|&|the|for))*\\s+(?:v\\.|vs\\.?|versus)\\s+[A-Z][^;]*?)"
+            + "(?=\\s*(?:;|\\.\\s|\\.$|$|,\\s+(?:where|which|wherein|holding|held)\\b|\\s+(?:held|holds|that)\\b))");
+    private static final Pattern INSTRUMENT = Pattern.compile(
+            "(?i)\\b((?:Circular|Notification|Instruction|Order)\\s+No\\.?\\s*[\\w/().-]+(?:\\s+dated\\s+[\\d./-]+)?)");
+    private static final Set<String> GENERIC_VERIFY = Set.of("", "case name and citation", "citation", "case", "verify", "authority");
+
+    /** The authority the marker is about (a case name, a circular / notification), else its sentence, about 150 chars. */
+    private static String citedAuthority(String text, int at, String body) {
+        int start = sentenceStart(text, at);
+        int end = text.indexOf(". ", at);
+        String sentence = text.substring(start, end < 0 ? text.length() : end + 1).trim();
+        String withoutMark = VERIFY_MARK.matcher(sentence).replaceAll("").replaceAll("\\s+", " ").replaceAll("\\s+([.,;])", "$1").trim();
+        Matcher c = CASE_NAME.matcher(withoutMark);
+        if (c.find()) return trim150(c.group(1).trim());
+        Matcher i = INSTRUMENT.matcher(withoutMark);
+        if (i.find()) return trim150(i.group(1).trim());
+        if (body != null && !GENERIC_VERIFY.contains(body.trim().toLowerCase(Locale.ROOT))) return trim150(body.trim());
+        return trim150(withoutMark);
+    }
+
+    private static final Set<String> NOT_SENTENCE_END = Set.of("v", "vs", "no", "nos", "rs", "ltd", "pvt", "co", "u/s", "sl",
+            "viz", "etc", "dt", "m/s", "st", "sec", "art", "cl", "ors", "anr", "hon'ble", "inc", "corp", "govt");
+
+    /** Start of the sentence holding offset {@code at}: after the last ". " that ends a sentence ("v. ", "Pvt. " do not). */
+    private static int sentenceStart(String text, int at) {
+        int i = text.lastIndexOf(". ", at);
+        while (i > 0) {
+            int w = i - 1;
+            while (w >= 0 && Character.isLetter(text.charAt(w)) || w >= 0 && (text.charAt(w) == '/' || text.charAt(w) == '\'')) w--;
+            String word = text.substring(w + 1, i).toLowerCase(Locale.ROOT);
+            if (!NOT_SENTENCE_END.contains(word) && word.length() > 1) return i + 2;
+            i = text.lastIndexOf(". ", i - 1);
+        }
+        return 0;
+    }
+
+    private static String trim150(String s) {
+        if (s.length() <= 150) return s;
+        int cut = s.lastIndexOf(' ', 150);
+        return s.substring(0, cut > 40 ? cut : 150).replaceAll("[\\s,;:]+$", "") + " ...";
+    }
+
+    /**
+     * Each fact to confirm with the client once, grouped by issue: the writers' assumed facts (the "fact to confirm" note
+     * lines and the internal note's marker list), the card's client-confirmation list of each matched issue, and any
+     * [CONFIRM: ...] of the reply (located by its issue heading). The [CONFIRM] rows of "A. Items to fill" stay as they are.
+     */
+    private static List<String> clientFacts(Map<String, List<String>> note, List<Block> reply) {
+        Map<String, LinkedHashSet<String>> byIssue = new TreeMap<>(Comparator.comparingInt(ReplyLayoutBuilder::issueOrder).thenComparing(Comparator.naturalOrder()));
+        Set<String> seen = new HashSet<>();
+        java.util.function.BiConsumer<String, String> add = (issue, fact) -> {
+            String f = fact.replaceAll("\\s*\\(severity:\\s*\\w+\\)\\s*$", "").replaceAll("^\\[?CONFIRM:\\s*|\\]$", "").trim();
+            if (f.isEmpty() || !seen.add(f.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", ""))) return;
+            byIssue.computeIfAbsent(issue, k -> new LinkedHashSet<>()).add(f);
+        };
+        // the reply's own [CONFIRM: ...] placeholders, by the issue they sit under
+        String where = "General";
+        for (Block b : reply) {
+            if (!(b instanceof Para p) || p.text() == null) continue;
+            if (p.style() == Style.PART) where = "General";
+            else if (p.style() == Style.HEADING) where = ReplyLayout.plain(p.text()).replaceFirst(":.*$", "");
+            Matcher m = Pattern.compile("\\[CONFIRM:\\s*([^\\]]+)\\]").matcher(ReplyLayout.plain(p.text()));
+            while (m.find()) add.accept(where, m.group(1));
+        }
+        for (String n : note.getOrDefault("stage 3 notes", List.of())) {
+            Matcher m = CONFIRM_NOTE.matcher(n);
+            if (m.find()) add.accept("Issue " + m.group(1), m.group(2));
+        }
+        for (String f : note.getOrDefault("facts to confirm with the client", List.of())) {
+            Matcher m = Pattern.compile("(?i)^Issue\\s*#?\\s*(\\d+)\\s*:\\s*(.+)$").matcher(f);
+            if (m.find()) add.accept("Issue " + m.group(1), m.group(2));
+            else add.accept("General", f);
+        }
+        for (String li : note.getOrDefault("matched issues & templates", List.of())) {
+            Matcher m = Pattern.compile("(?is)^Issue\\s*#\\s*(\\d+).*?Confirm with client:\\s*(.+)$").matcher(li);
+            if (!m.find()) continue;
+            for (String f : m.group(2).split(";\\s*")) add.accept("Issue " + m.group(1), f);
+        }
+        List<String> out = new ArrayList<>();
+        byIssue.forEach((issue, facts) -> facts.forEach(f -> out.add(issue + ": " + f)));
+        return out;
+    }
+
+    private static int issueOrder(String label) {
+        Matcher m = Pattern.compile("^Issue (\\d+)$").matcher(label);
+        return m.matches() ? Integer.parseInt(m.group(1)) : label.equals("General") ? Integer.MAX_VALUE : Integer.MAX_VALUE - 1;
     }
 
     private static List<String> documentsFromClient(String html) {
