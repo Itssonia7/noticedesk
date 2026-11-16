@@ -1720,8 +1720,30 @@ model (checks, storage, golden drafts unchanged); a new layout layer (`service/l
 - Tests: `TemplateVariableKindTest` (4: kinds and fits; the live value rejected end to end, placeholder in the reply and
   the item to fill; "has been paid" filled; the fill guard on a matcher fact).
 
+## (b48) Issue titles: the objection's own heading, one sentence, unique, never the client's name (16-11-2026)
+
+- **Live finding** (same run): "Issue 1: The records of M/s Yamuna Textile Mills Private Limited ("the noticee") for FY
+  2021-22" (issue 1 also cited the narrative intro, para 1), "Issue 7: Objection 6: Short payment of tax owing to
+  GSTR-3B of September 2021. The GSTR-3B" (cut mid-sentence; the "Objection N:" prefix was not removed), and two issues
+  both titled "Objection 5: Late filing of returns".
+- **Fix** (`IssueTitles`, used by `ReplyAssemblyService.layoutMeta`; one title feeds both the summary table's Ground
+  column and the issue heading): the notice's own heading of the issue's paragraph, its "Objection N:" / "Issue No. N:"
+  / "Para N" / "Ground N" / "Point N" prefix removed; only the heading sentence (it ends at the first full stop that ends
+  a sentence: not after "No.", "Rs.", "u/s.", "Sl.", "viz.", initials, decimals; the next sentence never included);
+  capped at about 90 characters at a word boundary, no ellipsis, never ending on a joining word. A paragraph without a
+  heading prefix is used only when its first sentence is short and the paragraph carries an amount or an allegation, so
+  a narrative intro ("The records of ... were audited") is never a title. Fallbacks: the matched card's catalogue title
+  (looked up by card id; none without a database), the matcher's label, a code-found defect's title, "Demand under" the
+  legal section. A title holding the client's name (or its first word) is not used. Titles are unique (`unique`):
+  issues sharing a title get " - " and a qualifier from their legal section / kind ("Late filing of returns - late fee
+  and interest (Sections 47 and 50)", "Late filing of returns - penalty under Section 125"); still equal -> " (part N)".
+- Tests: `IssueTitlesTest` (4: the seven live titles in the headings and the Ground column, no client name, no
+  "Objection"; abbreviations, sub-sections and the 90-character cap; narrative intro rejected; card title / legal
+  section fallbacks; numbered duplicates).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **725 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b48).
 - Offline unit suite (`mvn test`): **721 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b47).
 - Offline unit suite (`mvn test`): **717 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b46).
 - Offline unit suite (`mvn test`): **712 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b45).
