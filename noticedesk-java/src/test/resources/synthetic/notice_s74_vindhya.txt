@@ -1,0 +1,48 @@
+OFFICE OF THE JOINT COMMISSIONER OF CENTRAL TAX
+BENGALURU SOUTH COMMISSIONERATE, GST BHAVAN, BENGALURU 560047
+
+DIN: [____________________]
+C.No. IV/16/118/2024-25 Adjn.
+Date: 29-11-2024
+
+SHOW CAUSE NOTICE UNDER SECTION 74(1) OF THE CGST ACT, 2017
+(Summary in Form GST DRC-01 issued electronically)
+
+To,
+M/s Vindhya Build Mart Private Limited
+No. 7, Hosur Main Road, Bommanahalli, Bengaluru 560068
+GSTIN: 29MMMNN9012M1Z7
+Period: FY 2019-20 (01-04-2019 to 31-03-2020)
+
+1. Brief facts. M/s Vindhya Build Mart Private Limited (hereinafter "the noticee") is registered under GST and is engaged in the trading of cement, TMT steel and allied building materials, in the import of granite machinery on CIF basis, and in the export of finished granite slabs against duty credit scrips. Audit of the records of the noticee for FY 2019-20 was conducted under Section 65 of the CGST Act, 2017 and the findings were communicated in Form GST ADT-02 dated 21-08-2024. The noticee's response dated 16-09-2024 has been examined.
+
+2. Issue No. 1: Blocked credit under Section 17(5)(d) on cement and steel.
+2.1 The noticee has availed ITC of Rs. 28,64,200/- (CGST Rs. 14,32,100/- + SGST Rs. 14,32,100/-) on purchases of cement and TMT steel during FY 2019-20. Section 17(5)(d) of the Act bars credit of goods or services received by a taxable person for construction of an immovable property on his own account. The said ITC is therefore inadmissible and is liable to be recovered.
+
+3. Issue No. 2: Non-reversal of common credit under Rule 42 on sale of duty credit scrips.
+3.1 During FY 2019-20 the noticee sold MEIS duty credit scrips of face value Rs. 1,12,00,000/-. Duty credit scrips are exempt supplies under Notification No. 35/2017-Central Tax (Rate). The noticee has not reversed proportionate common ITC under Rule 42 of the CGST Rules, 2017 in respect of the said exempt turnover. The reversal works out to Rs. 3,96,480/- (CGST Rs. 1,98,240/- + SGST Rs. 1,98,240/-).
+
+4. Issue No. 3: Non-payment of IGST under reverse charge on ocean freight.
+4.1 The noticee imported granite processing machinery on CIF basis under 11 bills of entry during FY 2019-20, assessable value Rs. 2,40,00,000/-. In terms of Notification No. 10/2017-Integrated Tax (Rate), Sl. No. 10, read with Notification No. 8/2017-Integrated Tax (Rate), the importer is liable to pay IGST at 5% on the ocean freight component, deemed at 10% of the CIF value where the freight is not ascertainable. IGST of Rs. 1,20,000/- payable under reverse charge has not been discharged.
+
+5. Issue No. 4: Wrong head of tax on inter-State supplies.
+5.1 The noticee supplied cement worth Rs. 64,50,000/- to a registered recipient at Hosur, Tamil Nadu (GSTIN 33GGGHH7890G1Z1) during October 2019 to January 2020 and charged CGST and SGST of Rs. 9,03,000/- (Rs. 4,51,500/- each) instead of IGST of Rs. 9,03,000/-. In terms of Section 7 of the IGST Act the supply is an inter-State supply. IGST of Rs. 9,03,000/- is therefore payable under Section 19 of the IGST Act read with Section 77 of the CGST Act, 2017.
+
+6. Issue No. 5: Discharge of output liability in excess of 99% through ITC, contrary to Rule 86B.
+6.1 For the tax periods January 2020 to March 2020, the noticee's taxable turnover exceeded Rs. 50 lakh per month and the output tax liability was discharged entirely through the electronic credit ledger. In terms of Rule 86B of the CGST Rules, 2017, not more than 99% of the output tax liability may be discharged through ITC. The ITC so utilised in excess of 99%, amounting to Rs. 2,11,000/-, is treated as wrongly utilised and liable to be recovered with interest.
+
+7. The above facts of availment of blocked credit, non-reversal of common credit, non-payment of tax under reverse charge, payment under a wrong head and contravention of Rule 86B came to light only during audit and were not disclosed in the returns. The noticee has thus wilfully suppressed facts with intent to evade payment of tax, attracting the extended period under Section 74(1).
+
+8. NOW THEREFORE, the noticee is called upon to show cause to the Joint Commissioner of Central Tax, Bengaluru South, within thirty days of receipt of this notice as to why:
+(i) ITC of Rs. 34,71,680/- (Issues 1, 2 and 5) should not be demanded and recovered under Section 74(1) of the CGST Act, 2017 read with Section 20 of the IGST Act, 2017;
+(ii) IGST of Rs. 10,23,000/- (Issues 3 and 4) should not be demanded and recovered under Section 74(1) read with Section 20 of the IGST Act, 2017;
+(iii) interest at the applicable rate should not be demanded under Section 50 of the Act;
+(iv) penalty equal to the tax should not be imposed under Section 74(1) read with Section 122(2)(b) of the Act.
+
+9. The noticee may submit a written reply in Form GST DRC-06 and may indicate whether a personal hearing is desired. The noticee is directed to produce all evidence on which it intends to rely. If no reply is received within the stipulated time, the case will be adjudicated ex parte on merits.
+
+10. The relied-upon documents are: ADT-02 dated 21-08-2024; purchase and sales ledgers for FY 2019-20; bills of entry (11 nos.); GSTR-3B and GSTR-1 for FY 2019-20; electronic credit ledger extract.
+
+(Anita Rao)
+Joint Commissioner of Central Tax
+Bengaluru South Commissionerate

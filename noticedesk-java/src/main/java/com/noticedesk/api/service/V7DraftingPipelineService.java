@@ -34,6 +34,7 @@ import com.noticedesk.api.agent.IssueMatchingAgent.MatchedNoticeInfo;
 import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.CodeDefectMerger;
 import com.noticedesk.api.service.matching.DefectChecker;
+import com.noticedesk.api.service.matching.DemandTotals;
 import com.noticedesk.api.service.matching.DefectChecker.CodeDefect;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.DraftTextCleanup;
@@ -581,7 +582,7 @@ public class V7DraftingPipelineService {
                 matchingResult, filledTemplates, input, draftStage, aiContent, hsContent, notes);
 
         List<DraftCheckResult> checkResults = new ArrayList<>(
-                draftCheckService.runAllChecks(matchingResult, assemblyResult, draftSection, draftStage));
+                draftCheckService.runAllChecks(matchingResult, assemblyResult, draftSection, draftStage, fullOcrText));
         if (!allCitations.isEmpty()) {
             checkResults.addAll(draftCheckService.citationChecks(verified));
         }
@@ -895,9 +896,16 @@ public class V7DraftingPipelineService {
         String kind = NoticeHeaderFacts.authorityKind(text);
         if ((authority == null || authority.isBlank()) && kind != null) authority = kind + " authorities";
 
+        // total demand: the notice's own demand clauses, else the issue amounts, over the matcher's figure
+        Double total = verifyTotalDemand(n.totalDemandAmount(), mr.issues(), text, noticeId, notes, flags, flagDetails);
+
         MatchingResult outMr = mr;
         if (!Objects.equals(fy, n.financialYear()) || !Objects.equals(authority, n.authority()) || !Objects.equals(gstin, n.gstin())) {
-            outMr = mr.withNotice(n.withHeaderFacts(fy, authority, gstin));
+            n = n.withHeaderFacts(fy, authority, gstin);
+            outMr = mr.withNotice(n);
+        }
+        if (!Objects.equals(total, n.totalDemandAmount())) {
+            outMr = outMr.withNotice(n.withTotalDemandAmount(total));
         }
         DraftingInput outInput = input;
         if (input != null) {
@@ -909,6 +917,41 @@ public class V7DraftingPipelineService {
             }
         }
         return new HeaderFacts(outMr, outInput);
+    }
+
+    /** Warn flag: the matcher's total demand was replaced by the total of the notice's demand clauses / issue amounts. */
+    public static final String FLAG_TOTAL_DEMAND_CORRECTED = "warn:total_demand_corrected";
+
+    /**
+     * The total demand the draft states: the sum of the notice's demand clauses ({@link DemandTotals#fromDemandClauses})
+     * when the text has them, else the matcher's figure, else the sum of the issue amounts. A matcher figure more than 1%
+     * away from the chosen one is replaced, with a partner note and {@link #FLAG_TOTAL_DEMAND_CORRECTED}.
+     */
+    static Double verifyTotalDemand(Double stated, List<MatchedIssue> issues, String text, UUID noticeId, List<String> notes,
+                                    Set<String> flags, Map<String, Map<String, Object>> flagDetails) {
+        java.math.BigDecimal clauses = DemandTotals.fromDemandClauses(text);
+        java.math.BigDecimal issueSum = DemandTotals.sumOfIssueAmounts(issues);
+        java.math.BigDecimal chosen = clauses != null ? clauses : stated != null ? DemandTotals.of(stated) : issueSum;
+        if (chosen == null) return stated;
+        String source = clauses != null ? "the notice's demand clauses" : stated != null ? "the matcher" : "the sum of the issue amounts";
+        if (stated == null) {
+            notes.add("Total demand " + TemplateFillService.formatIndianCurrency(chosen) + " set by code from " + source + ".");
+            return chosen.doubleValue();
+        }
+        if (DemandTotals.differ(DemandTotals.of(stated), chosen)) {
+            log.warn("Notice {}: matcher total demand {} replaced by {} from {}", noticeId, stated, chosen, source);
+            flags.add(FLAG_TOTAL_DEMAND_CORRECTED);
+            Map<String, Object> d = new LinkedHashMap<>();
+            d.put("matcher", TemplateFillService.formatIndianCurrency(DemandTotals.of(stated)));
+            d.put("chosen", TemplateFillService.formatIndianCurrency(chosen));
+            d.put("source", source);
+            if (issueSum != null) d.put("issue_sum", TemplateFillService.formatIndianCurrency(issueSum));
+            flagDetails.put(FLAG_TOTAL_DEMAND_CORRECTED, d);
+            notes.add("Total demand corrected by code: the matcher gave " + d.get("matcher") + "; " + source + " total "
+                    + d.get("chosen") + ". Partner to confirm.");
+            return chosen.doubleValue();
+        }
+        return stated;
     }
 
     /** The drafting input with the legal name, taxpayer GSTIN, state and financial year set by {@link #applyHeaderFacts}. */

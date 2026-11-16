@@ -416,6 +416,15 @@ public class ReplyAssemblyService {
                 stageVars.put("notice.refund_amount", refundAmount);
             }
         }
+        if (!refundNotice) {
+            // the prayer's "proposed demand of Rs {{issue.amount_tax}}": the total tax demand when code can verify it
+            java.math.BigDecimal verified = DemandTotals.verifiedTotal(noticeInfo, matchedIssues,
+                    input != null ? input.noticeOcrExcerpt() : null);
+            if (verified != null) {
+                stageVars.put("issue.amount_tax", TemplateFillService.formatIndianCurrency(verified));
+                stageVars.put("notice.total_demand_amount", TemplateFillService.formatIndianCurrency(verified));
+            }
+        }
         String sec12Body;
         if (refundNotice) {
             // a refund notice's prayer names its grounds and amounts; the stage template's generic prayer is not used

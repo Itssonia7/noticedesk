@@ -59,6 +59,24 @@ public class DraftCheckService {
             String noticeSection,
             String stage
     ) {
+        return runAllChecks(matchingResult, assemblyResult, noticeSection, stage, null);
+    }
+
+    /** "Total Demand Amount: Rs 4,49,46,680" / "Total Amount Demanded:</strong> Rs ..." as stated in the reply. */
+    private static final Pattern STATED_TOTAL = Pattern.compile(
+            "(?i)total\\s+(?:demand\\s+amount|amount\\s+demanded|demand)\\s*:?\\s*(?:<[^>]+>\\s*)*(?:Rs\\.?|INR|₹)\\s*([\\d,]+(?:\\.\\d+)?)");
+
+    /**
+     * As {@link #runAllChecks(MatchingResult, AssembledReplyResult, String, String)}; with the notice text, the
+     * figure check also compares the stated total demand with the notice's demand clauses.
+     */
+    public List<DraftCheckResult> runAllChecks(
+            MatchingResult matchingResult,
+            AssembledReplyResult assemblyResult,
+            String noticeSection,
+            String stage,
+            String noticeText
+    ) {
         List<DraftCheckResult> results = new ArrayList<>();
 
         List<AssembledSection> sections = assemblyResult.sections() != null ? assemblyResult.sections() : List.of();
@@ -142,11 +160,41 @@ public class DraftCheckService {
                 }
             }
         }
+        // the stated total demand (notice block and every "Total Demand Amount" in the reply) against the sum of the
+        // issue amounts and the notice's demand clauses: more than 1% apart fails
+        java.math.BigDecimal issueSum = DemandTotals.sumOfIssueAmounts(issues);
+        java.math.BigDecimal clauseTotal = DemandTotals.fromDemandClauses(noticeText);
+        Set<java.math.BigDecimal> statedTotals = new LinkedHashSet<>();
+        if (matchingResult.notice() != null && matchingResult.notice().totalDemandAmount() != null) {
+            statedTotals.add(DemandTotals.of(matchingResult.notice().totalDemandAmount()).stripTrailingZeros());
+        }
+        Matcher statedM = STATED_TOTAL.matcher(fullReplyHtml);
+        while (statedM.find()) {
+            java.math.BigDecimal v = NoticeHeaderFacts.parseAmount(statedM.group(1));
+            if (v != null) statedTotals.add(v.stripTrailingZeros());
+        }
+        for (java.math.BigDecimal stated : statedTotals) {
+            String shown = TemplateFillService.formatIndianCurrency(stated);
+            if (DemandTotals.differ(stated, issueSum)) {
+                figuresConsistent = false;
+                figureMismatches.add("Total demand " + shown + " differs from the sum of the issue amounts "
+                        + TemplateFillService.formatIndianCurrency(issueSum));
+            }
+            if (DemandTotals.differ(stated, clauseTotal)) {
+                figuresConsistent = false;
+                figureMismatches.add("Total demand " + shown + " differs from the notice's demand clauses "
+                        + TemplateFillService.formatIndianCurrency(clauseTotal));
+            }
+        }
+        Map<String, Object> figureDetails = new LinkedHashMap<>();
+        figureDetails.put("mismatches", figureMismatches);
+        if (issueSum != null) figureDetails.put("issue_sum", TemplateFillService.formatIndianCurrency(issueSum));
+        if (clauseTotal != null) figureDetails.put("demand_clauses", TemplateFillService.formatIndianCurrency(clauseTotal));
         results.add(new DraftCheckResult(
                 "CHECK_FIGURE_CONSISTENCY",
                 "block",
                 figuresConsistent,
-                Map.of("mismatches", figureMismatches)
+                figureDetails
         ));
 
         // 5. CHECK_NO_UNRESOLVED_PLACEHOLDERS (block): over client-facing sections (all but 13), flags

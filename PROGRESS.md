@@ -1539,8 +1539,31 @@ the cap is 0), substituted in the cached system prompt; the live run of 15-11 na
   its retry test and `CacheAwareCostEstimateTest.writerPrefix_*` pin 16000 / 24000 explicitly (their cap arithmetic
   is about the retry / cache, not the default).
 
+## (b39) Total demand checked by code against the notice's demand clauses and the issue amounts (16-11-2026)
+
+- **Live finding** (synthetic Section 74 notice, now `src/test/resources/synthetic/notice_s74_vindhya.txt`): the
+  executive and client summaries said "Total Demand Amount: Rs 4,49,46,680"; para 8 demands ITC Rs 34,71,680 + IGST
+  Rs 10,23,000 = Rs 44,94,680, and CHECK_FIGURE_CONSISTENCY passed.
+- **Root cause**: the total is the matcher's `total_demand_amount` (a model output), copied unchecked into
+  `MatchedNoticeInfo` and printed by `ReplyAssemblyService`; the amount formatter and the anonymiser were checked and
+  leave the figures intact. Nothing reconciled it with the notice text or the issues, and the figure check only looked
+  for each issue amount in the text.
+- **Fix**: `DemandTotals` reads the notice's demand clauses ("show cause ... why (i) ... Rs X ... demanded"; one amount
+  per clause; interest / penalty / late-fee clauses left out) and sums the demand-issue amounts (incomplete when one
+  lacks an amount). `V7DraftingPipelineService.applyHeaderFacts` sets the total from the demand clauses when present
+  (else the matcher's, else the issue sum); a matcher figure more than 1% away is replaced, with a partner note and
+  `warn:total_demand_corrected`.
+- **CHECK_FIGURE_CONSISTENCY** (block) now also compares every stated total (notice block and each "Total Demand
+  Amount" / "Total Amount Demanded" in the reply) with the issue sum and, with the notice text (new
+  `runAllChecks(..., noticeText)` overload, used by the pipeline), the demand clauses; > 1% apart fails. Details list
+  `issue_sum` / `demand_clauses` (golden drafts 06, 07, 10 regenerated for these two detail fields only; still PASS).
+- **Prayer**: the stage template's `{{issue.amount_tax}}` (and `{{notice.total_demand_amount}}`) is filled with the
+  verified total tax demand (`DemandTotals.verifiedTotal`: demand clauses, else a stated total the issue sum confirms).
+- Tests: `TotalDemandVerificationTest` (6; test fixture `SyntheticS74Notice`).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **687 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b39).
 - Offline unit suite (`mvn test`): **681 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b38); 678 on `050a36f` before.
 - Offline unit suite (`mvn test`): **677 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run
   and the env-gated PDF runner) on 13-11-2026 after (b36), the Spring context test included (no Postgres in the

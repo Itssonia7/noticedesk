@@ -120,7 +120,7 @@ Check Name | Status | Severity | Details
 CHECK_ALL_SECTIONS_PRESENT | PASS | block | {missing_sections=[], total_sections=15}
 CHECK_EVERY_ISSUE_ANSWERED | PASS | block | {total_issues=1, unanswered_issues=[]}
 CHECK_PARA_MAP_ANSWERED | PASS | block | {para_map_categories=[demand, directions, issue, record]}
-CHECK_FIGURE_CONSISTENCY | PASS | block | {mismatches=[]}
+CHECK_FIGURE_CONSISTENCY | PASS | block | {demand_clauses=Rs 15,00,000, issue_sum=Rs 15,00,000, mismatches=[]}
 CHECK_NO_UNRESOLVED_PLACEHOLDERS | PASS | block | {internal_text=[], null_values=[], stray_markers=[], unresolved_placeholders=[], unresolved_refs=[]}
 CHECK_MARKERS_LIST | FAIL | block | {confirm_count=0, confirm_markers=[], missing_count=2, missing_markers=[date_of_receipt, reasons_and_cost_data_for_base_price_revision], pending_ai_count=0, pending_ai_markers=[]}
 CHECK_NO_DUPLICATE_BLOCKS | PASS | warn | {total_rendered_blocks=6, unique_rendered_blocks=6}

@@ -66,6 +66,12 @@ public class IssueMatchingAgent {
             return new MatchedNoticeInfo(noticeNumber, din, issueDate, replyDueDate, newFinancialYear, taxPeriod,
                     totalDemandAmount, newAuthority, newGstin);
         }
+
+        /** The same block with the total demand set by code (checked against the notice's demand clauses). */
+        public MatchedNoticeInfo withTotalDemandAmount(Double newTotal) {
+            return new MatchedNoticeInfo(noticeNumber, din, issueDate, replyDueDate, financialYear, taxPeriod,
+                    newTotal, authority, gstin);
+        }
     }
 
     /** Issue kind (v3): a ground of demand or action stated by the department. */
