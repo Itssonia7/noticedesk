@@ -1,5 +1,9 @@
 package com.noticedesk.api.service;
 
+import com.noticedesk.api.service.layout.ReplyLayout;
+import com.noticedesk.api.service.layout.ReplyLayoutBuilder;
+import com.noticedesk.api.service.layout.ReplyLayoutText;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.noticedesk.api.agent.DraftingAgent;
@@ -135,7 +139,25 @@ public class V7LivePipelineRunnerTest {
         rig.printSummary("Run 2", statusByNotice, totalRun2Inr, abortReason);
     }
 
+    /**
+     * The draft in the partner-approved filing layout (b44): the reply, then a page break and the internal review sheet.
+     * The developer check table is not in it: see {@link #checkTableLines} (run summary).
+     */
     static String renderDraft(String noticeId, DraftingPipelineResult result) {
+        return ReplyLayoutText.render(layout(result));
+    }
+
+    /** The filing layout of a pipeline result's 15 sections. */
+    static ReplyLayout layout(DraftingPipelineResult result) {
+        List<ReplyLayoutBuilder.Section> sections = new ArrayList<>();
+        for (DraftingAgent.DraftSection sec : result.draft().sections()) {
+            sections.add(new ReplyLayoutBuilder.Section(sec.num(), sec.title(), sec.bodyHtml()));
+        }
+        return ReplyLayoutBuilder.build(sections);
+    }
+
+    /** The 15 sections as before (b44), section by section: kept for debugging a layout question. */
+    static String renderSections(String noticeId, DraftingPipelineResult result) {
         StringBuilder sb = new StringBuilder();
         sb.append("=== V7 DRAFT FOR ").append(noticeId).append(" ===\n\n");
         for (DraftingAgent.DraftSection sec : result.draft().sections()) {
@@ -145,6 +167,19 @@ public class V7LivePipelineRunnerTest {
             sb.append(htmlToText(sec.bodyHtml())).append("\n\n");
         }
         return sb.toString();
+    }
+
+    /** The developer check table for the run summary: "Check Name | Status | Severity | Details" rows. */
+    static List<String> checkTableLines(List<DraftCheckResult> checks) {
+        List<String> out = new ArrayList<>();
+        out.add("Code checks (developer table):");
+        out.add("Check Name | Status | Severity | Details");
+        if (checks != null) {
+            for (DraftCheckResult c : checks) {
+                out.add(c.checkName() + " | " + (c.passed() ? "PASS" : "FAIL") + " | " + c.severity() + " | " + c.details());
+            }
+        }
+        return out;
     }
 
     private static String htmlToText(String html) {

@@ -421,6 +421,7 @@ final class V7LiveRig {
                         + " AND created_at >= ? ORDER BY issue_no", noticeUuid.toString(), runStart))));
         report.add(String.format("Flags: %s", allFlags));
         report.addAll(learnedLines(result));
+        report.addAll(V7LivePipelineRunnerTest.checkTableLines(result.checkResults()));
 
         File draftFile;
         if (restorer == null) {

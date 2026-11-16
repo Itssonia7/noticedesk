@@ -19,6 +19,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import com.noticedesk.api.service.layout.LayoutMeta;
+import com.noticedesk.api.service.layout.NoticeLetterHead;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
@@ -328,8 +330,9 @@ public class ReplyAssemblyService {
         rawSections.add(new AssembledSection(4, "04 Issue-wise Response", sec04.toString()));
 
         // ---------------------------------------------------------------- Section 05
+        List<LayoutMeta.ParaMeta> paraMetas = new ArrayList<>();
         rawSections.add(new AssembledSection(5, "05 Para-wise Reply",
-                buildParaWiseReply(matchingResult, input, matchedIssues, ai, missingMarkers, assemblyFlags, notes)));
+                buildParaWiseReply(matchingResult, input, matchedIssues, ai, missingMarkers, assemblyFlags, notes, paraMetas)));
 
         // ---------------------------------------------------------------- Section 06
         StringBuilder sec06 = new StringBuilder();
@@ -535,6 +538,8 @@ public class ReplyAssemblyService {
             sec13.append("</ul>");
         }
         sec13.append("<!-- CHECK_RESULTS_PLACEHOLDER -->");
+        sec13.append(layoutMeta(input, noticeInfo, matchedIssues, substantiveIssues, defectIssues, ai, docLabel, docKind, noticeSec,
+                noticeRef, noticeDate, gstin, clientName, fy, fyPhrase, taxPeriod, refundNotice ? null : totalDemand, paraMetas).toComment());
         rawSections.add(new AssembledSection(13, "13 Internal Partner Note", sec13.toString()));
 
         // ---------------------------------------------------------------- Section 14
@@ -579,6 +584,84 @@ public class ReplyAssemblyService {
         }
 
         return new AssembledReplyResult(finalSections, finalSourceMap, assemblyFlags, missingMarkers, pendingAiMarkers);
+    }
+
+    /** The facts of the filing layout (letter header, issue titles and amounts, para stances) for {@link LayoutMeta#toComment}. */
+    private static LayoutMeta layoutMeta(DraftingAgent.DraftingInput input, MatchedNoticeInfo noticeInfo, List<MatchedIssue> all,
+                                         List<MatchedIssue> substantive, List<MatchedIssue> defects, Map<Integer, AiIssueContent> ai,
+                                         String docLabel, StageResolver.DocumentKind docKind, String noticeSec, String noticeRef,
+                                         String noticeDate, String gstin, String clientName, String fy, String fyPhrase, String taxPeriod,
+                                         String totalDemand, List<LayoutMeta.ParaMeta> paraMetas) {
+        String ocr = input != null ? input.noticeOcrExcerpt() : null;
+        NoticeLetterHead.Head head = NoticeLetterHead.read(ocr);
+        List<LayoutMeta.IssueMeta> issues = new ArrayList<>();
+        List<MatchedIssue> ordered = new ArrayList<>(substantive);
+        ordered.addAll(defects);
+        for (MatchedIssue i : all) if (!ordered.contains(i)) ordered.add(i);
+        for (MatchedIssue i : ordered) {
+            AiIssueContent c = ai.get(i.issueNo());
+            String writer = c != null ? c.writer() : null;
+            String writerNote = writer != null && writer.startsWith("none (") ? writer.substring(6).replaceAll("\\)$", "") : null;
+            String kind = i.isDefect() ? LayoutMeta.KIND_DEFECT : i.isConsequential() ? LayoutMeta.KIND_CONSEQUENTIAL : LayoutMeta.KIND_DEMAND;
+            issues.add(new LayoutMeta.IssueMeta(i.issueNo(), plainIssueTitle(i, ocr), issueAmount(i), kind, i.parentIssueNo(), writerNote, null));
+        }
+        String period = fy != null ? fyPhrase : taxPeriod;
+        return new LayoutMeta(docLabel, formatFullNoticeType(noticeSec, docKind), noticeRef, noticeDate, noticeSec, lawName(input),
+                period, head.officer(), head.officeLines(), clientName, head.clientAddress(), gstin,
+                totalDemand != null && !totalDemand.startsWith("[[") ? totalDemand : null, issues, paraMetas);
+    }
+
+    private static String issueAmount(MatchedIssue i) {
+        Object amt = i.facts() != null ? i.facts().get("amount") : null;
+        BigDecimal v = NoticeHeaderFacts.parseAmount(amt);
+        return v != null && v.signum() > 0 ? TemplateFillService.formatIndianCurrency(v) : null;
+    }
+
+    private static final Pattern ISSUE_NO_PREFIX = Pattern.compile("(?i)^\\s*(?:issue|ground)\\s*(?:no\\.?|number|#)?\\s*\\d+\\s*[:.\\-–]\\s*");
+    private static final Map<String, String> DEFECT_TITLES = Map.of(
+            "din", "No valid DIN on the notice",
+            "limitation_73", "Notice issued after the limitation period",
+            "premature_74", "Section 74 invoked before its conditions are met",
+            "signature", "Notice not signed by the proper officer",
+            "drc01a_reply_time", "No reasonable time to reply to the DRC-01A");
+
+    /**
+     * A plain issue title: the matcher's label when it gives one; else the notice's own heading of the issue's first
+     * paragraph ("2. Issue No. 1: Blocked credit under Section 17(5)(d) on cement and steel." -> "Blocked credit under
+     * Section 17(5)(d) on cement and steel"), when short; else a title for a code-found defect; else "Demand under" the
+     * legal section; else null (the layout prints "Issue N").
+     */
+    static String plainIssueTitle(MatchedIssue issue, String noticeText) {
+        Map<String, Object> f = issue.facts() != null ? issue.facts() : Map.of();
+        for (String k : List.of("label", "issue_label", "title", "ground_label")) {
+            Object v = f.get(k);
+            if (v != null && !v.toString().isBlank()) return v.toString().trim();
+        }
+        if (noticeText != null && issue.noticeParas() != null) {
+            for (String ref : issue.noticeParas()) {
+                Matcher n = Pattern.compile("^\\s*(\\d+(?:\\.\\d+)?)").matcher(ref != null ? ref : "");
+                if (!n.find()) continue;
+                Matcher line = Pattern.compile("(?m)^\\s*" + Pattern.quote(n.group(1)) + "\\.?\\s+(.+)$").matcher(noticeText);
+                if (!line.find()) continue;
+                String t = ISSUE_NO_PREFIX.matcher(line.group(1)).replaceFirst("");
+                if (t.length() == line.group(1).length() && !n.group(1).contains(".")) {
+                    // no "Issue No." heading: only a short first sentence reads as a title
+                    t = t.split("(?<=[a-z)])\\.\\s")[0];
+                }
+                t = t.split("(?<=[a-z)])\\.\\s")[0].replaceAll("[.:;]+$", "").trim();
+                if (!t.isEmpty() && t.split("\\s+").length <= 14 && t.length() < line.group(1).length() + 1
+                        && !t.toLowerCase(Locale.ROOT).startsWith("the noticee")) {
+                    return t;
+                }
+            }
+        }
+        Object check = f.get(CodeDefectMerger.FACT_DEFECT_CHECK);
+        if (check != null && DEFECT_TITLES.containsKey(check.toString())) return DEFECT_TITLES.get(check.toString());
+        Object legal = f.get("legal_section");
+        if (legal != null && !legal.toString().isBlank()) {
+            return (issue.isDefect() ? "Objection under " : "Demand under ") + legal.toString().trim();
+        }
+        return null;
     }
 
     private static final Pattern ADJUDICATION_PROVISION = Pattern.compile("(?i)\\b(?:75\\s*\\(\\s*4\\s*\\)|73\\s*\\(\\s*10\\s*\\)|74A?\\s*\\(\\s*10\\s*\\))");
@@ -855,7 +938,8 @@ public class ReplyAssemblyService {
      */
     private String buildParaWiseReply(MatchingResult matchingResult, DraftingAgent.DraftingInput input,
                                       List<MatchedIssue> issues, Map<Integer, AiIssueContent> ai,
-                                      List<String> missingMarkers, List<String> flags, List<String> notes) {
+                                      List<String> missingMarkers, List<String> flags, List<String> notes,
+                                      List<LayoutMeta.ParaMeta> paraMetas) {
         Map<String, List<Integer>> paraMap = matchingResult != null && matchingResult.paraMap() != null ? matchingResult.paraMap() : Map.of();
 
         Map<String, Set<Integer>> categories = new HashMap<>();
@@ -935,8 +1019,12 @@ public class ReplyAssemblyService {
         sb.append("<p>Point-by-point reply to the paragraphs of the notice:</p><ol>");
         for (int p = 1; p <= paraCount; p++) {
             sb.append("<li><strong>Para ").append(p).append(":</strong> ");
+            // the stance of the filing layout's para-wise table (denied -> "See the reply to Issue N")
+            String stance;
+            List<MatchedIssue> refs = List.of();
             if (statutoryParas.contains(p)) {
                 sb.append(STATUTORY_PARA_REPLY);
+                stance = LayoutMeta.NOTED;
                 if (aiParaReplies.containsKey(p) || IssueMatchingAgent.STANCE_DENIED.equals(stanceByPara.get(p))
                         || (!stanceByPara.containsKey(p) && (paraToIssues.containsKey(p) || issueParas.contains(p) || demandParas.contains(p)))) {
                     overridden.add(p);
@@ -944,22 +1032,45 @@ public class ReplyAssemblyService {
             } else if (aiParaReplies.containsKey(p)) {
                 String reply = paraReplyHtml(p, aiParaReplies.get(p), used);
                 sb.append(!reply.isEmpty() ? reply : replyWithRefs("Denied", linkedIssues(p, paraToIssues, issues)));
+                String plain = reply.replaceAll("<[^>]+>", " ").trim().toLowerCase(Locale.ROOT);
+                stance = plain.startsWith("admitted") ? LayoutMeta.ADMITTED
+                        : plain.startsWith("noted") || plain.startsWith("matter of record") ? LayoutMeta.NOTED : LayoutMeta.DENIED;
+                Set<Integer> writers = new TreeSet<>();
+                for (ParaReply r : aiParaReplies.get(p)) if (r.issueNo() > 0) writers.add(r.issueNo());
+                refs = writers.isEmpty() ? linkedIssues(p, paraToIssues, issues) : issuesByNumber(writers, p, issues);
             } else if (stanceByPara.containsKey(p)) {
                 sb.append(stanceReply(stanceByPara.get(p), p, paraToIssues, issues));
+                String st = stanceByPara.get(p);
+                stance = IssueMatchingAgent.STANCE_ADMITTED.equals(st) ? LayoutMeta.ADMITTED
+                        : IssueMatchingAgent.STANCE_NOT_APPLICABLE.equals(st) ? LayoutMeta.NOTED : LayoutMeta.DENIED;
+                refs = linkedIssues(p, paraToIssues, issues);
             } else if (paraToIssues.containsKey(p)) {
-                sb.append(denialWithRefs(issuesByNumber(paraToIssues.get(p), p, issues)));
+                refs = issuesByNumber(paraToIssues.get(p), p, issues);
+                sb.append(denialWithRefs(refs));
+                stance = LayoutMeta.DENIED;
             } else if (issueParas.contains(p)) {
-                sb.append(denialWithRefs(issuesForPara(p, issues)));
+                refs = issuesForPara(p, issues);
+                sb.append(denialWithRefs(refs));
+                stance = LayoutMeta.DENIED;
             } else if (demandParas.contains(p)) {
                 sb.append("Denied. The proposals in this paragraph are not sustainable for the reasons set out in Sections 04 and 06.");
+                stance = LayoutMeta.DENIED;
+                refs = issues.stream().filter(i -> !i.isDefect()).toList();
             } else if (directionParas.contains(p)) {
                 sb.append("Noted. This reply is submitted in compliance with the direction.");
+                stance = LayoutMeta.NOTED;
             } else if (recordParas.contains(p)) {
                 sb.append("Matter of record; no comments.");
+                stance = LayoutMeta.NOTED;
             } else {
                 sb.append("[[PARTNER: reply to Para ").append(p).append(" (paragraph not classified)]]");
+                stance = LayoutMeta.PARTNER;
             }
             sb.append("</li>");
+            if (paraMetas != null) {
+                paraMetas.add(new LayoutMeta.ParaMeta(p, stance,
+                        LayoutMeta.DENIED.equals(stance) ? refs.stream().map(MatchedIssue::issueNo).toList() : List.of()));
+            }
         }
         sb.append("</ol>");
         if (!statutoryParas.isEmpty()) {

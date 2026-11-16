@@ -1621,8 +1621,47 @@ the cap is 0), substituted in the cached system prompt; the live run of 15-11 na
 - Tests: `ResidualFormVocabularyTest` (4: the synthetic notice anonymises with residual 0; form phrases give 0; real
   names in capitals, including ones holding a form word, still count; the anonymiser still replaces such a name).
 
+## (b44) Filing layout, part 1: reply structure and review sheet (16-11-2026)
+
+Partner-approved reference layout (agreed 16-11-2026 from the notice 03 draft). The 15 draft sections stay the data
+model (checks, storage, golden drafts unchanged); a new layout layer (`service/layout`) lays them out for filing.
+
+- **Metadata** (`LayoutMeta`): the assembly writes one HTML comment at the end of Section 13 (`<!--nd-layout {...}
+  nd-layout-->`, '<', '>' and '-' escaped so comment strippers remove it whole) with the letter header (officer and
+  office from the notice's "OFFICE OF THE ..." heading or signature block, the client's address under "To,", via
+  `NoticeLetterHead`), a plain title and amount per issue (the notice's own issue heading of the issue's first
+  paragraph, else a title for a code-found defect, else "Demand under" the legal section), why an issue has no draft
+  (e.g. "AI draft skipped, cost cap"), and the stance of every notice paragraph with the issues that answer it. A
+  stored draft without the comment still lays out from its headings.
+- **Reply** (`ReplyLayoutBuilder`): letterhead placeholder, date, To, From (name, address, GSTIN), bold subject with
+  reference, date, section and period, salutation, one opening paragraph; 1. Background (Section 03); 2. Summary table
+  No. | Ground | Amount (right-aligned, total row) | Company's position; 3. Issue-wise reply: "Issue N: <title> (Rs
+  <amount>)" with "Facts" (04) and "Legal submissions" (06), paragraphs 3.1, 3.2 ... continuous (old "para 4.x"
+  references renumbered; "Section 04" style references become "Part 3"); an issue with no grounds block still shows
+  its legal submissions; a skipped draft reads "[Partner to draft: the AI draft for this issue was skipped (cost
+  cap)]"; 4. Procedural objections (defect issues); 5. Para-wise reply table reading "Denied. See the reply to Issue
+  N." / "Admitted." / "Noted." from the stance (no paragraph numbers, so an issue with an empty grounds block no
+  longer shifts later references, and "4.7 and 4.7" cannot occur); cross-examination only when requested;
+  annexures table; prayer as (a), (b), (c) (the stage template's wording, split at its clauses, not reworded);
+  signature block. "Issue #", section numbers, card / template ids, flag names and costs never appear.
+- **Placeholders** (`ReplyLayout.humanise`): [[MISSING: date_of_receipt]] -> [date of receipt], label map for
+  awkward names (rule86b_exception -> [which exception]), [[VERIFY: x]] -> [VERIFY: x], [[PARTNER: x]] -> [x],
+  {{issue.scrip_type}} -> [scrip type]; ungrouped rupee amounts in Indian format (Rs 1,12,00,000).
+- **Internal review sheet** after a page break, titled "INTERNAL REVIEW SHEET - NOT FOR FILING": A. items to fill
+  (table: item | where needed), B. points for the partner (template / drafting notes, code checks that need a
+  decision such as the DIN finding, citations marked VERIFY, facts to confirm with the client per issue, procedural
+  options, documents to collect), C. filing checklist (Section 15 items).
+- **Outputs**: the runners' draft `.txt` is the layout (`ReplyLayoutText`); the developer check table (check names,
+  PASS / FAIL, flag ids) moves to the run summary (`checkTableLines`), not the draft. Word export: (b45).
+- Tests: `ReplyLayoutTest` (7: section order and page break, no "Issue #" / "Section 0x" / raw {{ }} / [[ ]] /
+  internal text in the reply, headings with titles and amounts, empty-grounds issue, skipped draft, continuous
+  numbering and renumbered references, para-wise references point to existing headings, short placeholders and Indian
+  numbers, letter addressee, summary table, review sheet without the developer table, a stored draft without the
+  metadata).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **709 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b44).
 - Offline unit suite (`mvn test`): **702 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b43).
 - Offline unit suite (`mvn test`): **698 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b42).
 - Offline unit suite (`mvn test`): **695 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b41).
