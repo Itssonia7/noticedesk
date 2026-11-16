@@ -27,8 +27,12 @@ public record ReplyLayout(List<Block> reply, List<Block> review) {
 
     /** Paragraph styles. */
     public enum Style {
-        /** Letterhead / date / addresses: left aligned, no spacing rules. */
+        /** Addresses and other letter lines: left aligned, no spacing rules; an empty one is a blank line. */
         LETTER,
+        /** The firm letterhead line: centred. */
+        LETTERHEAD,
+        /** The "Date:" line of the letter: right aligned in Word. */
+        DATE,
         /** The bold subject line. */
         SUBJECT,
         /** Document title (the review sheet title), centred bold. */

@@ -197,6 +197,14 @@ public class DocxExportService {
                 p.setAlignment(ParagraphAlignment.LEFT);
                 p.setSpacingAfter(0);
             }
+            case LETTERHEAD -> {
+                p.setAlignment(ParagraphAlignment.CENTER);
+                p.setSpacingAfter(240);
+            }
+            case DATE -> {
+                p.setAlignment(ParagraphAlignment.RIGHT);
+                p.setSpacingAfter(0);
+            }
             case SUBJECT -> {
                 p.setAlignment(ParagraphAlignment.BOTH);
                 p.setSpacingBefore(240);
@@ -230,6 +238,10 @@ public class DocxExportService {
             default -> p.setAlignment(ParagraphAlignment.BOTH);
         }
         String text = para.text() != null ? para.text() : "";
+        if (para.style() == com.noticedesk.api.service.layout.ReplyLayout.Style.LETTER) {
+            // "CGST Division - Okhla" never breaks at the dash: non-breaking spaces around it
+            text = text.replaceAll(" ([-–]) ", "\u00A0$1\u00A0");
+        }
         if (para.number() != null) {
             // hanging indent: the number in the margin, the text aligned after it
             p.setIndentationLeft(720);
@@ -289,17 +301,38 @@ public class DocxExportService {
             }
         }
         int[] widths = columnWidths(t.header());
+        // fixed layout with a grid in twips, so Word keeps the proportions instead of autofitting to the content
+        int textWidth = A4_WIDTH - 2 * MARGIN;
+        var tblPr = table.getCTTbl().getTblPr() != null ? table.getCTTbl().getTblPr() : table.getCTTbl().addNewTblPr();
+        (tblPr.isSetTblLayout() ? tblPr.getTblLayout() : tblPr.addNewTblLayout())
+                .setType(org.openxmlformats.schemas.wordprocessingml.x2006.main.STTblLayoutType.FIXED);
+        var grid = table.getCTTbl().getTblGrid() != null ? table.getCTTbl().getTblGrid() : table.getCTTbl().addNewTblGrid();
+        while (grid.sizeOfGridColArray() > 0) grid.removeGridCol(0);
+        for (int c = 0; c < cols && c < widths.length; c++) {
+            grid.addNewGridCol().setW(java.math.BigInteger.valueOf((long) textWidth * widths[c] / 100));
+        }
         for (XWPFTableRow row : table.getRows()) {
-            for (int c = 0; c < cols && c < widths.length; c++) row.getCell(c).setWidth(widths[c] + "%");
+            for (int c = 0; c < cols && c < widths.length; c++) {
+                XWPFTableCell cell = row.getCell(c);
+                cell.setWidth(widths[c] + "%");
+                // amounts and the narrow number column never wrap ("Rs 11,09,570", "No.")
+                if (t.rightAligned().contains(c) || (cols == 4 && c == 0)) {
+                    var tcPr = cell.getCTTc().isSetTcPr() ? cell.getCTTc().getTcPr() : cell.getCTTc().addNewTcPr();
+                    if (!tcPr.isSetNoWrap()) tcPr.addNewNoWrap();
+                }
+            }
         }
         table.getRow(0).setRepeatHeader(true);
         doc.createParagraph().setSpacingAfter(0);   // space after the table
     }
 
-    /** Column widths in percent: a narrow number / reference column, a wide text column. */
+    /**
+     * Column widths in percent: a narrow number / reference column, a wide text column. The summary table (No. | Ground
+     * | Amount | Company's position) is 7 / 35 / 16 / 42.
+     */
     static int[] columnWidths(java.util.List<String> header) {
         int cols = header.size();
-        if (cols == 4) return new int[]{8, 40, 17, 35};
+        if (cols == 4) return new int[]{7, 35, 16, 42};
         if (cols == 2) {
             String first = header.get(0).toLowerCase(java.util.Locale.ROOT);
             return first.startsWith("para") || first.startsWith("annexure") ? new int[]{22, 78} : new int[]{55, 45};

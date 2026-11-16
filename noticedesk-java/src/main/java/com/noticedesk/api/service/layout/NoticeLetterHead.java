@@ -31,6 +31,7 @@ public final class NoticeLetterHead {
 
     public static Head read(String text) {
         if (text == null || text.isBlank()) return new Head(null, List.of(), List.of());
+        text = joinDashBreaks(text);
         String[] lines = text.split("\\R");
         String officer = null;
         List<String> office = new ArrayList<>();
@@ -70,6 +71,31 @@ public final class NoticeLetterHead {
             }
         }
         return new Head(officer, office, address);
+    }
+
+    /** A line of the document head (before "To,") ending in a spaced dash, e.g. "CGST DIVISION -". */
+    private static final Pattern DASH_BREAK = Pattern.compile("(?m)(\\S)[ \\t]+([-–])[ \\t]*\\R[ \\t]*(?=\\S)");
+
+    /**
+     * The text with each head line that ends in " -" / " –" joined to the next line ("OFFICE OF THE ASSISTANT COMMISSIONER,
+     * CGST DIVISION -" + "OKHLA" -> "... CGST DIVISION - OKHLA"), so an office name is never split after its dash. Only the
+     * head (up to the "To," line, else the first 40 lines) is changed; an amount ending "/-" is never joined.
+     */
+    static String joinDashBreaks(String text) {
+        Matcher to = TO_LINE.matcher(text);
+        int headEnd = to.find() ? to.start() : nthLineEnd(text, 40);
+        String head = text.substring(0, headEnd);
+        return DASH_BREAK.matcher(head).replaceAll("$1 $2 ") + text.substring(headEnd);
+    }
+
+    private static int nthLineEnd(String text, int n) {
+        int at = 0;
+        for (int k = 0; k < n; k++) {
+            int nl = text.indexOf('\n', at);
+            if (nl < 0) return text.length();
+            at = nl + 1;
+        }
+        return at;
     }
 
     private static int lineIndexAt(String text, int offset) {

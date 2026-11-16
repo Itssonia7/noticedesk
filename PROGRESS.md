@@ -1767,8 +1767,25 @@ model (checks, storage, golden drafts unchanged); a new layout layer (`service/l
   grouped, merged with the card list, still in A; developer lines only in the run summary and the reworded cost-cap
   point; a defect code-check line keeps only the defect). `ReplyLayoutTest` unchanged and passing.
 
+## (b50) Letter and summary-table cosmetics (Word and .txt) (16-11-2026)
+
+- **Live finding** (same run): no blank line between the Date line, the To block and the From block; the office line
+  could break after "CGST Division -"; the summary table's "No." header wrapped and amounts wrapped.
+- **Fix**: new layout styles `LETTERHEAD` (centred in Word) and `DATE` (right-aligned in Word); an empty letter line
+  after the Date line and before "From," (a blank line in the .txt and in Word). `NoticeLetterHead.joinDashBreaks`: in
+  the notice head (before "To,"), a line ending in a spaced "-" / "–" is joined to the next ("OFFICE OF THE ASSISTANT
+  COMMISSIONER, CGST DIVISION -" + "OKHLA" -> "The Assistant Commissioner, CGST Division - Okhla"); an amount ending
+  "/-" is never joined. Word: the dash in a letter line is wrapped in non-breaking spaces. Summary table (Word): No. 7%,
+  Ground 35%, Amount 16% (right-aligned), Company's position 42%; fixed table layout with a matching grid in twips;
+  the Amount column and the No. column do not wrap.
+- Tests: `LetterAndTableCosmeticsTest` (2: .txt blank lines and the whole office line, also from a text layer broken
+  after the dash, "/-" not joined; docx letterhead centred, Date right, blank paragraphs, the To block text, column
+  widths 7 / 35 / 16 / 42, no-wrap amount and No. header, fixed layout and grid). `ReplyLayoutTest`,
+  `ReplyDocxExportTest` unchanged and passing.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **731 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b50).
 - Offline unit suite (`mvn test`): **729 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b49).
 - Offline unit suite (`mvn test`): **725 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b48).
 - Offline unit suite (`mvn test`): **721 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b47).

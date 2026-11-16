@@ -45,7 +45,8 @@ public final class ReplyLayoutText {
                     case HEADING -> sb.append(text).append("\n\n");
                     case SUBHEADING -> sb.append(text).append("\n\n");
                     case SUBJECT -> sb.append('\n').append(text).append("\n\n");
-                    case LETTER, SIGNATURE -> sb.append(text).append('\n');
+                    case LETTER, SIGNATURE, DATE -> sb.append(text).append('\n');
+                    case LETTERHEAD -> sb.append(text).append("\n\n");
                     default -> sb.append(p.number() != null ? p.number() + "  " : "").append(text).append(p.style() == Style.ITEM ? "\n" : "\n\n");
                 }
                 if (p.style() == Style.ITEM && p.number() == null) sb.append('\n');

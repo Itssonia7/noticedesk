@@ -190,12 +190,14 @@ public final class ReplyLayoutBuilder {
     // ------------------------------------------------------------------ the letter
 
     private static void letter(List<Block> out, LayoutMeta m) {
-        out.add(Para.of(Style.LETTER, hl("Firm letterhead")));
-        out.add(Para.of(Style.LETTER, "Date: " + hl("date of filing")));
+        out.add(Para.of(Style.LETTERHEAD, hl("Firm letterhead")));
+        out.add(Para.of(Style.DATE, "Date: " + hl("date of filing")));
+        out.add(Para.of(Style.LETTER, ""));   // a blank line between the Date line, the To block and the From block
         out.add(Para.of(Style.LETTER, "To,"));
         out.add(Para.of(Style.LETTER, orHl(m.officer(), "officer designation")));
         if (m.officeLines().isEmpty()) out.add(Para.of(Style.LETTER, hl("office address")));
         for (String l : m.officeLines()) out.add(Para.of(Style.LETTER, humanise(l)));
+        out.add(Para.of(Style.LETTER, ""));
         out.add(Para.of(Style.LETTER, "From,"));
         out.add(Para.of(Style.LETTER, orHl(m.clientName(), "client name")));
         if (m.clientAddress().isEmpty()) out.add(Para.of(Style.LETTER, hl("client address")));
