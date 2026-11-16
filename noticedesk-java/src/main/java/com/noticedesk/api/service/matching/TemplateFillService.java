@@ -201,14 +201,46 @@ public class TemplateFillService {
         allMissingVars.addAll(summaryRes.missingVars());
         allFlags.addAll(summaryRes.flags());
 
+        // the documents (Sections 10 / 11 / 14) and procedural options take the same variables as the body
+        List<String> documents = fillList(template.documents(), declaredVars, contextMap, template.templateId(), allMissingVars, allFlags);
+        List<String> options = fillList(template.proceduralObjectionOptions(), declaredVars, contextMap, template.templateId(),
+                allMissingVars, allFlags);
+
         return new FilledTemplateResult(
                 template.templateId(), template.version(), cardId,
                 summaryRes.html(), filledBlocks, sourceMapEntries,
                 allMissingVars, allFlags,
-                template.documents() != null ? template.documents() : List.of(),
-                template.proceduralObjectionOptions() != null ? template.proceduralObjectionOptions() : List.of(),
+                documents,
+                options,
                 false, flagDetails
         );
+    }
+
+    private static final Pattern LIST_PLACEHOLDER = Pattern.compile("\\{\\{([^}]+)\\}\\}");
+
+    /**
+     * Fills the {{...}} variables of a template list (documents, procedural options) from the issue's context map,
+     * as the body is filled. A variable the template does not declare is still filled from the map (a list item is
+     * not a template bug); a missing value prints the same [[MISSING: ...]] marker as the body.
+     */
+    List<String> fillList(List<String> items, List<String> declaredVars, Map<String, Object> contextMap, String templateId,
+                          List<String> missingVars, List<String> flags) {
+        if (items == null || items.isEmpty()) return List.of();
+        List<String> out = new ArrayList<>();
+        for (String item : items) {
+            if (item == null || !item.contains("{{")) {
+                out.add(item);
+                continue;
+            }
+            Set<String> declared = new HashSet<>(declaredVars != null ? declaredVars : List.of());
+            Matcher m = LIST_PLACEHOLDER.matcher(item);
+            while (m.find()) declared.add(m.group(1).trim());
+            BlockFillResult r = fillTextPlaceholders(item, new ArrayList<>(declared), contextMap, templateId);
+            for (String v : r.missingVars()) if (!missingVars.contains(v)) missingVars.add(v);
+            for (String f : r.flags()) if (!flags.contains(f)) flags.add(f);
+            out.add(r.html());
+        }
+        return out;
     }
 
     private String getCardId(MatchedIssue issue) {

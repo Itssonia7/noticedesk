@@ -1578,8 +1578,22 @@ the cap is 0), substituted in the cached system prompt; the live run of 15-11 na
   blank brackets, underscores, NIL, N/A, dashes, dots, a real-looking DIN, a split-line DIN, RFN-only, the matcher
   value rules). Existing `DefectCheckerTest` unchanged and passing.
 
+## (b41) Template variables filled in the document lists, annexure index and client list (16-11-2026)
+
+- **Live finding**: `issue.scrip_type` (MEIS) was filled in the issue body, but Sections 10 (documents enclosed), 11
+  (annexure index) and 14 (client document list) printed `{{issue.scrip_type}}`; CHECK_NO_UNRESOLVED_PLACEHOLDERS
+  failed.
+- **Cause**: `TemplateFillService.fillTemplateForIssue` filled the blocks and the summary line but passed the
+  template's `documents` (and `procedural_objection_options`) through raw.
+- **Fix**: both lists are filled from the same context map as the body (`fillList`); a list variable the template
+  does not declare is still filled from the map (no "template bug" exception for a list item), and a missing value
+  prints the body's `[[MISSING: ...]]` marker and is added to the issue's missing variables.
+- Tests: `TemplateListVariablesTest` (2: documents / options filled, missing marker; Sections 10, 11, 14 carry
+  "MEIS" and no `{{`, placeholder check clean).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **695 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b41).
 - Offline unit suite (`mvn test`): **693 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b40).
 - Offline unit suite (`mvn test`): **687 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b39).
 - Offline unit suite (`mvn test`): **681 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b38); 678 on `050a36f` before.
