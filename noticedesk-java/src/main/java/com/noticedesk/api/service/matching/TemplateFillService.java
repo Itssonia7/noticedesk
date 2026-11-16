@@ -524,6 +524,12 @@ public class TemplateFillService {
             }
 
             Object val = contextMap.get(placeholderKey);
+            if (val != null && !val.toString().isBlank() && !TemplateVariableKinds.fits(placeholderKey, val)) {
+                // a value of the wrong kind ("17800" for a status) is not put into the sentence: it is treated as not
+                // found, so the partner sees the placeholder and the item to fill
+                flags.add("rejected_" + placeholderKey);
+                val = null;
+            }
             if (val == null || val.toString().isBlank()) {
                 missingVars.add(placeholderKey);
                 flags.add("missing_" + placeholderKey);

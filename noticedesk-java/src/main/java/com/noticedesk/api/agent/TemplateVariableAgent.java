@@ -209,7 +209,11 @@ public class TemplateVariableAgent {
         if (words.isEmpty()) words = n;
         String lower = bare.toLowerCase(Locale.ROOT);
         String shape;
-        if (lower.contains("date")) {
+        if (com.noticedesk.api.service.matching.TemplateVariableKinds.kindOf(n)
+                == com.noticedesk.api.service.matching.TemplateVariableKinds.Kind.TEXT) {
+            // "late_fee_status" is a few words, not the fee: the name's "fee" must not ask for an amount
+            shape = "a few words as the document states them, never a number or amount";
+        } else if (lower.contains("date")) {
             shape = "a date stated in the document, written dd.mm.yyyy";
         } else if (lower.contains("amount") || lower.contains("tax") || lower.contains("interest") || lower.contains("penalty")
                 || lower.contains("turnover") || lower.contains("demand") || lower.contains("fee")) {

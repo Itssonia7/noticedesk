@@ -1701,8 +1701,28 @@ model (checks, storage, golden drafts unchanged); a new layout layer (`service/l
   mentions interest stays tax; demand-clause figures and sections; the live case passes; a 10x tax amount still blocks
   and a wrong late fee is caught on its own; the summary-table rows). Test fixture `SyntheticS73Notice`.
 
+## (b47) Template variable values must fit the variable's kind (16-11-2026)
+
+- **Live finding** (same run): `issue.late_fee_status` was "read from the document" as 17800 and the reply printed "late
+  fee under Section 47 — which the noticee 17800" and "which stands 17800". The variable step's hint for the name said
+  "an amount in rupees ... digits only" because the name holds "fee".
+- **Fix** (`TemplateVariableKinds`): templates declare names only (no type), so the kind comes from a declared type when
+  one is given (`kindOf(name, declared)`: text / amount / date / identifier / any), else from the name: `_status`,
+  `_position`, `_exception`, `_type`, `_reason`, `_basis`, `_plea`, `_nature` TEXT; `_amount`, `_value`, `_tax` AMOUNT;
+  `_date` DATE; `_no`, `_number` IDENTIFIER; else not checked. TEXT must not be a bare number or rupee amount; AMOUNT and
+  DATE must carry a digit; IDENTIFIER a letter / digit and at most 8 words. Checked twice before substitution: in
+  `V7DraftingPipelineService.extractTemplateVariables` (the value is not merged into the facts; note "Issue #n: variable
+  rejected: issue.late_fee_status expected text ..."; flag `warn:template_variable_rejected`, listed in the run summary's
+  Flags line) and in `TemplateFillService.fillTextPlaceholders` (any source, e.g. a matcher fact; block flag
+  `rejected_<name>`). A rejected value is treated as not found: `[[MISSING: late_fee_status]]`, shown as "[late fee
+  status]" and listed under "A. Items to fill before filing". `TemplateVariableAgent.hintFor` asks a TEXT variable for "a
+  few words ..., never a number or amount" (other hints unchanged).
+- Tests: `TemplateVariableKindTest` (4: kinds and fits; the live value rejected end to end, placeholder in the reply and
+  the item to fill; "has been paid" filled; the fill guard on a matcher fact).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **721 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b47).
 - Offline unit suite (`mvn test`): **717 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b46).
 - Offline unit suite (`mvn test`): **712 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b45).
 - Offline unit suite (`mvn test`): **709 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b44).

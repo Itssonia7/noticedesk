@@ -96,6 +96,12 @@ public final class SyntheticS73Notice {
     }
 
     public static AssembledReplyResult assemble(MatchingResult mr, Map<Integer, AiIssueContent> ai, List<String> notes) {
+        return assemble(mr, ai, notes, Map.of());
+    }
+
+    /** As {@link #assemble(MatchingResult, Map, List)}, with filled templates for some issues (issue no -> result). */
+    public static AssembledReplyResult assemble(MatchingResult mr, Map<Integer, AiIssueContent> ai, List<String> notes,
+                                                Map<Integer, FilledTemplateResult> templates) {
         ReplyAssemblyService svc = new ReplyAssemblyService(null, null, new ObjectMapper());
         svc.registerInMemoryStageTemplate(new StageTemplate("scn_73", 1, LocalDate.of(2017, 7, 1), LocalDate.of(2099, 12, 31), "draft",
                 new TreeMap<>(Map.of("08", "<p>Not applicable.</p>",
@@ -104,6 +110,10 @@ public final class SyntheticS73Notice {
                         "15", "<p>FILING CHECKLIST: 1. Form GST DRC-06 2. Authorisation Letter.</p>")), null, null, null));
         List<FilledTemplateResult> fts = new ArrayList<>();
         for (MatchedIssue i : mr.issues()) {
+            if (templates.containsKey(i.issueNo())) {
+                fts.add(templates.get(i.issueNo()));
+                continue;
+            }
             fts.add(new FilledTemplateResult("NONE", 0, i.primaryCardId(), null, List.of(), List.of(), List.of(),
                     List.of("no_template_available"), List.of(), List.of(), false));
         }

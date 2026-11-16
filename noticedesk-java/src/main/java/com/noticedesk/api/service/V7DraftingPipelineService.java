@@ -35,6 +35,7 @@ import com.noticedesk.api.service.matching.CatalogueService;
 import com.noticedesk.api.service.matching.CodeDefectMerger;
 import com.noticedesk.api.service.matching.DefectChecker;
 import com.noticedesk.api.service.matching.DemandTotals;
+import com.noticedesk.api.service.matching.TemplateVariableKinds;
 import com.noticedesk.api.service.matching.DefectChecker.CodeDefect;
 import com.noticedesk.api.service.matching.DraftCheckService;
 import com.noticedesk.api.service.matching.DraftTextCleanup;
@@ -105,6 +106,8 @@ public class V7DraftingPipelineService {
     public static final String FLAG_VARIABLE_AGENT_NOT_CALLED = "warn:variable_agent_not_called";
     /** Draft flag (warn): the template variable step failed or returned unusable output twice; placeholders stay [[MISSING]]. */
     public static final String FLAG_VARIABLE_AGENT_FAILED = "warn:variable_agent_failed";
+    /** Draft flag (warn): a value read for a template variable was not of the variable's kind and was not used. */
+    public static final String FLAG_VARIABLE_REJECTED = "warn:template_variable_rejected";
 
     /** Client-facing placeholder for an AI issue the writer could not (or was not allowed to) write. */
     public static final String AI_FAILED_PLACEHOLDER = "[[PARTNER: AI draft failed — write manually]]";
@@ -731,6 +734,13 @@ public class V7DraftingPipelineService {
                     // a supplier / recipient GSTIN never fills a client field
                     notes.add("Issue #" + issue.issueNo() + ": template variable " + name + " not filled: the value is not the"
                             + " taxpayer's GSTIN.");
+                    continue;
+                }
+                if (!TemplateVariableKinds.fits(name, value)) {
+                    // e.g. "17800" for issue.late_fee_status: treated as not found ([[MISSING]], an item to fill)
+                    notes.add("Issue #" + issue.issueNo() + ": " + TemplateVariableKinds.rejectionNote(name)
+                            + " (the document value is not of that kind; left as [[MISSING]]).");
+                    flags.add(FLAG_VARIABLE_REJECTED);
                     continue;
                 }
                 facts.put(TemplateFillService.factKeyForVariable(name), value);
