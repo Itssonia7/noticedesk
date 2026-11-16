@@ -466,11 +466,19 @@ final class V7LiveRig {
     }
 
     /**
-     * The draft as a DOCX (internal mode: every section plus the partner note) with every value restored by
-     * {@code restorer}. {@code clientName} / {@code gstin} are already restored; the PAN is the GSTIN's characters 3-12.
+     * The draft as a DOCX in the filing layout (reply, then the internal review sheet) with every value restored by
+     * {@code restorer}. {@code clientName} / {@code gstin} / {@code docType} / {@code fy} are used by the pre-(b45)
+     * section-by-section output only ({@link #restoredSectionsDocx}).
      */
     static byte[] restoredDocx(DraftingPipelineResult result, Function<String, String> restorer, String clientName, String gstin,
                                String docType, String fy) {
+        // (b45) the partner-approved filing layout: the reply, a page break, the internal review sheet; every text restored
+        return new DocxExportService().renderReplyDocx(V7LivePipelineRunnerTest.layout(result).mapText(restorer), true);
+    }
+
+    /** The pre-(b45) Word output (cover sheet, 15 sections, partner note), kept for comparison. */
+    static byte[] restoredSectionsDocx(DraftingPipelineResult result, Function<String, String> restorer, String clientName, String gstin,
+                                       String docType, String fy) {
         List<Map<String, Object>> sections = new ArrayList<>();
         for (DraftingAgent.DraftSection s : result.draft().sections()) {
             Map<String, Object> m = new LinkedHashMap<>();

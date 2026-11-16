@@ -277,7 +277,9 @@ class V7PdfPrivacyPipelineOfflineTest {
         try (XWPFDocument doc = new XWPFDocument(new ByteArrayInputStream(docx))) {
             for (XWPFParagraph p : doc.getParagraphs()) docxText.append(p.getText()).append('\n');
         }
-        assertTrue(docxText.toString().contains("M/s ZETA ALLOYS PRIVATE LIMITED · PAN: ZZZZZ9999Z"), docxText.toString());
+        // (b45) the filing layout has no PAN cover sheet: the restored name is in the From block of the reply letter
+        assertTrue(docxText.toString().contains("From,\nM/s ZETA ALLOYS PRIVATE LIMITED\n"), docxText.toString());
+        assertFalse(docxText.toString().contains("[["), docxText.toString());
         assertTrue(docxText.toString().contains("GSTIN: " + TAXPAYER_GSTIN), docxText.toString());
         assertFalse(docxText.toString().contains("AAAAA0001A"), docxText.toString());
         // the anonymiser off: identity, no mapping, no map file

@@ -5,6 +5,7 @@ import com.noticedesk.api.exception.AppValidationException;
 import com.noticedesk.api.exception.NotFoundException;
 import com.noticedesk.api.service.AuditService;
 import com.noticedesk.api.service.DocxExportService;
+import com.noticedesk.api.service.layout.ReplyLayoutBuilder;
 import com.noticedesk.api.security.TenantContextHolder;
 import com.noticedesk.api.workflow.WorkflowDispatcher;
 import lombok.RequiredArgsConstructor;
@@ -343,7 +344,19 @@ public class DraftController {
                 context.get("due_date") != null ? context.get("due_date").toString() : null
         );
         String exportMode = List.of("filing", "client", "internal").contains(mode) ? mode : "reply";
-        byte[] docxBytes = docxExportService.renderDraftDocx(exportMode, cover, sections, internalNote);
+        byte[] docxBytes;
+        if ("client".equals(exportMode)) {
+            docxBytes = docxExportService.renderDraftDocx(exportMode, cover, sections, internalNote);
+        } else {
+            // the partner-approved filing layout: the reply, then (except for "filing") the internal review sheet
+            List<ReplyLayoutBuilder.Section> layoutSections = new ArrayList<>();
+            for (Map<String, Object> sec : sections) {
+                int num = sec.get("num") instanceof Number n ? n.intValue() : 0;
+                layoutSections.add(new ReplyLayoutBuilder.Section(num, String.valueOf(sec.getOrDefault("title", "")),
+                        String.valueOf(sec.getOrDefault("body_html", ""))));
+            }
+            docxBytes = docxExportService.renderReplyDocx(ReplyLayoutBuilder.build(layoutSections), !"filing".equals(exportMode));
+        }
 
         String filename = String.format("draft_%s_v%s.docx", id, draft.get("version"));
 

@@ -1659,8 +1659,28 @@ model (checks, storage, golden drafts unchanged); a new layout layer (`service/l
   numbers, letter addressee, summary table, review sheet without the developer table, a stored draft without the
   metadata).
 
+## (b45) Filing layout, part 2: Word export (16-11-2026)
+
+- `DocxExportService.renderReplyDocx(layout, includeReview)` (Apache POI, already in the project): A4 (11906 x 16838
+  twips, 2.54 cm margins), Times New Roman 12 throughout, justified body, Part headings bold with a thin rule under
+  them, issue headings bold, sub-headings bold italic, numbered paragraphs ("3.1", "(a)") with a hanging indent,
+  tables with a light grey (D9D9D9) repeated header row, proportional column widths and right-aligned amounts, every
+  placeholder bold on yellow, "Page X of Y" footer (PAGE / NUMPAGES fields), and the internal review sheet after a
+  page break.
+- **Export endpoint** (`DraftController`): "reply" / "internal" give the reply plus the review sheet; "filing" gives
+  the reply only; "client" keeps the previous client-summary document. The runners' `<id>_draft.docx` is the same
+  layout, every text restored (`ReplyLayout.mapText`); the old section-by-section Word output is kept as
+  `V7LiveRig.restoredSectionsDocx`.
+- The subject line reads "Reply to the Notice ..." when the notice type is unknown (never a raw marker).
+- Tests: `ReplyDocxExportTest` (3: page size, font and footer fields; Part rule, justified hanging-indent paragraph,
+  grey header row, right-aligned amount, bold yellow placeholders, no raw markers; review sheet after a page break and
+  absent from the filing copy). `V7PdfPrivacyPipelineOfflineTest`: its cover-sheet assertion ("name · PAN: ...") is
+  replaced by the From block of the reply letter (the approved layout has no PAN cover sheet); the restored GSTIN and
+  no-anonymised-PAN assertions are unchanged, and a no-raw-marker assertion is added.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **712 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b45).
 - Offline unit suite (`mvn test`): **709 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b44).
 - Offline unit suite (`mvn test`): **702 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b43).
 - Offline unit suite (`mvn test`): **698 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b42).

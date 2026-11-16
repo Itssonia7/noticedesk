@@ -199,7 +199,9 @@ public final class ReplyLayoutBuilder {
         if (m.clientAddress().isEmpty()) out.add(Para.of(Style.LETTER, hl("client address")));
         for (String l : m.clientAddress()) out.add(Para.of(Style.LETTER, humanise(l)));
         out.add(Para.of(Style.LETTER, "GSTIN: " + orHl(m.gstin(), "GSTIN")));
-        String type = m.noticeType() != null && !m.noticeType().isBlank() ? m.noticeType() : "Notice";
+        // the notice type without its provision ("Show Cause Notice"); "Notice" when the type is unknown or a marker
+        String type = m.noticeType() != null && !m.noticeType().isBlank() && !m.noticeType().contains("[[") ? m.noticeType()
+                : m.docLabel() != null && !m.docLabel().isBlank() && !m.docLabel().contains("[[") ? m.docLabel() : "Notice";
         out.add(Para.of(Style.SUBJECT, "Subject: Reply to the " + stripUnder(type) + " " + orHl(m.noticeRef(), "notice reference")
                 + " dated " + orHl(m.noticeDate(), "notice date") + " under " + orHl(m.noticeSection(), "section")
                 + " of the " + nonBlank(m.lawName(), "CGST Act, 2017") + " for " + orHl(m.period(), "period")));

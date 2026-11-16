@@ -35,7 +35,7 @@ class ReplyLayoutTest {
     private final ObjectMapper om = new ObjectMapper();
 
     /** The live run's shape: template issues 2 and 5 (5 has no grounds block), AI issues 1 and 4, 3 skipped, DIN defect 6. */
-    private ReplyLayout layout() {
+    ReplyLayout layout() {
         List<MatchedIssue> base = SyntheticS74Notice.issues();
         List<MatchedIssue> issues = new ArrayList<>();
         issues.add(with(base.get(0), "partial", List.of("CARD-A")));

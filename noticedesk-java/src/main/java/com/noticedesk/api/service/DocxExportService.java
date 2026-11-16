@@ -108,6 +108,214 @@ public class DocxExportService {
         }
     }
 
+    // ------------------------------------------------------------------ filing layout (b45)
+
+    /** A4 in twentieths of a point, 2.54 cm margins. */
+    static final int A4_WIDTH = 11906;
+    static final int A4_HEIGHT = 16838;
+    static final int MARGIN = 1440;
+    static final String FONT = "Times New Roman";
+    static final int FONT_SIZE = 12;
+    static final String HEADER_FILL = "D9D9D9";
+
+    /**
+     * The partner-approved filing layout as Word: A4, Times New Roman 12, justified body, Part headings with a thin rule
+     * under them, numbered paragraphs with a hanging indent, tables with a light grey header row (amount columns right
+     * aligned), every placeholder bold on yellow, "Page X of Y" in the footer. With {@code includeReview} the internal
+     * review sheet follows the reply after a page break.
+     */
+    public byte[] renderReplyDocx(com.noticedesk.api.service.layout.ReplyLayout layout, boolean includeReview) {
+        try (XWPFDocument doc = new XWPFDocument();
+             ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            pageSetup(doc);
+            footer(doc);
+            writeBlocks(doc, layout.reply());
+            if (includeReview) writeBlocks(doc, layout.review());
+            doc.write(out);
+            return out.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException("docx export failed: " + e.getMessage(), e);
+        }
+    }
+
+    private static void pageSetup(XWPFDocument doc) {
+        var sect = doc.getDocument().getBody().isSetSectPr() ? doc.getDocument().getBody().getSectPr()
+                : doc.getDocument().getBody().addNewSectPr();
+        var size = sect.isSetPgSz() ? sect.getPgSz() : sect.addNewPgSz();
+        size.setW(java.math.BigInteger.valueOf(A4_WIDTH));
+        size.setH(java.math.BigInteger.valueOf(A4_HEIGHT));
+        var mar = sect.isSetPgMar() ? sect.getPgMar() : sect.addNewPgMar();
+        java.math.BigInteger m = java.math.BigInteger.valueOf(MARGIN);
+        mar.setTop(m);
+        mar.setBottom(m);
+        mar.setLeft(m);
+        mar.setRight(m);
+    }
+
+    /** "Page X of Y" centred in the footer (PAGE and NUMPAGES fields). */
+    private static void footer(XWPFDocument doc) {
+        XWPFFooter footer = doc.createFooter(org.apache.poi.wp.usermodel.HeaderFooterType.DEFAULT);
+        XWPFParagraph p = footer.createParagraph();
+        p.setAlignment(ParagraphAlignment.CENTER);
+        styled(p.createRun(), "Page ", false, false);
+        field(p, "PAGE", "1");
+        styled(p.createRun(), " of ", false, false);
+        field(p, "NUMPAGES", "1");
+    }
+
+    private static void field(XWPFParagraph p, String instr, String shown) {
+        var f = p.getCTP().addNewFldSimple();
+        f.setInstr(instr + " \\* MERGEFORMAT");
+        var r = f.addNewR();
+        var rpr = r.addNewRPr();
+        rpr.addNewRFonts().setAscii(FONT);
+        rpr.getRFontsArray(0).setHAnsi(FONT);
+        rpr.addNewSz().setVal(java.math.BigInteger.valueOf(FONT_SIZE * 2L));
+        r.addNewT().setStringValue(shown);
+    }
+
+    private static void writeBlocks(XWPFDocument doc, java.util.List<com.noticedesk.api.service.layout.ReplyLayout.Block> blocks) {
+        for (var b : blocks) {
+            if (b instanceof com.noticedesk.api.service.layout.ReplyLayout.PageBreak) {
+                XWPFParagraph p = doc.createParagraph();
+                p.createRun().addBreak(BreakType.PAGE);
+            } else if (b instanceof com.noticedesk.api.service.layout.ReplyLayout.Para para) {
+                writePara(doc, para);
+            } else if (b instanceof com.noticedesk.api.service.layout.ReplyLayout.Table t) {
+                writeTable(doc, t);
+            }
+        }
+    }
+
+    private static void writePara(XWPFDocument doc, com.noticedesk.api.service.layout.ReplyLayout.Para para) {
+        XWPFParagraph p = doc.createParagraph();
+        boolean bold = false;
+        boolean italic = false;
+        p.setSpacingAfter(120);
+        switch (para.style()) {
+            case LETTER, SIGNATURE -> {
+                p.setAlignment(ParagraphAlignment.LEFT);
+                p.setSpacingAfter(0);
+            }
+            case SUBJECT -> {
+                p.setAlignment(ParagraphAlignment.BOTH);
+                p.setSpacingBefore(240);
+                p.setSpacingAfter(240);
+                bold = true;
+            }
+            case TITLE -> {
+                p.setAlignment(ParagraphAlignment.CENTER);
+                p.setSpacingAfter(240);
+                bold = true;
+            }
+            case PART -> {
+                p.setAlignment(ParagraphAlignment.LEFT);
+                p.setBorderBottom(Borders.SINGLE);
+                p.setSpacingBefore(240);
+                p.setKeepNext(true);
+                bold = true;
+            }
+            case HEADING -> {
+                p.setAlignment(ParagraphAlignment.LEFT);
+                p.setSpacingBefore(180);
+                p.setKeepNext(true);
+                bold = true;
+            }
+            case SUBHEADING -> {
+                p.setAlignment(ParagraphAlignment.LEFT);
+                p.setKeepNext(true);
+                bold = true;
+                italic = true;
+            }
+            default -> p.setAlignment(ParagraphAlignment.BOTH);
+        }
+        String text = para.text() != null ? para.text() : "";
+        if (para.number() != null) {
+            // hanging indent: the number in the margin, the text aligned after it
+            p.setIndentationLeft(720);
+            p.setIndentationHanging(720);
+            styled(p.createRun(), para.number() + "\t", bold, italic);
+        }
+        highlightedRuns(p, text, bold, italic);
+    }
+
+    /** Text as runs; a placeholder between the layout's highlight markers is bold on yellow, without the markers. */
+    static void highlightedRuns(XWPFParagraph p, String text, boolean bold, boolean italic) {
+        char start = com.noticedesk.api.service.layout.ReplyLayout.HL_START;
+        char end = com.noticedesk.api.service.layout.ReplyLayout.HL_END;
+        int i = 0;
+        while (i < text.length()) {
+            int s = text.indexOf(start, i);
+            if (s < 0) {
+                styled(p.createRun(), text.substring(i), bold, italic);
+                break;
+            }
+            if (s > i) styled(p.createRun(), text.substring(i, s), bold, italic);
+            int e = text.indexOf(end, s);
+            if (e < 0) e = text.length();
+            XWPFRun r = p.createRun();
+            styled(r, text.substring(s + 1, e), true, italic);
+            r.setTextHighlightColor("yellow");
+            i = e + 1;
+        }
+    }
+
+    private static void styled(XWPFRun r, String text, boolean bold, boolean italic) {
+        String[] parts = text.split("\t", -1);
+        for (int k = 0; k < parts.length; k++) {
+            if (k > 0) r.addTab();
+            r.setText(parts[k], k);
+        }
+        r.setBold(bold);
+        r.setItalic(italic);
+        r.setFontFamily(FONT);
+        r.setFontSize(FONT_SIZE);
+    }
+
+    private static void writeTable(XWPFDocument doc, com.noticedesk.api.service.layout.ReplyLayout.Table t) {
+        int cols = t.header().size();
+        XWPFTable table = doc.createTable(t.rows().size() + 1, cols);
+        table.setWidth("100%");
+        for (int c = 0; c < cols; c++) {
+            XWPFTableCell cell = table.getRow(0).getCell(c);
+            cell.setColor(HEADER_FILL);
+            cellText(cell, t.header().get(c), true, t.rightAligned().contains(c));
+        }
+        for (int r = 0; r < t.rows().size(); r++) {
+            java.util.List<String> row = t.rows().get(r);
+            for (int c = 0; c < cols; c++) {
+                cellText(table.getRow(r + 1).getCell(c), c < row.size() && row.get(c) != null ? row.get(c) : "", false,
+                        t.rightAligned().contains(c));
+            }
+        }
+        int[] widths = columnWidths(t.header());
+        for (XWPFTableRow row : table.getRows()) {
+            for (int c = 0; c < cols && c < widths.length; c++) row.getCell(c).setWidth(widths[c] + "%");
+        }
+        table.getRow(0).setRepeatHeader(true);
+        doc.createParagraph().setSpacingAfter(0);   // space after the table
+    }
+
+    /** Column widths in percent: a narrow number / reference column, a wide text column. */
+    static int[] columnWidths(java.util.List<String> header) {
+        int cols = header.size();
+        if (cols == 4) return new int[]{8, 40, 17, 35};
+        if (cols == 2) {
+            String first = header.get(0).toLowerCase(java.util.Locale.ROOT);
+            return first.startsWith("para") || first.startsWith("annexure") ? new int[]{22, 78} : new int[]{55, 45};
+        }
+        int[] w = new int[cols];
+        java.util.Arrays.fill(w, 100 / Math.max(1, cols));
+        return w;
+    }
+
+    private static void cellText(XWPFTableCell cell, String text, boolean bold, boolean right) {
+        XWPFParagraph p = cell.getParagraphs().isEmpty() ? cell.addParagraph() : cell.getParagraphs().get(0);
+        p.setAlignment(right ? ParagraphAlignment.RIGHT : ParagraphAlignment.LEFT);
+        p.setSpacingAfter(0);
+        highlightedRuns(p, text, bold, false);
+    }
+
     private boolean shouldExcludeSection(String mode, int num) {
         if ("client".equals(mode) && CLIENT_EXCLUDED_SECTIONS.contains(num)) return true;
         return false;
