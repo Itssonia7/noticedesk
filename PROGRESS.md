@@ -1605,8 +1605,25 @@ the cap is 0), substituted in the cached system prompt; the live run of 15-11 na
 - Tests: `ProceedingFallbackCheckTest` (3: live prayer and six fallback phrasings pass; a Section 73 SCN prayer, the
   scn_73 stage and a prayer mixing both still fail; Section 73 notices unaffected).
 
+## (b43) Anonymiser residual check: GST / legal form vocabulary is not a residual (16-11-2026)
+
+- **Live finding**: the self-check reported `residual: 1 (caps-phrase-2-words)` on the synthetic Section 74 notice (no
+  client data left): the phrase was "BENGALURU SOUTH" of "BENGALURU SOUTH COMMISSIONERATE" (the office word is trimmed
+  from the run, leaving city + compass word). Earlier synthetic notices: "RCM GTA" (and "MEIS SCRIPS", "ROD TEP" read
+  as names too; "NOW THEREFORE" and "RCM IGST" were already excluded).
+- **Fix** (`NoticeAnonymiser.isFormVocabulary`, residual check only): an upper-case phrase made only of form
+  vocabulary (`RESIDUAL_FORM_WORDS`: NOW, THEREFORE, SHOW, CAUSE, RCM, GTA, IGST, CGST, SGST, UTGST, ITC, SCN, DIN, RFN,
+  DRC, GSTR, HSN, SAC, CIF, FOB, MEIS, RODTEP, SEIS, CBIC, GST, BHAVAN, COMMISSIONERATE, JOINT / ADDITIONAL / DEPUTY /
+  ASSISTANT, CENTRAL, STATE, TAX, scrip / freight / customs and appellate terms), the existing stop words and
+  connectors, or a known city / State followed by compass / zone words ("BENGALURU SOUTH", "DELHI WEST II"), is not
+  counted. The new words are deliberately NOT added to `BUSINESS_STOP_WORDS`, which also stops the anonymiser itself:
+  "GTA LOGISTICS PRIVATE LIMITED" is still replaced. Strict mode logic unchanged (it reads the same residual total).
+- Tests: `ResidualFormVocabularyTest` (4: the synthetic notice anonymises with residual 0; form phrases give 0; real
+  names in capitals, including ones holding a form word, still count; the anonymiser still replaces such a name).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **702 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b43).
 - Offline unit suite (`mvn test`): **698 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b42).
 - Offline unit suite (`mvn test`): **695 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b41).
 - Offline unit suite (`mvn test`): **693 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b40).

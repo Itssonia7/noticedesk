@@ -170,7 +170,7 @@ public final class NoticeAnonymiser {
         List<int[]> phraseSpans = new ArrayList<>();
         for (int[] run : capsRuns(t)) {
             String core = businessPhraseCore(t.substring(run[0], run[1]));
-            if (core == null || isPlaceholderTail(t, run[0], run[1])) continue;
+            if (core == null || isPlaceholderTail(t, run[0], run[1]) || isFormVocabulary(core)) continue;
             phraseSpans.add(run);
             note(counts, shapes, Residual.SHAPE_CAPS_PHRASE + "-" + core.trim().split("\\s+").length + "-words");
         }
@@ -395,6 +395,51 @@ public final class NoticeAnonymiser {
             "AREA", "ESTATE", "PLOT", "SECTOR", "PHASE", "COMPLEX", "TOWER", "FLOOR", "ROAD", "STREET", "LANE", "NAGAR", "MARG",
             "COLONY", "OPP", "OPP.", "NEAR", "BEHIND", "DIST", "DIST.", "DISTRICT", "TALUKA", "TEHSIL", "PIN", "PINCODE", "POST",
             "VILLAGE", "CITY", "TOWN", "BUILDING", "BLDG", "BLDG.", "HOUSE", "OFFICE.", "WING", "GALA", "SHOP", "UNIT.");
+    /**
+     * GST / customs / legal form vocabulary read by the residual self-check only ({@link #residualRisks}): an upper-case
+     * phrase made only of these words, {@link #BUSINESS_STOP_WORDS} and connectors ("RCM GTA", "MEIS SCRIPS", "NOW
+     * THEREFORE") is form text, not a name left behind. Kept out of {@link #BUSINESS_STOP_WORDS} on purpose: that list
+     * also stops the anonymiser itself, and a real name such as "GTA LOGISTICS PRIVATE LIMITED" must still be replaced.
+     */
+    static final Set<String> RESIDUAL_FORM_WORDS = Set.of(
+            "NOW", "THEREFORE", "WHEREAS", "HENCE", "SHOW", "CAUSE", "RCM", "GTA", "IGST", "CGST", "SGST", "UTGST", "ITC", "SCN",
+            "DIN", "RFN", "DRC", "GSTR", "HSN", "SAC", "CIF", "FOB", "MEIS", "RODTEP", "SEIS", "EPCG", "AA", "DFIA", "CBIC", "GST",
+            "BHAVAN", "COMMISSIONERATE", "JOINT", "ADDITIONAL", "DEPUTY", "ASSISTANT", "CENTRAL", "STATE", "TAX", "ADT", "ASMT",
+            "SCRIP", "SCRIPS", "DUTY", "CREDIT", "REVERSE", "CHARGE", "FORWARD", "OCEAN", "FREIGHT", "BILL", "ENTRY", "BOE",
+            "SHIPPING", "EXPORT", "IMPORT", "IMPORTS", "EXPORTS", "LUT", "BRC", "FIRC", "EWAY", "E-WAY", "IRN", "QRMP", "TDS", "TCS",
+            "ISD", "OIDAR", "SEZ", "DTA", "EOU", "NOTE", "NOTES", "DEBIT", "COMMON", "BLOCKED", "EXEMPT", "NIL", "RATED", "ADJN",
+            "ADJN.", "APPEALS", "GSTAT", "CESTAT", "AAR", "AAAR", "NAA", "CCI", "DGAP");
+    /** Compass / zone words that follow a city or State in a jurisdiction name ("BENGALURU SOUTH", "MUMBAI CENTRAL"). */
+    private static final Pattern JURISDICTION_TAIL = Pattern.compile(
+            "(?i)(?:\\s+(?:NORTH|SOUTH|EAST|WEST|CENTRAL|RURAL|URBAN|CITY|ZONE|[IVX]{1,4}|\\d{1,2}|-[IVX]{1,4}|-\\d{1,2}))+");
+
+    /**
+     * True when {@code core} is form text for the residual self-check: every word a form / tax / office word or a
+     * connector, or a city / State followed by compass or zone words (the jurisdiction in "BENGALURU SOUTH
+     * COMMISSIONERATE").
+     */
+    static boolean isFormVocabulary(String core) {
+        if (core == null || core.isBlank()) return false;
+        boolean all = true;
+        for (String w : core.trim().split("\\s+")) {
+            String u = w.toUpperCase(Locale.ROOT).replaceAll("^[(\\[]+|[.,;:)\\]]+$", "");
+            if (!RESIDUAL_FORM_WORDS.contains(u) && !BUSINESS_STOP_WORDS.contains(u) && !CONNECTOR_WORDS.contains(u)) {
+                all = false;
+                break;
+            }
+        }
+        if (all) return true;
+        String letters = core.replaceAll("[^A-Za-z0-9 \\-]", "").trim();
+        Matcher tail = JURISDICTION_TAIL.matcher(letters);
+        while (tail.find()) {
+            if (tail.end() == letters.length() && tail.start() > 0
+                    && STATE_OR_CITY.matcher(letters.substring(0, tail.start()).trim()).matches()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Words that join the parts of a business name ("GOLD AND DIAMONDS", "GEMS & ASSOCIATES"): never the end of a phrase. */
     static final Set<String> CONNECTOR_WORDS = Set.of("&", "AND", "OF");
     /**
