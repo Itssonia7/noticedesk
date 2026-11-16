@@ -34,6 +34,20 @@ public class DraftCheckService {
             + "|match status|strength note|\\[STUB\\b|\\b(?:opus|sonnet|haiku|claude|gpt-?\\d*|gemini)\\b");
     private static final Pattern SECTION_73_PROCEEDING = Pattern.compile("(?i)section\\s+73\\b");
     private static final Pattern SECTION_74_PROCEEDING = Pattern.compile("(?i)section\\s+74A?\\b");
+    /** "Section 73", "Section 73(1)", "Section 73 of the CGST Act, 2017". */
+    private static final String S73 = "section\\s+73(?!\\d)(?:\\s*\\(\\s*\\d+\\s*\\))?(?:\\s+of\\s+the\\s+[A-Z]+\\s+act(?:\\s*,\\s*\\d{4})?)?";
+    /**
+     * The standard Section 74 -> 73 fallback argument of a Section 74 reply ("the matter, if at all, falls under Section
+     * 73", "only under Section 73", "Section 73 and not Section 74", "invoke Section 73", re-determination under
+     * Section 73): such a mention is not a wrong proceeding.
+     */
+    static final Pattern SECTION_73_FALLBACK = Pattern.compile("(?i)"
+            + "\\bfall(?:s|ing)?\\b[^.;]{0,40}?\\b(?:under|within)\\s+" + S73
+            + "|\\b(?:if\\s+at\\s+all|at\\s+best|at\\s+the\\s+most|at\\s+most|only)\\s*,?\\s*(?:\\w+\\s+){0,3}?(?:under|within|in\\s+terms\\s+of)\\s+" + S73
+            + "|" + S73 + "\\s*,?\\s*(?:and|but)\\s+not\\s+(?:under\\s+)?section\\s+74A?\\b"
+            + "|\\binvok\\w*\\s+(?:only\\s+)?" + S73
+            + "|\\bre-?determin\\w*\\s+(?:\\w+\\s+){0,4}?under\\s+" + S73
+            + "|\\bnot\\s+(?:under\\s+)?section\\s+74A?\\b[^.;]{0,20}?\\bbut\\s+(?:under\\s+)?" + S73);
 
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
@@ -282,7 +296,9 @@ public class DraftCheckService {
             boolean is74 = noticeSection.matches(".*\\b74A?\\b.*");
             for (int secNum : new int[]{1, 2, 12, 14, 15}) {
                 String text = withoutFreeText(getSectionHtml(sections, secNum));
-                if (!is73 && SECTION_73_PROCEEDING.matcher(text).find()) {
+                // a Section 74 reply's fallback argument names Section 73 rightly; a Section 73 template does not
+                String for73 = is74 ? SECTION_73_FALLBACK.matcher(text.replaceAll("<[^>]+>", " ")).replaceAll(" ") : text;
+                if (!is73 && SECTION_73_PROCEEDING.matcher(for73).find()) {
                     problems.add("section " + secNum + " refers to Section 73 but the notice is under " + noticeSection);
                 }
                 if (!is74 && SECTION_74_PROCEEDING.matcher(text).find()) {

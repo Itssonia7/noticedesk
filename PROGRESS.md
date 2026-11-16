@@ -1591,8 +1591,23 @@ the cap is 0), substituted in the cached system prompt; the live run of 15-11 na
 - Tests: `TemplateListVariablesTest` (2: documents / options filled, missing marker; Sections 10, 11, 14 carry
   "MEIS" and no `{{`, placeholder check clean).
 
+## (b42) CHECK_PROCEEDING_CONSISTENT ignores the standard Section 74 -> 73 fallback (16-11-2026)
+
+- **Live finding**: the check failed with "section 12 refers to Section 73 but the notice is under Section 74" because
+  the Section 74 prayer rightly says "HOLD that Section 74 is not invocable ... and that the matter, if at all, falls
+  under Section 73".
+- **Fix** (`DraftCheckService.SECTION_73_FALLBACK`): for a notice under Section 74 / 74A, mentions of Section 73 inside
+  the fallback argument are removed before the Section 73 test: "falls (if at all) under / within Section 73", "if at
+  all / at best / at most / only ... under Section 73", "Section 73 and (but) not Section 74", "invoke Section 73",
+  "re-determined ... under Section 73", "not under Section 74 but under Section 73" (with "(1)" and "of the CGST Act,
+  2017" variants). Any other Section 73 mention in Sections 01 / 02 / 12 / 14 / 15 still fails, as does a `scn_73`
+  stage key for a Section 74 notice. Section 73 notices unchanged.
+- Tests: `ProceedingFallbackCheckTest` (3: live prayer and six fallback phrasings pass; a Section 73 SCN prayer, the
+  scn_73 stage and a prayer mixing both still fail; Section 73 notices unaffected).
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **698 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b42).
 - Offline unit suite (`mvn test`): **695 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b41).
 - Offline unit suite (`mvn test`): **693 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b40).
 - Offline unit suite (`mvn test`): **687 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b39).
