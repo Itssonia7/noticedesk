@@ -1561,8 +1561,26 @@ the cap is 0), substituted in the cached system prompt; the live run of 15-11 na
   verified total tax demand (`DemandTotals.verifiedTotal`: demand clauses, else a stated total the issue sum confirms).
 - Tests: `TotalDemandVerificationTest` (6; test fixture `SyntheticS74Notice`).
 
+## (b40) DIN / RFN check no longer fooled by a blank placeholder (16-11-2026)
+
+- **Live finding**: the synthetic Section 74 notice reads `DIN: [____________________]` and the code check reported
+  `din=ok (central-tax document dated 29.11.2024 carries a DIN)`. The matcher's `din` value was checked first and any
+  8-character token with a digit (a date such as "29-11-2024" qualifies) counted as a DIN.
+- **Fix** (`DefectChecker.din` / `looksLikeDinValue`): a DIN / RFN is present only when a real identifier follows the
+  label: up to the next label ("Date", "C.No.", "Ref") or wide gap, without enclosing brackets, only letters, digits,
+  single spaces, '-' and '/', at least 15 letters / digits and at least half of them digits (a CBIC DIN has 20, a
+  portal RFN 15; the anonymiser's DIN placeholder still qualifies). Blank brackets, underscores, dots, dashes, "NIL",
+  "N/A", a date or a file number are absent. The document's own DIN / RFN line decides first (a label alone on its
+  line takes the next line); the matcher's value counts only when it is DIN-shaped and either the document has no
+  DIN line (cut off by the text layer, as before) or the value is printed elsewhere in the document. An RFN-only
+  document reads "carries an RFN".
+- Tests: `DinPlaceholderCheckTest` (6: the live notice with null / placeholder / date / file-number matcher values,
+  blank brackets, underscores, NIL, N/A, dashes, dots, a real-looking DIN, a split-line DIN, RFN-only, the matcher
+  value rules). Existing `DefectCheckerTest` unchanged and passing.
+
 ## (c) Verification
 
+- Offline unit suite (`mvn test`): **693 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b40).
 - Offline unit suite (`mvn test`): **687 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b39).
 - Offline unit suite (`mvn test`): **681 tests, 0 failures, 0 errors, 2 skipped** on 16-11-2026 after (b38); 678 on `050a36f` before.
 - Offline unit suite (`mvn test`): **677 tests, 0 failures, 0 errors, 2 skipped** (the env-gated shortlist dry run

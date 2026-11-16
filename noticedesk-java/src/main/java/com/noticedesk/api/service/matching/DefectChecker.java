@@ -194,13 +194,30 @@ public final class DefectChecker {
     private static final Pattern DESIGNATION = Pattern.compile(
             "(?i)superintendent|commissioner|officer|inspector|assistant|deputy|joint|additional");
     private static final Pattern DIN_LINE = Pattern.compile(
-            "(?im)^[^\\n]*?\\b(?:DIN|RFN)\\b\\s*(?:no\\.?|number)?\\s*[:\\-–]?([^\\n]*)$");
-    /** A real DIN / RFN value: a token of 8 or more letters / digits with at least one digit. */
-    private static final Pattern DIN_VALUE = Pattern.compile("(?i)(?<![A-Z0-9])(?=[A-Z0-9/-]*\\d)[A-Z0-9/-]{8,}");
+            "(?im)^[^\\n]*?\\b(DIN|RFN)\\b\\s*(?:no\\.?|number)?\\s*[:\\-–]?([^\\n]*)$");
+    /** Where a DIN / RFN value on its line ends: two spaces, a following label ("Date", "C.No.", "Ref"), a comma. */
+    private static final Pattern DIN_VALUE_END = Pattern.compile(
+            "(?i)\\s{2,}|\\s+(?:dated?|c\\.?\\s*no|ref|file|f\\.?\\s*no|no\\.)\\b|[;,]");
+    /** Minimum letters / digits of a real DIN / RFN (a CBIC DIN has 20, a portal RFN 15). */
+    static final int DIN_MIN_ALNUM = 15;
 
-    /** True when {@code value} reads as a DIN / RFN value (the test the DIN defect check applies to the DIN line). */
+    /**
+     * True when {@code value} reads as a real DIN / RFN: after the label, up to the next label or wide gap, and without
+     * enclosing brackets, it holds only letters, digits, single spaces, '-' and '/', with at least
+     * {@value #DIN_MIN_ALNUM} letters / digits, at least half of them digits. Blank brackets ("[______]"), underscores, dots,
+     * dashes, "NIL", "N/A", a date or a file number are not a DIN.
+     */
     public static boolean looksLikeDinValue(String value) {
-        return value != null && DIN_VALUE.matcher(value).find();
+        if (value == null) return false;
+        String v = value.replaceFirst("^[\\s:\\-–]+", "");
+        Matcher end = DIN_VALUE_END.matcher(v);
+        if (end.find()) v = v.substring(0, end.start());
+        v = v.trim().replaceAll("^[\\[(\"'{]+|[\\])\"'}]+$", "").trim();
+        if (!v.matches("(?i)[A-Z0-9][A-Z0-9 /-]*")) return false;
+        String alnum = v.replaceAll("[^A-Za-z0-9]", "");
+        // mostly digits, as every DIN / RFN is: a heading ("SHOW CAUSE NOTICE UNDER SECTION 73") is not a value
+        long digits = alnum.chars().filter(Character::isDigit).count();
+        return alnum.length() >= DIN_MIN_ALNUM && digits * 2 >= alnum.length();
     }
 
     static CodeDefect din(String text, String matcherDin, LocalDate date) {
@@ -227,14 +244,30 @@ public final class DefectChecker {
         if (date.isBefore(DefectDeadlines.DIN_MANDATORY_FROM)) {
             return new CodeDefect(DIN, RESULT_OK, NOT_APPLICABLE + "dated " + fmt(date) + ", before 08.11.2019", "NDK-141", "NDK-142");
         }
-        if (matcherDin != null && DIN_VALUE.matcher(matcherDin).find()) {
-            return new CodeDefect(DIN, RESULT_OK, "central-tax document dated " + fmt(date) + " carries a DIN", "NDK-141", "NDK-142");
-        }
-        Matcher m = DIN_LINE.matcher(text);
+        // the document's own DIN / RFN line decides; a label alone on its line takes its value from the next line
+        String t = text != null ? text : "";
+        Matcher m = DIN_LINE.matcher(t);
         boolean line = false;
         while (m.find()) {
             line = true;
-            if (DIN_VALUE.matcher(m.group(1)).find()) {
+            String value = m.group(2);
+            if (value.isBlank()) {
+                int nl = t.indexOf('\n', m.end());
+                if (nl >= 0) {
+                    int nl2 = t.indexOf('\n', nl + 1);
+                    value = t.substring(nl + 1, nl2 >= 0 ? nl2 : t.length());
+                }
+            }
+            if (looksLikeDinValue(value)) {
+                return new CodeDefect(DIN, RESULT_OK, "central-tax document dated " + fmt(date) + " carries "
+                        + ("RFN".equalsIgnoreCase(m.group(1)) ? "an RFN" : "a DIN"), "NDK-141", "NDK-142");
+            }
+        }
+        // the matcher's DIN-shaped value: taken when the document has no DIN line the regex reads (cut off by the text
+        // layer); when the document's own DIN line is blank, only when the value is printed elsewhere in the document
+        if (looksLikeDinValue(matcherDin)) {
+            String mAlnum = matcherDin.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
+            if (!line || t.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT).contains(mAlnum)) {
                 return new CodeDefect(DIN, RESULT_OK, "central-tax document dated " + fmt(date) + " carries a DIN", "NDK-141", "NDK-142");
             }
         }
